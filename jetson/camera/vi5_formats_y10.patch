@@ -1,0 +1,12 @@
+--- /home/asaftg/imx296-bringup/Linux_for_Tegra/source/nvidia-oot/drivers/media/platform/tegra/camera/vi/vi5_formats.h.bak	2026-06-30 02:11:33.025935280 +0000
++++ /home/asaftg/imx296-bringup/Linux_for_Tegra/source/nvidia-oot/drivers/media/platform/tegra/camera/vi/vi5_formats.h	2026-06-30 02:11:33.053936420 +0000
+@@ -101,6 +101,9 @@
+ 	TEGRA_VIDEO_FORMAT(RAW10, 10, SBGGR10_1X10, 2, 1, T_R16,
+ 				RAW10, SBGGR10, "BGBG.. GRGR.."),
+ 
++	TEGRA_VIDEO_FORMAT(RAW10, 10, Y10_1X10, 2, 1, T_R16,
++				RAW10, Y10, "GREY mono Y10"),
++
+ 	/* RAW 12 */
+ 	TEGRA_VIDEO_FORMAT(RAW12, 12, SRGGB12_1X12, 2, 1, T_R16,
+ 				RAW12, SRGGB12, "RGRG.. GBGB.."),
