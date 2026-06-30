@@ -60,4 +60,5 @@ jetson/camera/              nv_imx296 driver, mode tables, DT overlay
 jetson/tools/               Python bench tools: focus, quality/AE preview
 jetson/streaming/           production stream scripts (software encode on bench)
 jetson/fan/                 always-100% fan service
+jetson/illuminator/         SG-IR850-8M IR illuminator controller (C) + sgctl CLI
 ```

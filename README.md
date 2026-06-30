@@ -15,6 +15,7 @@ hand-edit (`docs/ENGINEERING_GUIDELINES.md`).
 | Live quality preview (browser) | ✅ ~30 fps, de-banded, clean |
 | High-fps stream | ✅ ~58 fps MJPEG (software); HW H.264 needs Xavier AGX (Orin Nano has no NVENC) |
 | Fan | ✅ pinned 100% |
+| IR illuminator (SG-IR850-8M) | ✅ C controller + `sgctl` CLI: on/off, power, FOV/zoom, status |
 | Overlay clock modeling | ⚠️ one minor `fixed-clock` cleanup pending (functionally fine) |
 
 ## Quickstart
@@ -40,6 +41,7 @@ ssh asaftg@orin-nano 'bash ~/imx296_stream.sh <your-ip> 5000'
 | [`docs/JETSON_ORIN_NANO_BRINGUP.md`](docs/JETSON_ORIN_NANO_BRINGUP.md) | fresh-board → streaming checklist |
 | [`docs/ENGINEERING_GUIDELINES.md`](docs/ENGINEERING_GUIDELINES.md) | C/C++ on device, Python for tools, no loose patches |
 | [`docs/FOCUS_TOOL_GUIDE.md`](docs/FOCUS_TOOL_GUIDE.md) | focus assist usage |
+| [`docs/ILLUMINATOR.md`](docs/ILLUMINATOR.md) | SG-IR850-8M IR illuminator: wiring, protocol, build, `sgctl` usage |
 
 ## Layout
 
@@ -48,6 +50,7 @@ jetson/camera/     nv_imx296 driver, mode tables, DT overlay  (C — production)
 jetson/tools/      focus + quality/AE preview                 (Python — bench)
 jetson/streaming/  high-fps MJPEG stream                      (Python+GStreamer)
 jetson/fan/        always-100% fan service
+jetson/illuminator/ SG-IR850-8M IR illuminator controller     (C — production)
 docs/              the documentation set above
 ```
 
