@@ -112,7 +112,7 @@
 							sensor_model = "imx296";
 							use_sensor_mode_id = "true";
 							mode0 { /* 1456x1088 60fps RAW10 mono */
-								mclk_khz = "37125";
+								mclk_khz = "54000";	/* Waveshare IMX296 self-clocks at 54 MHz */
 								num_lanes = "1";
 								tegra_sinterface = "serial_c";
 								phy_mode = "DPHY";
@@ -124,11 +124,12 @@
 								active_h = "1088";
 								mode_type = "bayer";
 								pixel_phase = "rggb";
+								pixel_t = "mono_y10";	/* mono Y10, not Bayer RG10 */
 								csi_pixel_bit_depth = "10";
 								readout_orientation = "0";
 								line_length = "1100";
 								inherent_gain = "1";
-								mclk_multiplier = "3.2";
+								mclk_multiplier = "22";
 								pix_clk_hz = "118800000";
 								gain_factor = "10";
 								min_gain_val = "0";

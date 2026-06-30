@@ -40,9 +40,15 @@
 #define IMX296_MAX_FRAME_LENGTH	0x0fffff
 #define IMX296_MIN_SHS		1
 #define IMX296_MAX_COARSE_DIFF	5
+#define IMX296_DEFAULT_FRAME_LENGTH	1125		/* VMAX for 1456x1088@60 */
+/* Sensor internal pixel clock = HMAX*VMAX*fps = 1100*1125*60. This is the
+ * clock that governs SHS1/VMAX line timing — NOT the DT pix_clk_hz (118.8 MHz,
+ * which is the MIPI byte/pixel rate used only for VI bandwidth). */
+#define IMX296_SENSOR_PIXEL_CLOCK	74250000ULL
 
 static const struct of_device_id imx296_of_match[] = {
 	{ .compatible = "sony,imx296", },
+	{ .compatible = "sony,imx296ll", },	/* mono variant / proven overlay node */
 	{ },
 };
 MODULE_DEVICE_TABLE(of, imx296_of_match);
@@ -139,7 +145,7 @@ static int imx296_set_frame_rate(struct tegracam_device *tc_dev, s64 val)
 	if (val == 0 || mode->image_properties.line_length == 0)
 		return -EINVAL;
 
-	frame_length = (u32)(mode->signal_properties.pixel_clock.val *
+	frame_length = (u32)(IMX296_SENSOR_PIXEL_CLOCK *
 		(u64)mode->control_properties.framerate_factor /
 		mode->image_properties.line_length / val);
 
@@ -165,13 +171,12 @@ static int imx296_set_exposure(struct tegracam_device *tc_dev, s64 val)
 	u32 coarse_time, shs1;
 	int err;
 
-	if (mode->signal_properties.pixel_clock.val == 0 ||
-		mode->control_properties.exposure_factor == 0 ||
+	if (mode->control_properties.exposure_factor == 0 ||
 		mode->image_properties.line_length == 0)
 		return -EINVAL;
 
-	/* exposure (us) -> integration lines */
-	coarse_time = (u32)(val * mode->signal_properties.pixel_clock.val /
+	/* exposure (us) -> integration lines (sensor pixel clock, not MIPI rate) */
+	coarse_time = (u32)((u64)val * IMX296_SENSOR_PIXEL_CLOCK /
 		mode->control_properties.exposure_factor /
 		mode->image_properties.line_length);
 
@@ -420,6 +425,10 @@ static int imx296_set_mode(struct tegracam_device *tc_dev)
 	err = imx296_write_table(priv, mode_table[IMX296_MODE_COMMON]);
 	if (err)
 		return err;
+
+	/* Seed frame_length so set_exposure has a valid VMAX even when the
+	 * framework applies EXPOSURE before FRAME_RATE (else SHS1 underflows). */
+	priv->frame_length = IMX296_DEFAULT_FRAME_LENGTH;
 
 	if (s_data->mode < 0)
 		return -EINVAL;

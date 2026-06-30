@@ -67,10 +67,12 @@ static imx296_reg imx296_mode_common[] = {
 	/* VMAX = 0x000465 (1125 lines, ~60fps), 24-bit LE @0x3010 */
 	{0x3010, 0x65}, {0x3011, 0x04}, {0x3012, 0x00},
 
-	/* INCKSEL[0..3] for 37.125 MHz @0x3089 */
-	{0x3089, 0x80}, {0x308a, 0x0b}, {0x308b, 0x80}, {0x308c, 0x08},
+	/* INCKSEL[0..3] for 54 MHz @0x3089 (mainline imx296_clk_params;
+	 * matches INNO-MAKER's proven Orin Nano clock — 37.125 does NOT bring
+	 * up the sensor MIPI on this carrier, 54 MHz does). */
+	{0x3089, 0xb0}, {0x308a, 0x0f}, {0x308b, 0xb0}, {0x308c, 0x0c},
 	{0x4114, 0xc5},			/* GTTABLENUM */
-	{0x418c, 0x74},			/* CTRL418C = 116 (37.125 MHz) */
+	{0x418c, 0xa8},			/* CTRL418C = 168 (54 MHz) */
 
 	{0x3212, 0x09},			/* GAINDLY = 1FRAME (matches FRC971) */
 	{0x3254, 0x3c}, {0x3255, 0x00},	/* BLKLEVEL = 0x03c */
