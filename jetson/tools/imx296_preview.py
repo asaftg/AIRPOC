@@ -55,13 +55,16 @@ def _i2c_w(reghi, reglo, data_bytes):
                    + [f"0x{b:02x}" for b in data_bytes],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def _set_shs1(v):
-    v = int(max(SHS1_MIN, min(SHS1_MAX, v)))
-    _i2c_w("0x30", "0x8d", [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff])
-
-def _set_gain(v):
-    v = int(max(GAIN_MIN, min(GAIN_MAX, v)))
-    _i2c_w("0x32", "0x04", [v & 0xff, (v >> 8) & 0xff])
+def _apply_exposure(shs1, gain):
+    """Atomically latch SHS1+gain via the IMX296 REGHOLD (CTRL08 0x3008): a
+    mid-stream update otherwise lets a frame see partial/mismatched values, which
+    is the band-shift tearing. REGHOLD=1, write both, REGHOLD=0 -> latch at VSYNC."""
+    shs1 = int(max(SHS1_MIN, min(SHS1_MAX, shs1)))
+    gain = int(max(GAIN_MIN, min(GAIN_MAX, gain)))
+    _i2c_w("0x30", "0x08", [0x01])                                          # REGHOLD on
+    _i2c_w("0x30", "0x8d", [shs1 & 0xff, (shs1 >> 8) & 0xff, (shs1 >> 16) & 0xff])
+    _i2c_w("0x32", "0x04", [gain & 0xff, (gain >> 8) & 0xff])
+    _i2c_w("0x30", "0x08", [0x00])                                          # REGHOLD off -> latch
 
 # ── V4L2 mmap capture (ctypes) ────────────────────────────────────────────
 class _timeval(ctypes.Structure):
@@ -126,7 +129,7 @@ class Engine:
         self.cap = Cap()
         self.shs1 = 400
         self.gain = 40
-        _set_gain(self.gain); _set_shs1(self.shs1)
+        _apply_exposure(self.shs1, self.gain)
         self._lock = threading.Lock(); self._jpeg = b""; self._running = True
         self._fps = 0.0; self._tl = time.time(); self._mean = 0.0; self._frame_n = 0
         self._latest = None; self._llock = threading.Lock()
@@ -149,14 +152,15 @@ class Engine:
             return
         if err > 0:
             if self.shs1 > SHS1_MIN:
-                self.shs1 = max(SHS1_MIN, self.shs1 - max(4, int(self.shs1 * 0.25))); _set_shs1(self.shs1)
+                self.shs1 = max(SHS1_MIN, self.shs1 - max(4, int(self.shs1 * 0.25)))
             elif self.gain < GAIN_MAX:
-                self.gain = min(GAIN_MAX, self.gain + 24); _set_gain(self.gain)
+                self.gain = min(GAIN_MAX, self.gain + 24)
         else:
             if self.gain > GAIN_MIN:
-                self.gain = max(GAIN_MIN, self.gain - 24); _set_gain(self.gain)
+                self.gain = max(GAIN_MIN, self.gain - 24)
             elif self.shs1 < SHS1_MAX:
-                self.shs1 = min(SHS1_MAX, self.shs1 + max(4, int(self.shs1 * 0.25))); _set_shs1(self.shs1)
+                self.shs1 = min(SHS1_MAX, self.shs1 + max(4, int(self.shs1 * 0.25)))
+        _apply_exposure(self.shs1, self.gain)
 
     def _loop(self):
         period = 1.0 / ENGINE_MAX_FPS

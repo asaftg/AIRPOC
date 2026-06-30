@@ -55,6 +55,37 @@ In order of discovery:
 
 Verified after all five: v4l2 exposure+gain sweep drives frame mean **60 → 974**.
 
+## Live-AE band-shift tearing (the 6th issue) — REGHOLD
+
+Separate from bring-up: when the AE changes exposure/gain **while streaming**,
+frames showed horizontal "staircase" band-shift tearing. Root cause confirmed by
+(a) an objective frame-to-frame diff test — **0/44 frame-pairs torn with zero
+mid-stream writes** (no CSI/VI hardware errors), and (b) three independent
+research passes converging on the same mechanism:
+
+The IMX296 latches SHS1/GAIN/VMAX per frame. Writing them as bare i2c
+transactions mid-stream lets a frame latch **partial or mismatched** timing
+values (a half-written 24-bit SHS1, or SHS1/VMAX disagreeing for one frame) →
+that frame is read out with inconsistent timing → band-shift tear. Mainline
+`imx296.c` has the same latent bug (it `#define`s REGHOLD but never uses it).
+
+**Fix — `CTRL08` (0x3008) bit0 = REGHOLD**, atomic latch:
+```
+0x3008 = 0x01            ; REGHOLD on (freeze shadow registers)
+SHS1 @ 0x308d (24-bit)
+GAIN @ 0x3204 (16-bit)
+0x3008 = 0x00            ; REGHOLD off -> all latch together at next VSYNC
+```
+Implemented in `imx296_set_group_hold()` (the tegracam framework brackets
+control writes with it), and in the preview tool's i2c AE (`_apply_exposure`).
+Keep `VMAX > SHS1` inside the held block. This is the production-correct fix —
+not a vblank-timing race.
+
+> Note: a separate hypothesis (set `embedded_metadata_height` 2→0) was raised but
+> deprioritized — the frame-diff showed the tearing is write-induced (dynamic),
+> not a static stride/metadata shift, and changing metadata height risks the
+> working stream. Revisit only if REGHOLD doesn't fully clear it.
+
 ## Controls — semantics
 
 - **Exposure**: v4l2 `exposure` in **µs**, range 29–16000 (`exposure_factor=1e6`,

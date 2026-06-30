@@ -33,6 +33,10 @@
 #define IMX296_SHS1_ADDR_0	0x308d	/* SHS1 (shutter), 24-bit LE */
 #define IMX296_SHS1_ADDR_1	0x308e
 #define IMX296_SHS1_ADDR_2	0x308f
+#define IMX296_REGHOLD		0x3008	/* CTRL08 bit0 = REGHOLD: latch SHS1/GAIN/VMAX
+					 * atomically at the next frame boundary. Without
+					 * it, a mid-stream update can latch partial/
+					 * mismatched values -> horizontal band-shift tear. */
 
 #define IMX296_GAIN_MIN		0
 #define IMX296_GAIN_MAX		480
@@ -106,7 +110,11 @@ static int imx296_write_table(struct imx296 *priv, const imx296_reg table[])
 
 static int imx296_set_group_hold(struct tegracam_device *tc_dev, bool val)
 {
-	return 0;
+	/* REGHOLD=1 freezes the shadow registers; the framework then writes
+	 * gain/exposure and calls us again with val=0, which latches them all
+	 * together on the next VSYNC. This makes live AE updates atomic and
+	 * frame-aligned — the production fix for mid-stream write tearing. */
+	return imx296_write_reg(tc_dev->s_data, IMX296_REGHOLD, val ? 0x01 : 0x00);
 }
 
 /* DT exposes gain directly in 0.1 dB units (gain_factor=10, 0..480). */
