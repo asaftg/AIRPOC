@@ -1,15 +1,25 @@
 # AIRPOC — Jetson Orin Nano + IMX296 camera
 
-Project bench: **NVIDIA Jetson Orin Nano Super** (JetPack 6.2.2 / L4T r36.4.4, kernel `5.15.148-tegra`) + **Waveshare IMX296-130** mono global-shutter MIPI camera, headless.
+Bench: **Jetson Orin Nano Super** (JetPack 6.2.2 / L4T r36.4.4, kernel
+`5.15.148-tegra`) + **Waveshare IMX296-130** mono global-shutter MIPI camera,
+headless. This repo is the **single source of truth** — clones pull, never hand-edit.
+
+## Docs
+- [`docs/JETSON_ORIN_NANO_BRINGUP.md`](docs/JETSON_ORIN_NANO_BRINGUP.md) — bring-up **checklist** (fresh board → focused, auto-exposed stream).
+- [`docs/ENGINEERING_GUIDELINES.md`](docs/ENGINEERING_GUIDELINES.md) — code/build rules (C/C++ on device, Python for tools only, no loose patches).
+- [`docs/FOCUS_TOOL_GUIDE.md`](docs/FOCUS_TOOL_GUIDE.md) — focus-assist tool.
 
 ## Layout
-- `docs/JETSON_ORIN_NANO_BRINGUP.md` — full OS bring-up + camera recipe + the root-cause story.
-- `jetson/camera/` — custom `nv_imx296` Tegracam driver, mode tables, device-tree overlay (CAM1 / serial_c), and the **Y10 VI patch** (`vi5_formats_y10.patch`).
-- `jetson/fan/` — always-100% fan service (`jetson-fan-max.service`).
+- `jetson/camera/` — production `nv_imx296` driver, mode tables, DT overlay.
+- `jetson/fan/` — fan-always-100% service.
+- `jetson/tools/` — bench tools (Python OK): focus + quality/AE preview.
 
-## Camera status
-Streams **Y10 mono 1456×1088 @ 60 fps** (real images verified). The long bring-up's root cause: the **stock Tegra VI silently drops mono Y10 frames** — not the clock, ribbon, or hardware. Fixed by adding a mono-Y10 entry to the VI format table (`vi5_formats_y10.patch`) + the mono Y10 capture path. Known-good reference: [INNO-MAKER/cam-imx296raw-trigger](https://github.com/INNO-MAKER/cam-imx296raw-trigger).
+## Status
+Streams **Y10 mono 1456×1088 @ 60 fps**. Root cause of the long bring-up:
+**stock Tegra VI silently drops mono Y10** — not the clock, ribbon, or hardware.
 
-Working overlay values: `num_lanes=1`, `lane_polarity=0`, `discontinuous_clk=no`, `mclk_khz=54000` (37.125 also fine), `line_length=1100`, `pix_clk_hz=118800000`, `embedded_metadata_height=2`. Driver writes the Tegra-specific `MIPIC_AREA3W (0x4182)=1088`.
-
-> Note: capture is **Y10 left-justified** (10-bit data in the high bits of the 16-bit word — shift `>>6` to read raw values). Production clean-driver + mono ISP/AE in progress.
+**Exposure/gain** is driven via the sensor registers **SHS1 `0x308d`**
+(`SHS1 = VMAX − exposure_lines`) and **GAIN `0x3204`** (0–480). A clean
+production driver exposing these as working v4l2 controls is the remaining
+camera task — the diagnostic prebuilt accepts control values but never writes
+them to the sensor. Y10 is **left-justified** (shift `>>6` for the raw value).

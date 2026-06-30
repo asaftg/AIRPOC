@@ -1,71 +1,52 @@
-# Jetson Orin Nano Super — OS Bring-up & IMX296 Camera
+# Jetson Orin Nano + IMX296 — Bring-up Checklist
 
-End-to-end bring-up of the **Jetson Orin Nano Super dev kit** (module **P3767-0005**, carrier **P3768**) on **JetPack 6.2.2 / L4T r36.4.4** (kernel `5.15.148-tegra`), headless, plus the **Waveshare IMX296-130** mono global-shutter MIPI camera.
+Fresh Jetson Orin Nano Super dev kit → IMX296 mono camera streaming at
+1456×1088 @ 60 fps, focused, auto-exposed, fan pinned. Work top to bottom.
 
----
+> Targets: **JetPack 6.2.2 / L4T r36.4.4**, kernel `5.15.148-tegra`,
+> module **P3767-0005**, carrier **P3768**, **Waveshare IMX296-130** (mono,
+> global shutter, no on-board oscillator) on **CAM1 / CSI port C**.
 
 ## 1. Hardware
-- **Module/carrier:** P3767-0005 / P3768 (Orin Nano Super, 8 GB).
-- **Display:** DisplayPort-only (no HDMI). We ran **fully headless** — no monitor.
-- **Camera:** Waveshare IMX296-130 (1.6 MP mono global shutter, RPi-style, **no on-board oscillator**) on the **CAM1** 22-pin CSI connector.
-- **Storage:** microSD (JP6 image) + an NVMe SSD (wiped, scratch).
+- [ ] Module seated, heatsink/fan mounted, NVMe or SD with capacity for JetPack.
+- [ ] IMX296 ribbon → **CAM1** connector; contacts face the board, latch closed both ends.
+- [ ] **Peel the lens protective film.** Hand-thread the M12 lens a few turns in.
 
-## 2. OS install (the key lesson)
-The Super ships with **JP6-era firmware**. A **JetPack 5 SD card halts ~10 s into boot** (R36 bootloader cannot boot an R35 rootfs) — this looks like a dead board (fan + ethernet die, power LED stays on) but is just the wrong card. **For a Super, flash JetPack 6 directly** — do NOT use the JP5.1.3 "bridge."
+## 2. Flash JetPack 6.2.2
+- [ ] On an Ubuntu host: NVIDIA **SDK Manager** → target Orin Nano → JetPack 6.2.2.
+- [ ] Put the board in **recovery** (jumper FC REC↔GND, power on), flash, let it complete.
+- [ ] First boot → finish `oem-config` (user `asaftg`), connect network.
+- [ ] `sudo nvpmodel -m 0 && sudo jetson_clocks` → **MAXN_SUPER**, clocks locked.
+- [ ] Confirm: `cat /etc/nv_tegra_release` shows **R36 (release), REVISION: 4.4**.
 
-- Image: `jetson-orin-nano-devkit-super-SD-image_JP6.2.x` (L4T r36.4.4).
-- **Write with Etcher (native Windows)** — NOT `dd` over usbipd (sustained 24 GB writes drop the flaky USB card reader mid-write and corrupt the image).
-- Verify the zip CRC before flashing (a resumed/partial download corrupts it).
+## 3. Camera driver + overlay
+From `jetson/camera/` in this repo (build on-device — modules are kernel-specific):
+- [ ] Stage the L4T kernel / OOT source matching the running kernel.
+- [ ] Build `nv_imx296.ko` (tegracam driver; mode table in `imx296_mode_tbls.h`) and install to `/lib/modules/$(uname -r)/updates/`.
+- [ ] Install the overlay `tegra234-p3767-camera-p3768-imx296-C.dtbo` to `/boot/`.
+- [ ] Ensure the **VI accepts mono Y10** (stock Tegra VI silently drops it). Production path: the driver advertises `MEDIA_BUS_FMT_Y10_1X10` itself, no core-tree change needed (see `ENGINEERING_GUIDELINES.md`).
+- [ ] `sudo /opt/nvidia/jetson-io/config-by-hardware.py -n '2=IMX296 Mono Cam1'` → reboot.
 
-## 3. Headless provisioning (no console)
-Edit the mounted rootfs offline (scripts in `scripts/`), via WSL2 + **usbipd** (the card reader is removable media; `wsl --mount` rejects it):
-- Create user `asaftg` (passwd/shadow/group + `openssl passwd -6`).
-- **Skip oem-config:** `ln -sf .../graphical.target etc/systemd/system/default.target`.
-- Drop a NetworkManager `.nmconnection` for Wi-Fi.
-- **Pre-generate SSH host keys** so `sshd` starts on first boot; set `PasswordAuthentication yes`.
-- nvfb-early/nvfb still run (fix apt `<SOC>`→t234, gen keys).
+## 4. Verify streaming
+- [ ] `ls /dev/video0` exists.
+- [ ] `v4l2-ctl -d /dev/video0 --list-formats-ext` → `Y10` (or `GREY`) `1456x1088`.
+- [ ] `v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=10 --stream-to=/tmp/c.raw`
+- [ ] `ls -l /tmp/c.raw` → **≈31.7 MB** (10 frames × 1456×1088×2). 0 bytes / `VI request timed out` ⇒ VI is dropping Y10 → revisit step 3.
 
-**Dead ends — do not repeat:** SDK Manager flash-over-WSL fails at the OS-write step (needs USB-networking/NFS WSL can't do). RCM/QSPI upload works but the OS copy doesn't.
+> **Y10 is left-justified** in the 16-bit word: shift `>>6` for the 10-bit value, `>>8` for 8-bit. Camera i2c is addr `0x1a`; find the bus with `ls -d /sys/bus/i2c/devices/*-001a`.
 
-## 4. First-boot setup
-- **rootfs does NOT auto-expand** (skipping oem-config skips the resize) — it boots 21 G and fills to 100 %, breaking apt. Fix online:
-  ```bash
-  echo Yes | parted ---pretend-input-tty /dev/mmcblk0 resizepart 1 100%
-  partx -u /dev/mmcblk0; resize2fs /dev/mmcblk0p1     # -> 116 G
-  ```
-- **Max performance:** `nvpmodel -m 2` (mode 2 = **MAXN_SUPER**; modes: 0=15W, 1=25W, 2=MAXN_SUPER, 3=7W — note 0 is the *slowest*), then `jetson_clocks`.
-- **Compute stack:** `apt install nvidia-jetpack` → CUDA 12.6, TensorRT 10.3, cuDNN, VPI, OpenCV. Run detached (SSH blips don't interrupt).
-- **NVMe:** `blkdiscard /dev/nvme0n1` to wipe (scratch).
+## 5. Exposure / gain
+- [ ] Controls: **SHS1** `0x308d` (24-bit, `SHS1 = VMAX − exposure_lines`, smaller = brighter); **GAIN** `0x3204` (16-bit, 0–480, 0.1 dB/step); **VMAX** `0x3010`.
+- [ ] Sanity check the sensor exposes: stream, then `i2ctransfer -f -y <bus> w5@0x1a 0x30 0x8d 0x08 0x00 0x00` (near-max exposure) → frame mean jumps bright. (The shipping driver exposes these as v4l2 controls.)
 
-## 5. Networking
-- **Wi-Fi is stable** (`wlP1p1s0`); **Ethernet is flaky** (drops DHCP) — prefer Wi-Fi for internet.
-- **Best control channel = USB device-mode net `192.168.55.1`** (host side `192.168.55.100`): rock-solid point-to-point over USB-C, immune to LAN flapping. SSH there for admin; internet rides Wi-Fi.
-- The Jetson **does not answer ICMP** — find it by router DNS hostname `orin-nano`, not ping/scan.
-- Access: `ssh asaftg@192.168.55.1` or `ssh asaftg@orin-nano` (pw `872002`).
+## 6. Focus + quality (tools — see `jetson/tools/`)
+- [ ] Focus: `ssh asaftg@orin-nano 'bash ~/focus.sh'` → `http://orin-nano:8090`, turn the M12 ring until Tenengrad/Laplacian peak. (`FOCUS_TOOL_GUIDE.md`)
+- [ ] Quality/AE preview: `sudo ~/preview.sh` → `http://orin-nano:8091` (auto-exposure + light ISP).
 
-## 6. Fan — forced 100 % always
-The fan is a thermal cooling device (`pwm-fan`, states 0–3); the kernel governor idles it at state 2 (pwm 187) and overrides direct `pwm1` writes. To run it at 100 % at all times (the dev kit can hiccup when cold with the fan idled):
-- `systemd` unit **`jetson-fan-max.service`** runs **`/usr/local/bin/fan-max.sh`**, which stops/masks `nvfancontrol`, then in a 1 s loop holds the cooling device at `max_state` (3) and writes `pwm1=255`.
-- Result: steady **pwm 255**, never idles off, survives reboot. Files: `fan/fan-max.sh`, `fan/jetson-fan-max.service`, `fan/install_fan.sh`.
+## 7. Fan always 100%
+From `jetson/fan/`:
+- [ ] `sudo ./install_fan.sh` → installs `jetson-fan-max.service`, masks `nvfancontrol`.
+- [ ] Verify: `cat /sys/class/hwmon/hwmon*/pwm1` → **255**.
 
-## 7. IMX296 camera — bring-up & the real root cause
-There is **no native IMX296 support in JetPack 6** (only IMX219/477 ship overlays) — a custom driver is required. The bare RPi/Waveshare IMX296 had been **publicly unsolved on Jetson**; every working vendor module (VC, Leopard, INNO-MAKER) carries its own oscillator.
-
-**Symptom:** sensor probes over i2c (0x1a), `/dev/video0` enumerates, sensor configures, but every capture → `tegra-camrtc-capture-vi: uncorr_err: request timed out after 2500 ms`, 0 bytes, **zero CSI errors**.
-
-**The real root cause (after exhaustive elimination):** the IMX296 is mono → outputs **Y10 (10-bit greyscale)**, and the **stock Tegra VI (`tegra-camera.ko`) silently drops Y10 frames**. It is NOT the clock (the SoC's 37.09 MHz vs nominal 37.125 is a 0.09 % red herring — the Tegra `tegracam` driver doesn't enforce the exact-rate check the mainline RPi driver does), NOT the ribbon, NOT hardware.
-
-**What works (confirmed streaming, 31.7 MB = 10 real frames, Y10 1456×1088 @ 60 fps):**
-- A **Y10-patched `tegra-camera.ko`** + an `imx296.ko` that auto-detects mono.
-- Reference/known-good: [INNO-MAKER/cam-imx296raw-trigger](https://github.com/INNO-MAKER/cam-imx296raw-trigger) (matches this exact kernel `5.15.148-tegra`).
-- **Working overlay values** (`tegra234-p3767-camera-p3768-imx296mono-cam1.dtbo`): `num_lanes="1"`, `lane_polarity="0"`, `discontinuous_clk="no"` (continuous), `mclk_khz="54000"`, `line_length="1100"`, `pix_clk_hz="118800000"`, `embedded_metadata_height="2"`, `tegra_sinterface="serial_c"`.
-- Tegra-specific init register the mainline lacks: **`MIPIC_AREA3W (0x4182) = 1088`**.
-
-**Enable:**
-```bash
-sudo python3 /opt/nvidia/jetson-io/config-by-hardware.py -n '2=Camera IMX296LLR-Mono Y10 Cam1'
-sudo reboot
-v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=10 --stream-to=/tmp/c.raw   # ~31 MB
-```
-
-> Production note: a from-source clean driver + ISP/AE is the next step (INNO-MAKER ships binaries only). The Y10 VI support must be built into our oot `tegra-camera`, and the mono ISP/AE (no demosaic/AWB) ported from the seeker EO pipeline.
+## 8. Done
+- [ ] `/dev/video0` streams Y10 60 fps, image focused + auto-exposed, fan at 255, MAXN_SUPER. Commit any device-specific notes back to this repo (it is the single source of truth).
