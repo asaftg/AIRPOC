@@ -1,16 +1,21 @@
-"""IMX296 live quality preview (Orin Nano) — v4l2 AE + light ISP.
+"""IMX296 live quality preview (Orin Nano) — V4L2 mmap capture, AE + de-band ISP.
 
-Uses the production nv_imx296 driver's real v4l2 controls (exposure in us,
-gain 0-480) for auto-exposure — no i2c hack. Format is mono Y10.
+Capture is **proper V4L2 mmap** (ctypes ioctl: REQBUFS/QUERYBUF/QBUF/DQBUF) — each
+DQBUF hands over one *complete* frame buffer, so there is no byte stream to
+desync and no torn frames (the previous v4l2-ctl pipe could write a short frame
+on overrun and permanently misalign a byte reader).
 
-Pipeline: Y10 (>>6) -> AE meters mean -> 3x3 median -> black-level + adaptive
-white tone map -> gamma -> 8-bit -> MJPEG.
-AE drives EXPOSURE first (low noise), gain only when exposure is maxed.
+A reader thread DQBUFs continuously (copy + requeue, keeping the driver's buffer
+ring fed); the ISP runs on the latest frame in a second thread.
 
-Run:  python3 imx296_preview.py        ->  http://<jetson-ip>:8091
+AE writes the sensor SHS1/gain over i2c (no 2nd /dev/video0 handle -> no S_CTRL
+glitch). The driver's v4l2 controls remain the production interface.
+
+ISP: Y10(>>6) -> 3x3 median -> row-noise de-band -> black-level + adaptive-white
+tone map -> gamma -> 8-bit -> MJPEG.  Run: python3 imx296_preview.py -> :8091
 """
 from __future__ import annotations
-import argparse, subprocess, threading, time
+import argparse, ctypes, fcntl, glob, mmap, os, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
@@ -19,52 +24,109 @@ W, H = 1456, 1088
 FRAME_BYTES = W * H * 2
 PORT = 8091
 PREVIEW_W = 900
-JPEG_QUALITY = 72
+JPEG_QUALITY = 92
 ENGINE_MAX_FPS = 30
 GAMMA = 0.85
-TARGET = 450.0                  # AE target mean of the 10-bit luma
+TARGET = 450.0
 DEV = "/dev/video0"
-EXP_MIN, EXP_MAX = 29, 16000    # us (driver exposure control range)
-GAIN_MIN, GAIN_MAX = 0, 480     # 0.1 dB steps
-BLACK = 60.0                    # sensor black level (BLKLEVEL 0x3c)
+ADDR = "0x1a"
+SHS1_MIN, SHS1_MAX = 8, 1100
+GAIN_MIN, GAIN_MAX = 0, 480
+BLACK = 60.0
 
 _GAMMA_LUT = np.array([((i / 255.0) ** (1.0 / GAMMA)) * 255.0
                        for i in range(256)], dtype=np.uint8)
-_ROW_KER = np.ones(31) / 31.0          # vertical low-pass for row-noise removal
+_ROW_KER = np.ones(31) / 31.0
 
+# ── i2c AE (write sensor SHS1/gain directly; no /dev/video0 open) ──────────
+def _i2c_bus():
+    for p in glob.glob("/sys/bus/i2c/devices/*-001a"):
+        b = os.path.basename(p).split("-")[0]
+        if b.isdigit():
+            return b
+    return None
+BUS = _i2c_bus()
 
-def _set_ctrl(exp, gain):
-    subprocess.run(["v4l2-ctl", "-d", DEV, "--set-ctrl", f"exposure={int(exp)},gain={int(gain)}"],
+def _i2c_w(reghi, reglo, data_bytes):
+    if BUS is None:
+        return
+    n = len(data_bytes) + 2
+    subprocess.run(["i2ctransfer", "-f", "-y", BUS, f"w{n}@{ADDR}", reghi, reglo]
+                   + [f"0x{b:02x}" for b in data_bytes],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def _set_shs1(v):
+    v = int(max(SHS1_MIN, min(SHS1_MAX, v)))
+    _i2c_w("0x30", "0x8d", [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff])
+
+def _set_gain(v):
+    v = int(max(GAIN_MIN, min(GAIN_MAX, v)))
+    _i2c_w("0x32", "0x04", [v & 0xff, (v >> 8) & 0xff])
+
+# ── V4L2 mmap capture (ctypes) ────────────────────────────────────────────
+class _timeval(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
+class _timecode(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+                ("frames", ctypes.c_uint8), ("seconds", ctypes.c_uint8),
+                ("minutes", ctypes.c_uint8), ("hours", ctypes.c_uint8),
+                ("userbits", ctypes.c_uint8 * 4)]
+class _buf_m(ctypes.Union):
+    _fields_ = [("offset", ctypes.c_uint32), ("userptr", ctypes.c_ulong),
+                ("fd", ctypes.c_int32)]
+class v4l2_buffer(ctypes.Structure):
+    _fields_ = [("index", ctypes.c_uint32), ("type", ctypes.c_uint32),
+                ("bytesused", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+                ("field", ctypes.c_uint32), ("timestamp", _timeval),
+                ("timecode", _timecode), ("sequence", ctypes.c_uint32),
+                ("memory", ctypes.c_uint32), ("m", _buf_m),
+                ("length", ctypes.c_uint32), ("reserved2", ctypes.c_uint32),
+                ("request_fd", ctypes.c_int32)]
+class v4l2_requestbuffers(ctypes.Structure):
+    _fields_ = [("count", ctypes.c_uint32), ("type", ctypes.c_uint32),
+                ("memory", ctypes.c_uint32), ("capabilities", ctypes.c_uint32),
+                ("flags", ctypes.c_uint8), ("reserved", ctypes.c_uint8 * 3)]
+
+def _IOC(d, t, nr, size): return (d << 30) | (size << 16) | (t << 8) | nr
+_V = ord('V')
+VIDIOC_REQBUFS  = _IOC(3, _V, 8,  ctypes.sizeof(v4l2_requestbuffers))
+VIDIOC_QUERYBUF = _IOC(3, _V, 9,  ctypes.sizeof(v4l2_buffer))
+VIDIOC_QBUF     = _IOC(3, _V, 15, ctypes.sizeof(v4l2_buffer))
+VIDIOC_DQBUF    = _IOC(3, _V, 17, ctypes.sizeof(v4l2_buffer))
+VIDIOC_STREAMON = _IOC(1, _V, 18, ctypes.sizeof(ctypes.c_int))
+VIDIOC_STREAMOFF = _IOC(1, _V, 19, ctypes.sizeof(ctypes.c_int))
+BUF_TYPE = 1   # V4L2_BUF_TYPE_VIDEO_CAPTURE
+MEM_MMAP = 1   # V4L2_MEMORY_MMAP
 
 class Cap:
-    def __init__(self):
-        self._open()
-
-    def _open(self):
-        self.proc = subprocess.Popen(
-            ["v4l2-ctl", "-d", DEV, "--stream-mmap", "--stream-count=0", "--stream-to=-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+    def __init__(self, nbufs=8):
+        self.fd = os.open(DEV, os.O_RDWR)
+        req = v4l2_requestbuffers(count=nbufs, type=BUF_TYPE, memory=MEM_MMAP)
+        fcntl.ioctl(self.fd, VIDIOC_REQBUFS, req)
+        self.maps = []
+        for i in range(req.count):
+            b = v4l2_buffer(index=i, type=BUF_TYPE, memory=MEM_MMAP)
+            fcntl.ioctl(self.fd, VIDIOC_QUERYBUF, b)
+            mm = mmap.mmap(self.fd, b.length, mmap.MAP_SHARED, mmap.PROT_READ,
+                           offset=b.m.offset)
+            self.maps.append(mm)
+            fcntl.ioctl(self.fd, VIDIOC_QBUF, b)
+        fcntl.ioctl(self.fd, VIDIOC_STREAMON, ctypes.c_int(BUF_TYPE))
 
     def grab(self):
-        buf = bytearray()
-        while len(buf) < FRAME_BYTES:
-            c = self.proc.stdout.read(FRAME_BYTES - len(buf))
-            if not c:
-                try: self.proc.terminate()
-                except Exception: pass
-                time.sleep(0.2); self._open(); return None
-            buf += c
-        return bytes(buf)   # raw — keep the reader light so it drains the pipe fast
+        b = v4l2_buffer(type=BUF_TYPE, memory=MEM_MMAP)
+        fcntl.ioctl(self.fd, VIDIOC_DQBUF, b)        # blocks for a complete frame
+        data = self.maps[b.index][:FRAME_BYTES]      # copy out before requeue
+        fcntl.ioctl(self.fd, VIDIOC_QBUF, b)         # return buffer to the ring
+        return data
 
 
 class Engine:
     def __init__(self):
         self.cap = Cap()
-        self.exp = 8000
-        self.gain = 0
-        _set_ctrl(self.exp, self.gain)
+        self.shs1 = 400
+        self.gain = 40
+        _set_gain(self.gain); _set_shs1(self.shs1)
         self._lock = threading.Lock(); self._jpeg = b""; self._running = True
         self._fps = 0.0; self._tl = time.time(); self._mean = 0.0; self._frame_n = 0
         self._latest = None; self._llock = threading.Lock()
@@ -72,31 +134,29 @@ class Engine:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _reader(self):
-        # Drain the capture pipe continuously so v4l2-ctl never blocks on a full
-        # buffer — that backpressure is what overwrote/tore frames. Keep latest.
         while self._running:
-            f10 = self.cap.grab()
-            if f10 is not None:
-                with self._llock:
-                    self._latest = f10
+            try:
+                raw = self.cap.grab()
+            except Exception:
+                time.sleep(0.01); continue
+            with self._llock:
+                self._latest = raw
 
     def _ae(self, mean10):
-        """Exposure first for low noise; gain only when exposure is maxed."""
         self._mean = mean10
         err = TARGET - mean10
         if abs(err) < 30:
             return
-        if err > 0:                                  # too dark
-            if self.exp < EXP_MAX:
-                self.exp = min(EXP_MAX, int(self.exp * 1.4) + 60)
+        if err > 0:
+            if self.shs1 > SHS1_MIN:
+                self.shs1 = max(SHS1_MIN, self.shs1 - max(4, int(self.shs1 * 0.25))); _set_shs1(self.shs1)
             elif self.gain < GAIN_MAX:
-                self.gain = min(GAIN_MAX, self.gain + 30)
-        else:                                        # too bright
+                self.gain = min(GAIN_MAX, self.gain + 24); _set_gain(self.gain)
+        else:
             if self.gain > GAIN_MIN:
-                self.gain = max(GAIN_MIN, self.gain - 30)
-            elif self.exp > EXP_MIN:
-                self.exp = max(EXP_MIN, int(self.exp * 0.7))
-        _set_ctrl(self.exp, self.gain)
+                self.gain = max(GAIN_MIN, self.gain - 24); _set_gain(self.gain)
+            elif self.shs1 < SHS1_MAX:
+                self.shs1 = min(SHS1_MAX, self.shs1 + max(4, int(self.shs1 * 0.25))); _set_shs1(self.shs1)
 
     def _loop(self):
         period = 1.0 / ENGINE_MAX_FPS
@@ -114,10 +174,7 @@ class Engine:
             self._frame_n += 1
             if self._frame_n % 4 == 0:
                 self._ae(float(f10[::8, ::8].mean()))
-            # --- ISP: median -> row-noise de-band -> black-level + adaptive white -> gamma ---
             den = cv2.medianBlur(f10.astype(np.uint16), 3).astype(np.float32)
-            # horizontal row-noise correction: subtract the high-freq part of the
-            # per-row median (sampled columns for speed) -> kills IMX296 banding.
             rowmed = np.median(den[:, ::4], axis=1)
             rowsm = np.convolve(rowmed, _ROW_KER, mode="same")
             den = den - (rowmed - rowsm)[:, None]
@@ -129,7 +186,7 @@ class Engine:
             sc = PREVIEW_W / W
             disp = cv2.cvtColor(cv2.resize(y8, (int(W * sc), int(H * sc))), cv2.COLOR_GRAY2BGR)
             lines = [f"IMX296 Y10  {self._fps:.0f} fps  mean={self._mean:.0f}/1023",
-                     f"AE(v4l2): exp={self.exp}us  gain={self.gain}/480"]
+                     f"AE: exp(SHS1)={self.shs1}  gain={self.gain}/480  (mmap, de-banded)"]
             yt = int(H * sc) - 12
             for ln in reversed(lines):
                 cv2.putText(disp, ln, (10, yt), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
@@ -188,8 +245,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=PORT)
     args = ap.parse_args()
+    if BUS is None:
+        print("WARNING: camera i2c bus (addr 0x1a) not found — AE disabled", flush=True)
     ENGINE = Engine()
-    print(f"\n  IMX296 live preview (v4l2 AE): http://0.0.0.0:{args.port}/\n", flush=True)
+    print(f"\n  IMX296 live preview (V4L2 mmap, i2c AE bus {BUS}): http://0.0.0.0:{args.port}/\n", flush=True)
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
 
 
