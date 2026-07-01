@@ -25,9 +25,10 @@
 #define EO_LINE_US       (EO_HMAX / EO_PIXCLK_HZ * 1e6)   /* 14.815 us/line  */
 #define EO_FRAME_US      (EO_VMAX * EO_LINE_US)           /* 16667 us        */
 #define EO_SHS1_MIN      8
-#define EO_SHS1_MAX      1100
-#define EO_MAX_EXP_LINES (EO_VMAX - EO_SHS1_MIN)          /* 1117            */
-#define EO_MIN_EXP_LINES (EO_VMAX - EO_SHS1_MAX)          /* 25              */
+#define EO_SHS1_MAX      1120     /* min exposure floor; higher = shorter shutter for
+                                   * bright/daylight scenes (avoids blown highlights) */
+#define EO_MAX_EXP_LINES (EO_VMAX - EO_SHS1_MIN)          /* 1117 (~16.5 ms) */
+#define EO_MIN_EXP_LINES (EO_VMAX - EO_SHS1_MAX)          /* 5    (~0.074 ms)*/
 #define EO_GAIN_MIN      0
 #define EO_GAIN_MAX      480           /* 0.1 dB / step                      */
 

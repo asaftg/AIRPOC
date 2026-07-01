@@ -25,7 +25,7 @@ int mjpeg_zoom(void) { return g_zoom; }
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
 "<!DOCTYPE html><html><head><title>AIRPOC EO</title><meta charset=utf-8><style>"
-"body{background:#111;margin:0;font-family:monospace}"
+"body{background:#111;margin:0;font-family:monospace;text-align:center}"
 "#wrap{position:relative;display:inline-block}"
 "img{max-width:100vw;max-height:100vh;display:block}"
 "#ov{position:absolute;left:10px;bottom:10px;color:#0f0;font-size:16px;line-height:1.4;"
