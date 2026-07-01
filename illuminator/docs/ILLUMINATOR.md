@@ -1,8 +1,8 @@
 # IR Illuminator — Savgood SG-IR850-8M
 
 850 nm IR laser illuminator with a motorized zoom lens, controlled over a TTL
-UART serial link. Production controller lives in `jetson/illuminator/` (C, per
-`ENGINEERING_GUIDELINES.md`): a library (`libsgir850.a`) plus a CLI (`sgctl`).
+UART serial link. Production controller lives in `illuminator/src/` (C, per
+`../../docs/ENGINEERING_GUIDELINES.md`): a library (`libsgir850.a`) plus a CLI (`sgctl`).
 
 Controls: laser on/off, optical power (drive current), beam FOV (zoom), and
 status queries (power / level / position / fan).
@@ -54,7 +54,7 @@ beam (TELE/spot), higher = wider (WIDE/flood).
 ## Build
 
 ```bash
-cd jetson/illuminator
+cd illuminator/src
 make                 # builds libsgir850.a + sgctl (native aarch64, no deps)
 sudo make install    # installs sgctl to /usr/local/bin
 ```
