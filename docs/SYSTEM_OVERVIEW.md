@@ -13,9 +13,9 @@ points the head at the target.
 ## Dataflow
 
 ```
-  EO camera ─┐
-  Thermal   ─┼─► detection ─┐
-  Radar     ─┘              ├─► fusion ─► tracking ─► gimbal pointing ─► guidance
+  EO camera            ─┐
+  Thermal (optional)   ─┼─► detection ─┐
+  Radar                ─┘              ├─► fusion ─► tracking ─► gimbal pointing ─► guidance
   NIR illuminator ──(lights the EO scene, pulsed/synced)                 (effector)
 ```
 
