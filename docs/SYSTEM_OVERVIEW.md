@@ -6,7 +6,7 @@ before contributing.
 
 ## Mission
 
-Detect, track, and guide against small aerial targets (counter-UAS). A pan/tilt
+Detect, track, and guide against small aerial targets (counter-UAS) and humans/vehicles (ground targets). A pan/tilt
 seeker head carries the sensors; a Jetson-class compute module runs perception and
 points the head at the target.
 
