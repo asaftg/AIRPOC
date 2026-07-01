@@ -7,6 +7,7 @@
  * 10-bit frame; the MJPEG feed on :8091 is for the operator. */
 #include "pipeline.h"
 #include <getopt.h>
+#include "illum.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,10 +35,12 @@ static void consume_frame(const uint8_t *y10, int bpl, int w, int h)
 int main(int argc, char **argv)
 {
     const char *dev = EO_DEV_DEFAULT;
+    const char *iport = "/dev/ttyUSB0";   /* SG-IR850 illuminator (optional) */
     int port = 8091, opt;
-    while ((opt = getopt(argc, argv, "d:p:")) != -1) {
+    while ((opt = getopt(argc, argv, "d:p:i:")) != -1) {
         if (opt == 'd') dev = optarg;
         else if (opt == 'p') port = atoi(optarg);
+        else if (opt == 'i') iport = optarg;
     }
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
@@ -47,6 +50,7 @@ int main(int argc, char **argv)
     Capture cap;
     if (sensor_open(&sensor) < 0) return 1;
     if (cap_open(&cap, dev, 8) < 0)  return 1;
+    illum_start(iport);                /* optional; no-ops if the illuminator is absent */
     mjpeg_start(port);
 
     AE ae;

@@ -4,6 +4,7 @@
  * consumes frames in-process, not over HTTP. */
 #define _GNU_SOURCE
 #include "pipeline.h"
+#include "illum.h"
 #include <arpa/inet.h>
 #include <math.h>
 #include <pthread.h>
@@ -36,14 +37,22 @@ static const char *PAGE =
 "box-sizing:border-box;display:none;pointer-events:none}"
 "#bar{position:fixed;top:8px;left:8px;color:#6f6;z-index:2}"
 "button{background:#222;color:#0f0;border:1px solid #0a0;padding:5px 9px;cursor:pointer}"
-"button.on{background:#0a0;color:#000}</style></head><body>"
+"button.on{background:#0a0;color:#000}#lon.hot{background:#f00;color:#fff;border-color:#f00}"
+"#ls{margin-left:6px}</style></head><body>"
 "<div id=bar>zoom "
 "<button onclick=z(1) id=z1>1x</button><button onclick=z(2) id=z2>2x</button>"
 "<button onclick=z(4) id=z4>4x</button><button onclick=z(8) id=z8>8x</button>"
-"&nbsp;&nbsp;<button onclick=f() id=fb>focus</button></div>"
+"&nbsp;&nbsp;<button onclick=f() id=fb>focus</button>"
+"&nbsp;&nbsp;<span id=ls>ILLUM</span> "
+"<button onclick=L(1) id=lon>ON</button><button onclick=L(0) id=loff>OFF</button> "
+"beam <button onclick=P(-32)>pow-</button><button onclick=P(32)>pow+</button> "
+"<button onclick=F(-8)>fov-</button><button onclick=F(8)>fov+</button></div>"
 "<div id=wrap><img src=/stream><div id=roi></div><div id=ov></div></div><script>"
-"var foc=false,peak=0;"
+"var foc=false,peak=0,lpow=64,lfov=70;"
 "function z(v){fetch('/ctl?zoom='+v)}"
+"function L(v){if(v&&!confirm('Fire 850nm IR laser? (invisible, eye hazard)'))return;fetch('/ctl?laser='+v)}"
+"function P(d){lpow=Math.max(0,Math.min(255,lpow+d));fetch('/ctl?power='+lpow)}"
+"function F(d){lfov=Math.max(2,Math.min(70,Math.round(lfov+d)));fetch('/ctl?fov='+lfov)}"
 "function f(){foc=!foc;peak=0;document.getElementById('roi').style.display=foc?'block':'none';"
 "document.getElementById('fb').className=foc?'on':''}"
 "async function t(){try{let d=await(await fetch('/stats')).json();"
@@ -52,7 +61,13 @@ static const char *PAGE =
 "'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x';"
 "if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
 "s+='\\nFOCUS  '+Math.round(d.sharp)+'  peak '+Math.round(peak)+'  '+p+'%  (turn ring to max)';}"
+"if(d.laser)s+='\\n** LASER ON  pow '+d.lpower+'/255  beam '+d.lfov.toFixed(0)+'deg **';"
 "document.getElementById('ov').textContent=s;"
+"lpow=d.lpower;lfov=d.lfov;"
+"document.getElementById('lon').className=d.laser?'hot':'';"
+"var ls=document.getElementById('ls');"
+"if(!d.lpresent){ls.textContent='ILLUM(none)';ls.style.color='#666'}"
+"else{ls.textContent=d.laser?'LASER ON':'ILLUM';ls.style.color=d.laser?'#f00':'#6f6'}"
 "[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'')}catch(e){}}"
 "setInterval(t,150);t();</script></body></html>";
 
@@ -107,11 +122,15 @@ static void *client(void *arg)
         int z = g_zoom;
         double hf = 2 * atan((EO_WIDTH  * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
         double vf = 2 * atan((EO_HEIGHT * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
-        char body[360];
+        int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
+        illum_snapshot(&lon, &lpw, &lfov, &lpr);
+        char body[440];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
-            "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f}\n",
-            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e), g, z, hf, vf, g_sharp);
+            "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
+            "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
+            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e), g, z, hf, vf, g_sharp,
+            lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
         close(fd);
@@ -119,8 +138,11 @@ static void *client(void *arg)
     }
 
     if (strncmp(req, "GET /ctl", 8) == 0) {
-        char *q = strstr(req, "zoom=");
-        if (q) { int v = atoi(q + 5); if (v == 1 || v == 2 || v == 4 || v == 8) g_zoom = v; }
+        char *q;
+        if ((q = strstr(req, "zoom="))) { int v = atoi(q + 5); if (v==1||v==2||v==4||v==8) g_zoom = v; }
+        if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
+        if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
+        if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }
