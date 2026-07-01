@@ -36,8 +36,8 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Module | Owner | State | Chapter |
 |---|---|---|---|
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
-| EO camera | — | ✅ 60 fps mono, focused, AE | [`eo/`](../eo/README.md) |
-| NIR illuminator | — | 🟡 controller done, HW pending | [`illuminator/`](../illuminator/README.md) |
+| EO camera | — | ✅ 60 fps mono, AE, production C pipeline + operator monitor | [`eo/`](../eo/README.md) |
+| NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
 | Radar | — | ⬜ not started | — |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
@@ -48,14 +48,19 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 ### EO camera (done)
 Waveshare IMX296-130 (Sony IMX296, mono global shutter) on the Jetson via a custom
 `nv_imx296` driver. Streams **Y10 mono 1440×1088 @ 60 fps** with working
-exposure/gain, a focus tool, a quality preview, and an MJPEG stream. Global shutter
-(no rolling-shutter skew) suits fast-moving targets. Detail: [`eo/README.md`](../eo/README.md).
+exposure/gain. The shipping datapath is C (`eo/pipeline/`): capture → flicker-free
+AE → ISP → detector hook, plus the **operator monitor** (browser: stats overlay,
+digital zoom, focus assist, illuminator controls). Python tools remain for bench
+use. Global shutter (no rolling-shutter skew) suits fast-moving targets. Detail:
+[`eo/README.md`](../eo/README.md).
 
-### NIR illuminator (in progress)
+### NIR illuminator (controls done; sync pending)
 SG-IR850-8M 850 nm illuminator with motor zoom over TTL UART; C controller +
-`sgctl` CLI. Purpose: light the EO scene so exposure can be short enough to freeze
-a moving target. Sync to the camera exposure window is the open design item.
-Detail: [`illuminator/`](../illuminator/README.md).
+`sgctl` CLI, **HW-verified**. On/off, drive power, and beam-FOV controls are **live
+in the EO operator monitor** (`eo/pipeline/`, via the illuminator shim). Purpose:
+light the EO scene so exposure can be short enough to freeze a moving target. The
+open item is **syncing the pulse to the camera exposure window** (see
+[`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail: [`illuminator/`](../illuminator/README.md).
 
 ### Radar / Detection / Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,

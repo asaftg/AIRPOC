@@ -1,10 +1,16 @@
 # Illuminator — GUI Integration Guide (handoff)
 
-This document is the handoff for adding **on/off, power, and FOV** controls for the
-Savgood **SG-IR850-8M** IR illuminator to the AIRPOC operator GUI. It records what
-already exists and is hardware-verified, and specifies exactly where and how the
-buttons hook into the current GUI. Read alongside
-[`ILLUMINATOR.md`](ILLUMINATOR.md) (wiring + full protocol).
+> **✅ IMPLEMENTED (2026-07-01).** The on/off, power, and beam-FOV controls are live
+> in the operator monitor (`eo/pipeline/`): shim `eo/pipeline/illum.c`/`illum.h`,
+> buttons + `/ctl?laser=/power=/fov=` + `/stats` fields in `eo/pipeline/mjpeg.c`,
+> opened at startup in `main.c` (`-i /dev/ttyUSB0`, optional). Built and **verified
+> on-device** — illuminator detected, FOV/power/on-off controllable. This document is
+> now the *reference* for how it was wired (below); no re-integration needed.
+
+This document was the handoff for adding **on/off, power, and FOV** controls for the
+Savgood **SG-IR850-8M** IR illuminator to the AIRPOC operator GUI (the EO pipeline's
+monitor). It records the hardware-verified controller and exactly how the buttons
+hook in. Read alongside [`ILLUMINATOR.md`](ILLUMINATOR.md) (wiring + full protocol).
 
 ---
 

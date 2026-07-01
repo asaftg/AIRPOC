@@ -67,15 +67,24 @@ kernel-specific, so **build on-device**.
    0 bytes / `VI request timed out` ⇒ VI is dropping Y10 → recheck the driver's
    mono-Y10 advertisement (see [DRIVER](docs/DRIVER.md)).
 
-## Run the tools
+## Run — the operator monitor (production)
 
+The shipping datapath **and** the operator's live view is [`eo/pipeline/`](pipeline/README.md).
+Build once on the Jetson and run it:
 ```bash
-# quality preview (AE + ISP + zoom/duty/FOV overlay), browser:
-bash eo/tools/preview.sh          # http://<ip>:8091   (or 192.168.55.1 over USB-C)
-# focus assist (turn the M12 ring until the metrics peak):
-bash eo/tools/focus.sh            # http://<ip>:8090
-# low-latency MJPEG stream:
-bash eo/streaming/imx296_stream.sh <your-ip> 5000
+cd eo/pipeline && make
+./eo_pipeline -d /dev/video0 -p 8091 -i /dev/ttyUSB0   # -i = illuminator (optional)
 ```
-Preview features + the picture-quality status: [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md).
-Focusing: [FOCUS](docs/FOCUS.md). Stream/fps: [STREAMING](docs/STREAMING.md).
+Open **`http://<ip>:8091/`** (or `192.168.55.1:8091` over USB-C): live video with a
+stats overlay (fps/exposure/duty/gain/FOV), **digital zoom 1–8×**, a **focus** assist
+(target box + peak-% — turn the M12 ring to maximize), and, if attached, **illuminator
+controls** (laser on/off, beam power, beam FOV). Full UI + endpoints:
+[`pipeline/README.md`](pipeline/README.md).
+
+### Bench tools (Python — diagnostic only, not shipped)
+```bash
+bash eo/tools/preview.sh          # AE/ISP preview  :8091   (superseded by eo/pipeline)
+bash eo/tools/focus.sh            # standalone focus assist :8090
+bash eo/streaming/imx296_stream.sh <your-ip> 5000   # low-latency MJPEG over UDP/RTP
+```
+Detail: [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md) · [FOCUS](docs/FOCUS.md) · [STREAMING](docs/STREAMING.md).
