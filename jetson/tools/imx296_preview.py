@@ -55,7 +55,6 @@ BLACK = 60.0
 
 _GAMMA_LUT = np.array([((i / 255.0) ** (1.0 / GAMMA)) * 255.0
                        for i in range(256)], dtype=np.uint8)
-_ROW_KER = np.ones(31) / 31.0
 
 # ── i2c AE (write sensor SHS1/gain directly; no /dev/video0 open) ──────────
 def _i2c_bus():
@@ -202,9 +201,11 @@ class Engine:
             if self._frame_n % 4 == 0:
                 self._ae(float(f10[::8, ::8].mean()))
             den = cv2.medianBlur(f10.astype(np.uint16), 3).astype(np.float32)
-            rowmed = np.median(den[:, ::4], axis=1)
-            rowsm = np.convolve(rowmed, _ROW_KER, mode="same")
-            den = den - (rowmed - rowsm)[:, None]
+            # No row de-band: measured raw row-FPN is ~0.5 LSB (negligible). A
+            # content-derived row correction (row median - vertical smooth) can't
+            # tell a real horizontal edge from row noise, so it bleeds the tree/sky
+            # edge into ±15-row streaks (up to ~150 LSB) that track the scene as it
+            # pans. The sensor line is clean at the source (1440 ROI); leave it be.
             white = float(np.percentile(den[::4, ::4], 99.5))
             if white <= BLACK + 1:
                 white = BLACK + 1
@@ -213,7 +214,7 @@ class Engine:
             sc = PREVIEW_W / W
             disp = cv2.cvtColor(cv2.resize(y8, (int(W * sc), int(H * sc))), cv2.COLOR_GRAY2BGR)
             lines = [f"IMX296 Y10  {self._fps:.0f} fps  mean={self._mean:.0f}/1023",
-                     f"AE: exp(SHS1)={self.shs1}  gain={self.gain}/480  (mmap, de-banded)"]
+                     f"AE: exp(SHS1)={self.shs1}  gain={self.gain}/480  (mmap)"]
             yt = int(H * sc) - 12
             for ln in reversed(lines):
                 cv2.putText(disp, ln, (10, yt), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
