@@ -19,8 +19,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
 
-W, H = 1456, 1088
-FRAME_BYTES = W * H * 2
+def _probe_fmt(dev="/dev/video0"):
+    """Probe the driver's real geometry. The sensor is ROI-cropped to 1440 so its
+    Y10 line is 2880 B (64-byte aligned). Hardcoding 1456 reshapes the 2880-byte
+    line as 2912 -> every row drifts +16 px -> diagonal shear (the 'lines')."""
+    try:
+        o = subprocess.run(["v4l2-ctl", "-d", dev, "--get-fmt-video"],
+                           capture_output=True, text=True).stdout
+        w = h = bpl = si = 0
+        for ln in o.splitlines():
+            if "Width/Height" in ln:
+                a, b = ln.split(":")[1].split("/"); w, h = int(a), int(b)
+            elif "Bytes per Line" in ln: bpl = int(ln.split(":")[1])
+            elif "Size Image" in ln:     si = int(ln.split(":")[1])
+        if w and h and bpl:
+            return w, h, bpl, (si or bpl * h)
+    except Exception:
+        pass
+    return 1440, 1088, 2880, 2880 * 1088
+
+W, H, BPL, FRAME_BYTES = _probe_fmt()
 PORT = 8090
 ROI_FRAC = 0.3
 PREVIEW_W = 640          # smaller preview -> much less data over WiFi
@@ -59,7 +77,7 @@ class V4L2Y10Capture:
                 except Exception: pass
                 time.sleep(0.2); self._open(); return None
             buf += chunk
-        f16 = np.frombuffer(bytes(buf), dtype="<u2").reshape(H, W)
+        f16 = np.frombuffer(bytes(buf), dtype="<u2").reshape(H, BPL // 2)[:, :W]
         return (f16 >> 8).astype(np.uint8)      # left-justified 10-bit -> 8-bit
 
     def stop(self):
