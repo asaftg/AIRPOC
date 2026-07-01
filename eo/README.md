@@ -31,7 +31,7 @@ Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md
 | Sensor driver | `nv_imx296` tegracam C driver (`eo/driver/`) | ✅ Y10 60 fps, exposure/gain |
 | DT overlay | `...imx296-C.dtbo` (CAM1 / serial_c) | ✅ |
 | Capture | V4L2 `/dev/video0`, mmap | ✅ sustained 60 fps (verified) |
-| AE + ISP | production C datapath (`eo/pipeline/`), same law as bench | 🟡 written; on-device build+verify pending (Jetson offline) |
+| AE + ISP | production C datapath (`eo/pipeline/`), same law as bench | ✅ production C (`eo/pipeline/`), on-device 60 fps + AE verified |
 | Encode/stream | software MJPEG | ✅ target has no HW video encoder; detector consumes frames on-device |
 
 ## Key facts (read before changing anything)
