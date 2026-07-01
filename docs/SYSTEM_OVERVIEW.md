@@ -26,8 +26,7 @@ detection source.
 
 ## Compute platform
 
-NVIDIA **Jetson Orin Nano Super** (dev-kit bring-up) today; the production seeker
-targets **Xavier AGX** (it has the NVENC hardware encoder the Orin Nano lacks).
+NVIDIA **Jetson Orin Nano Super** 
 Platform bring-up — flashing, base config, cooling — is in [`jetson/`](../jetson/README.md).
 
 ## Modules
