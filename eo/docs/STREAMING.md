@@ -10,14 +10,14 @@ How the EO feed is delivered and what frame rates are achievable on the Orin Nan
 | Preview (full ISP), 900 px | **~58–60 fps** | event-paced display loop; native 1440 ≈ 32 fps (CPU JPEG) |
 | Software MJPEG (`jpegenc`) | **~58 fps** | low-latency bench stream, no ISP |
 | Software H.264 (`x264enc`) | ~6 fps | not viable — CPU can't encode 1.6 MP at rate |
-| C++/CUDA ISP + HW H.264 | 60 fps | **Xavier AGX** target (has NVENC) |
 
-## Platform note: no hardware encoder on the Orin Nano
+## Platform note: no hardware video encoder
 
 > The Jetson Orin Nano's video encoder (**NVENC**) is fused off —
-> `gst-inspect-1.0 nvv4l2h264enc` is MISSING. On the bench, encoding is **software**
-> (MJPEG is light, H.264 is too heavy). The production seeker uses **Xavier AGX**,
-> which has NVENC; the zero-copy NVMM → HW-H.264 pipeline lives there.
+> `gst-inspect-1.0 nvv4l2h264enc` is MISSING. So there is **no HW H.264 on the
+> target**: an encoded video feed is **software MJPEG** (light, higher bandwidth).
+> In the field the detector/tracker consumes frames on-device, so an encoded stream
+> is mainly an operator/bench convenience — size the link for MJPEG, not H.264.
 
 > Also: GStreamer `v4l2src` cannot negotiate Y10, so pipelines are fed via `appsrc`
 > from a V4L2 reader, not `v4l2src`.
@@ -37,7 +37,8 @@ bash eo/streaming/imx296_stream.sh <your-ip> 5000
 ffplay -fflags nobuffer -flags low_delay -protocol_whitelist file,udp,rtp rtp_mjpeg.sdp
 ```
 
-## Production stream (Xavier AGX)
-Capture (V4L2) → CUDA ISP (NVMM) → `nvv4l2h264enc` → `rtph264pay` → RTSP/UDP.
-Zero-copy, 60 fps, full ISP — what the Orin Nano can't do for lack of NVENC. CUDA
-stages: [IMAGE_PIPELINE](IMAGE_PIPELINE.md).
+## Production feed
+On-device, frames go to the detector/tracker directly (no encode needed). For an
+operator/monitor feed, use **software MJPEG** over RTP/UDP as above. The image
+processing that runs before the detector is the C++/CUDA path in
+[IMAGE_PIPELINE](IMAGE_PIPELINE.md).

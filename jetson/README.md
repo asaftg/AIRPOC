@@ -45,8 +45,12 @@ Two ways. **Use the SD-card image** unless you need to boot from NVMe.
    uname -r                    # → 5.15.148-tegra
    ```
 
-## 3. Cooling — fan always 100%
-The default governor caps the fan; for bench work we pin it. From [`fan/`](fan/):
+## 3. Cooling — fan pinned 100% (always, including in flight)
+The fan runs at a constant 100% at all times, not just on the bench. Two reasons:
+guaranteed cooling under MAXN, and — on the gimbaled seeker head — a **constant fan
+speed is a constant angular-momentum bias** the gimbal can ignore, whereas a
+variable-speed fan spinning up/down is a torque disturbance the gimbal has to reject.
+The default governor varies the speed, so we override it. From [`fan/`](fan/):
 ```bash
 sudo ./install_fan.sh          # installs jetson-fan-max.service, masks nvfancontrol
 cat /sys/class/hwmon/hwmon*/pwm1   # → 255

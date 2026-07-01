@@ -27,8 +27,8 @@ Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md
 | Sensor driver | `nv_imx296` tegracam C driver (`eo/driver/`) | ✅ Y10 60 fps, exposure/gain |
 | DT overlay | `...imx296-C.dtbo` (CAM1 / serial_c) | ✅ |
 | Capture | V4L2 `/dev/video0`, mmap | ✅ sustained 60 fps (verified) |
-| AE + ISP | black-level + adaptive-white tone + gamma | ✅ in Python tool; C++/CUDA hot-path is the production target |
-| Encode/stream | software (Orin Nano has no NVENC) | ✅ MJPEG on bench; HW H.264 belongs on Xavier AGX |
+| AE + ISP | black-level + adaptive-white tone + gamma | ✅ working + validated (Python tool); C/C++ shipping port is the only gap |
+| Encode/stream | software MJPEG | ✅ target has no HW video encoder; detector consumes frames on-device |
 
 ## Key facts (read before changing anything)
 

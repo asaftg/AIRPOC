@@ -26,8 +26,10 @@ detection source.
 
 ## Compute platform
 
-NVIDIA **Jetson Orin Nano Super** 
-Platform bring-up — flashing, base config, cooling — is in [`jetson/`](../jetson/README.md).
+NVIDIA **Jetson Orin Nano Super** — the compute for both bench and the production
+seeker. Note it has no hardware video encoder (no NVENC), so any encoded video feed
+is software MJPEG; the detector/tracker consumes frames on-device. Platform bring-up
+— flashing, base config, cooling — is in [`jetson/`](../jetson/README.md).
 
 ## Modules
 

@@ -60,10 +60,16 @@ pipeline is close to optimal — the remaining levers are mostly **physical**:
 - **Software headroom (small)** — a light edge-preserving denoise and a one-time
   flat-field/black calibration could give a modest gain; not currently limiting.
 
-## Production hot path (C++/CUDA — Xavier AGX)
+## Production hot path (C++/CUDA on the Orin Nano Super)
 
-Python tops out ~30–60 fps for the full ISP. The shipping pipeline is C++ on the GPU:
-V4L2 mmap capture → CUDA unpack (Y10→16-bit) → black-level + tone/gamma (LUT) → AE
-(histogram reduction → PID on exposure/gain) → zero-copy NVMM → **NVENC H.264**
-(Xavier AGX) / detector. Mono ⇒ no demosaic, no AWB. Budget: a few hundred µs/frame
-on the GPU, leaving the 16.6 ms frame for detection + encode.
+The Python tool is validated and runs the full ISP at ~30–60 fps. The shipping
+version moves the datapath to C++/CUDA on the same Orin Nano Super (per the
+guidelines): V4L2 mmap capture → CUDA unpack (Y10→16-bit) → black-level + tone/gamma
+(LUT) → AE (histogram reduction → PID on exposure/gain) → zero-copy NVMM → detector.
+Mono ⇒ no demosaic, no AWB. Budget: a few hundred µs/frame on the GPU, leaving the
+16.6 ms frame for detection.
+
+Note: the AE loop itself runs at a few Hz and a mono detector consumes the near-raw
+linear Y10, so this port is mostly mechanical, not new design — much of the "ISP" is
+optional for detection (cosmetic tone-mapping is for the human preview). No video
+encode in the datapath (the target has no NVENC; see [STREAMING](STREAMING.md)).

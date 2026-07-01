@@ -34,8 +34,8 @@ Docs exist so a new engineer or agent gets context fast. Write what the system
 ## 3. Production code is optimized C/C++ — never Python
 
 Anything that **runs on the seeker in production** — the camera driver, the
-capture/ISP/AE datapath, exposure control, encode, fusion/tracking hot paths — is
-**C/C++**, on the hardware blocks where they exist (Tegra VI/NVCSI, ISP, NVENC,
+capture/ISP/AE datapath, exposure control, fusion/tracking hot paths — is
+**C/C++**, on the hardware blocks the Orin Nano Super has (Tegra VI/NVCSI, ISP,
 CUDA/VPI). No Python on the device datapath.
 
 **Python is allowed for tools only** — offline focus/preview/bench/diagnostic
