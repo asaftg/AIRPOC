@@ -54,8 +54,9 @@ int main(int argc, char **argv)
     sensor_apply(&sensor, ae.exp_lines, ae.gain);
 
     uint8_t *out8  = malloc((size_t)cap.width * cap.height);
+    uint8_t *disp  = malloc((size_t)cap.width * cap.height);  /* zoomed monitor frame */
     uint8_t *frame = malloc((size_t)cap.sizeimage);   /* cached copy of the DMA buffer */
-    if (!out8 || !frame) { perror("malloc"); return 1; }
+    if (!out8 || !disp || !frame) { perror("malloc"); return 1; }
 
     fprintf(stderr, "eo_pipeline: %dx%d bpl=%d  monitor http://0.0.0.0:%d/\n",
             cap.width, cap.height, cap.bytesperline, port);
@@ -82,15 +83,16 @@ int main(int argc, char **argv)
         }
 
         isp_tonemap(frame, cap.bytesperline, cap.width, cap.height, out8);
+        isp_zoom(out8, cap.width, cap.height, mjpeg_zoom(), disp);   /* digital zoom */
 
         double t = now_s(), dt = t - t_last; t_last = t;
         if (dt > 0) { double inst = 1.0 / dt; fps = fps ? 0.85 * fps + 0.15 * inst : inst; }
 
-        mjpeg_publish(out8, cap.width, cap.height, fps, ae.mean, ae.exp_lines, ae.gain);
+        mjpeg_publish(disp, cap.width, cap.height, fps, ae.mean, ae.exp_lines, ae.gain);
     }
 
     fprintf(stderr, "eo_pipeline: shutting down\n");
-    free(out8); free(frame);
+    free(out8); free(disp); free(frame);
     cap_close(&cap);
     sensor_close(&sensor);
     return 0;

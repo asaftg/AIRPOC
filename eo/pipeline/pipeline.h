@@ -40,6 +40,10 @@
 #define EO_DUTY_PCT(exp_lines)  (100.0 * (exp_lines) / EO_VMAX)
 #define EO_EXP_US(exp_lines)    ((exp_lines) * EO_LINE_US)
 
+/* ---- lens/sensor geometry for FOV (CommonLands CIL122 f=12mm, IMX296 3.45um) ---- */
+#define EO_FOCAL_MM  12.0
+#define EO_PIX_UM    3.45
+
 /* ---- sensor control (i2c; SHS1 0x308d, GAIN 0x3204, REGHOLD 0x3008) ---- */
 typedef struct {
     int  i2c_fd;        /* open /dev/i2c-<bus>            */
@@ -83,10 +87,14 @@ void cap_requeue(Capture *c, int index);
 double isp_mean10(const uint8_t *y10, int bpl, int w, int h);
 /* Tone-map a Y10 frame to an 8-bit grayscale buffer (w*h). */
 void   isp_tonemap(const uint8_t *y10, int bpl, int w, int h, uint8_t *out8);
+/* Digital zoom: nearest-neighbour upscale of a centered 1/zoom crop (zoom 1/2/4/8).
+ * zoom==1 is a copy. src and dst are both w*h 8-bit. */
+void   isp_zoom(const uint8_t *src, int w, int h, int zoom, uint8_t *dst);
 
-/* ---- MJPEG monitor server (drop-in for the bench preview) ---- */
+/* ---- MJPEG monitor server (HTML overlay + zoom controls, /stream, /stats, /ctl) ---- */
 int  mjpeg_start(int port);                  /* spawns the HTTP server thread    */
-void mjpeg_publish(const uint8_t *gray, int w, int h,   /* latest frame + overlay */
+int  mjpeg_zoom(void);                       /* current digital zoom (1/2/4/8)   */
+void mjpeg_publish(const uint8_t *gray, int w, int h,   /* latest frame + stats   */
                    double fps, double mean, int exp_lines, int gain);
 
 #endif /* AIRPOC_EO_PIPELINE_H */

@@ -61,3 +61,17 @@ void isp_tonemap(const uint8_t *y10, int bpl, int w, int h, uint8_t *out8)
         }
     }
 }
+
+/* Digital zoom: upscale a centered 1/zoom crop back to w*h (nearest-neighbour). */
+void isp_zoom(const uint8_t *src, int w, int h, int zoom, uint8_t *dst)
+{
+    if (zoom <= 1) { for (size_t i = 0; i < (size_t)w * h; i++) dst[i] = src[i]; return; }
+    int cw = w / zoom, ch = h / zoom;
+    int x0 = (w - cw) / 2, y0 = (h - ch) / 2;
+    for (int y = 0; y < h; y++) {
+        int sy = y0 + y * ch / h;
+        const uint8_t *srow = src + (size_t)sy * w;
+        uint8_t *drow = dst + (size_t)y * w;
+        for (int x = 0; x < w; x++) drow[x] = srow[x0 + x * cw / w];
+    }
+}
