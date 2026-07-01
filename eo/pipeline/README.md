@@ -30,6 +30,11 @@ make
 ```
 
 ## Design notes
+- **Copy the frame out of the V4L2 mmap before processing.** The DMA capture
+  buffer is *uncached*: per-pixel work read straight from it is latency-bound and
+  ~100× slower (measured 414 ms vs 3.6 ms for the tone map). `main.c` does one
+  streaming `memcpy` into a cached buffer and requeues immediately; all processing
+  runs on the copy. (This is why the bench tool copied `maps[i][:N]` too.)
 - **AE** runs at ~15 Hz (every 4th frame); it is light and does not gate capture.
 - **Sensor control is i2c** (SHS1 `0x308d`, GAIN `0x3204`, REGHOLD `0x3008`) — the
   path proven on this board. The driver's v4l2 exposure/gain controls are the

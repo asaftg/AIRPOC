@@ -53,8 +53,9 @@ int main(int argc, char **argv)
     ae_init(&ae);
     sensor_apply(&sensor, ae.exp_lines, ae.gain);
 
-    uint8_t *out8 = malloc((size_t)cap.width * cap.height);
-    if (!out8) { perror("malloc"); return 1; }
+    uint8_t *out8  = malloc((size_t)cap.width * cap.height);
+    uint8_t *frame = malloc((size_t)cap.sizeimage);   /* cached copy of the DMA buffer */
+    if (!out8 || !frame) { perror("malloc"); return 1; }
 
     fprintf(stderr, "eo_pipeline: %dx%d bpl=%d  monitor http://0.0.0.0:%d/\n",
             cap.width, cap.height, cap.bytesperline, port);
@@ -64,28 +65,32 @@ int main(int argc, char **argv)
 
     while (g_run) {
         int idx;
-        const uint8_t *y10 = cap_dqbuf(&cap, &idx);
-        if (!y10) break;
+        const uint8_t *raw = cap_dqbuf(&cap, &idx);
+        if (!raw) break;
+        /* Copy out of the uncached V4L2 DMA buffer in one streaming pass, then
+         * release the buffer. Per-pixel work on the mmap directly is latency-bound
+         * on uncached memory (~100x slower); on this cached copy it is fast. */
+        memcpy(frame, raw, cap.sizeimage);
+        cap_requeue(&cap, idx);
 
-        consume_frame(y10, cap.bytesperline, cap.width, cap.height);   /* detector */
+        consume_frame(frame, cap.bytesperline, cap.width, cap.height);  /* detector */
 
         if (++frame_n % 4 == 0) {                                      /* AE @ ~15 Hz */
-            double mean = isp_mean10(y10, cap.bytesperline, cap.width, cap.height);
+            double mean = isp_mean10(frame, cap.bytesperline, cap.width, cap.height);
             ae_update(&ae, mean);
             sensor_apply(&sensor, ae.exp_lines, ae.gain);
         }
 
-        isp_tonemap(y10, cap.bytesperline, cap.width, cap.height, out8);
+        isp_tonemap(frame, cap.bytesperline, cap.width, cap.height, out8);
 
         double t = now_s(), dt = t - t_last; t_last = t;
         if (dt > 0) { double inst = 1.0 / dt; fps = fps ? 0.85 * fps + 0.15 * inst : inst; }
 
         mjpeg_publish(out8, cap.width, cap.height, fps, ae.mean, ae.exp_lines, ae.gain);
-        cap_requeue(&cap, idx);
     }
 
     fprintf(stderr, "eo_pipeline: shutting down\n");
-    free(out8);
+    free(out8); free(frame);
     cap_close(&cap);
     sensor_close(&sensor);
     return 0;
