@@ -1,14 +1,14 @@
-# Illuminator — GUI Integration Guide (handoff)
+# Illuminator — Preview Integration Guide (handoff)
 
 > **✅ IMPLEMENTED (2026-07-01).** The on/off, power, and beam-FOV controls are live
-> in the operator monitor (`eo/pipeline/`): shim `eo/pipeline/illum.c`/`illum.h`,
+> in the preview (`eo/pipeline/`): shim `eo/pipeline/illum.c`/`illum.h`,
 > buttons + `/ctl?laser=/power=/fov=` + `/stats` fields in `eo/pipeline/mjpeg.c`,
 > opened at startup in `main.c` (`-i /dev/ttyUSB0`, optional). Built and **verified
 > on-device** — illuminator detected, FOV/power/on-off controllable. This document is
 > now the *reference* for how it was wired (below); no re-integration needed.
 
 This document was the handoff for adding **on/off, power, and FOV** controls for the
-Savgood **SG-IR850-8M** IR illuminator to the AIRPOC operator GUI (the EO pipeline's
+Savgood **SG-IR850-8M** IR illuminator to the EO preview (the EO pipeline's
 monitor). It records the hardware-verified controller and exactly how the buttons
 hook in. Read alongside [`ILLUMINATOR.md`](ILLUMINATOR.md) (wiring + full protocol).
 
@@ -27,7 +27,7 @@ deliberate 5 s fire test):
 | FOV / zoom | ✅ | motor moved to 20°→916, 12°→612, 70°→1790, read back exactly |
 | Status queries | ✅ | power / level / position / fan all decode correctly |
 
-Nothing about the controller needs changing. **The GUI work is purely: call the
+Nothing about the controller needs changing. **The preview work is purely: call the
 existing control API from the web server and add UI widgets.**
 
 ### Where it lives
@@ -43,9 +43,9 @@ On the Jetson: adapter is a **CP2102 (`10c4:ea60`) on `/dev/ttyUSB0`**; user
 
 ---
 
-## 2. The GUI it plugs into
+## 2. The preview it plugs into
 
-The operator GUI is the **EO pipeline's MJPEG monitor server**, in C:
+The EO preview is the **EO pipeline's MJPEG monitor server**, in C:
 `eo/pipeline/mjpeg.c`. It already implements the exact pattern the illuminator
 buttons need:
 
@@ -97,7 +97,7 @@ Ranges the UI must respect:
 
 Link the library into `eo_pipeline` and drive it in-process. Do **not** shell out to
 `sgctl` per click (fork/exec + reopen the port each time is churn, not production
-clean). A subprocess call is only an acceptable throwaway if the GUI is a separate
+clean). A subprocess call is only an acceptable throwaway if the preview is a separate
 process from the C pipeline.
 
 ### 4a. A tiny thread-safe shim
@@ -226,7 +226,7 @@ Link the controller. Either build the object directly or reference the sibling l
 | Zoom reset (re-home) | `01 06 00 00` |
 | Query power/current/position/fan | `02 01/03/05/0F 00 00` |
 
-All of this is already implemented in `sg_ir850.c` — the GUI never touches raw
+All of this is already implemented in `sg_ir850.c` — the preview never touches raw
 frames, it calls the API in §3. Full protocol + the beam-angle table:
 [`ILLUMINATOR.md`](ILLUMINATOR.md); source spec: Savgood “SG-IR850-8M Communication
 Protocols” PDF.

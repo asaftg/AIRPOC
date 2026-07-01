@@ -1,4 +1,4 @@
-# EO Pipeline — on-device capture + AE + ISP + operator monitor (production C)
+# EO Pipeline — on-device capture + AE + ISP + preview (production C)
 
 The production datapath for the EO camera, in C, on the Jetson Orin Nano Super. It
 replaces the Python bench preview on the device: V4L2 mmap capture of the IMX296 Y10
@@ -19,14 +19,14 @@ V4L2 mmap (capture.c) ─► copy out of uncached DMA ─► AE meter+control (a
 | `sensor.c` | IMX296 exposure(SHS1)/gain over i2c, REGHOLD-latched |
 | `ae.c` | flicker-free AE law (EMA + log-domain damped, exposure-first) |
 | `isp.c` | Y10 unpack, metering, tone map, digital zoom, focus sharpness |
-| `mjpeg.c` | operator monitor: HTML page + MJPEG + `/stats` + `/ctl` (libjpeg-turbo) |
+| `mjpeg.c` | preview: HTML page + MJPEG + `/stats` + `/ctl` (libjpeg-turbo) |
 | `illum.c` / `illum.h` | thread-safe shim over the SG-IR850 illuminator (optional device) |
 | `main.c` | wiring; `consume_frame()` is the detector hook |
 
 The illuminator controller itself lives in `illuminator/src/` and is linked in
 (`sg_ir850.o`); the Makefile references it via `../../illuminator/src`.
 
-## Operator monitor (`http://<ip>:8091/`)
+## Preview (`http://<ip>:8091/`)
 
 A single HTML page over the MJPEG stream with a live overlay and control bar:
 
@@ -79,7 +79,7 @@ make
 > **Verified on-device (Orin Nano Super, `-Wall -Wextra` clean):** 60 fps, AE
 > converged garage↔sun, zoom holds 60 fps, focus assist, and the illuminator
 > detected + FOV/power/on-off controllable from the page. Illuminator integration
-> per [`illuminator/docs/GUI_INTEGRATION.md`](../../illuminator/docs/GUI_INTEGRATION.md).
+> per [`illuminator/docs/PREVIEW_INTEGRATION.md`](../../illuminator/docs/PREVIEW_INTEGRATION.md).
 >
 > Remaining to fully retire the Python preview from the device: wrap in a systemd
 > unit, and wire the real detector into `consume_frame()`.

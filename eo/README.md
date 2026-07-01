@@ -67,7 +67,7 @@ kernel-specific, so **build on-device**.
    0 bytes / `VI request timed out` ⇒ VI is dropping Y10 → recheck the driver's
    mono-Y10 advertisement (see [DRIVER](docs/DRIVER.md)).
 
-## Run — the operator monitor (production)
+## Run — the preview (production)
 
 The shipping datapath **and** the operator's live view is [`eo/pipeline/`](pipeline/README.md).
 Build once on the Jetson and run it:
