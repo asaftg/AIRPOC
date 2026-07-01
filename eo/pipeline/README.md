@@ -48,9 +48,9 @@ make
   is ever needed, move JPEG encode to a worker or the ISP to CUDA/VPI.
 
 ## Status
-> **Written; compiles cleanly** (no warnings under `-Wall -Wextra`, links
-> libjpeg/pthread). **On-device run + verify pending** (the Jetson was offline when
-> this landed). It is a direct C port of the validated bench logic. First on-device run:
-> `make` on the board, point at `/dev/video0`, compare the `:8091` feed and `/stats`
-> (mean ≈ 450, duty/exposure sane, no AE flicker) against the bench tool, then wire a
-> systemd unit and retire the Python preview from the device.
+> **Verified on-device: 60.2 fps, AE converged, image matches the bench tool** (Orin
+> Nano Super, `-Wall -Wextra` clean). Run: `make && ./eo_pipeline -d /dev/video0
+> -p 8091`; monitor at `http://<ip>:8091/`, stats at `/stats`.
+>
+> Remaining to fully retire the Python preview from the device: wrap it in a systemd
+> unit, and wire the detector into `consume_frame()`.
