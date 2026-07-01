@@ -20,15 +20,34 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
 
-W, H = 1456, 1088
-FRAME_BYTES = W * H * 2
+DEV = "/dev/video0"
+
+def _probe_fmt(dev=DEV):
+    """Probe the driver's real format so geometry tracks the sensor ROI
+    (1440x1088, stride 2880 = 64-byte aligned -> no VI line pad, no comb).
+    Hardcoding a stale width would misreshape and shear the image."""
+    try:
+        o = subprocess.run(["v4l2-ctl", "-d", dev, "--get-fmt-video"],
+                           capture_output=True, text=True).stdout
+        w = h = bpl = si = 0
+        for ln in o.splitlines():
+            if "Width/Height" in ln:
+                a, b = ln.split(":")[1].split("/"); w, h = int(a), int(b)
+            elif "Bytes per Line" in ln: bpl = int(ln.split(":")[1])
+            elif "Size Image" in ln:     si = int(ln.split(":")[1])
+        if w and h and bpl:
+            return w, h, bpl, (si or bpl * h)
+    except Exception:
+        pass
+    return 1440, 1088, 2880, 2880 * 1088
+
+W, H, BPL, FRAME_BYTES = _probe_fmt()
 PORT = 8091
 PREVIEW_W = 900
 JPEG_QUALITY = 92
 ENGINE_MAX_FPS = 30
 GAMMA = 0.85
 TARGET = 450.0
-DEV = "/dev/video0"
 ADDR = "0x1a"
 SHS1_MIN, SHS1_MAX = 8, 1100
 GAIN_MIN, GAIN_MAX = 0, 480
@@ -170,7 +189,11 @@ class Engine:
                 raw = self._latest; self._latest = None
             if raw is None:
                 time.sleep(0.004); continue
-            f10 = (np.frombuffer(raw, dtype="<u2").reshape(H, W) >> 6)
+            # Stride is the driver's real bytesperline (BPL); slice to W. The
+            # sensor ROI crop (1440) makes the Y10 line 64-byte aligned, so the
+            # Tegra VI adds no per-line pad and there is NO even/odd comb to
+            # correct here -- the fix is at the source, not in software.
+            f10 = (np.frombuffer(raw, dtype="<u2").reshape(H, BPL // 2)[:, :W] >> 6)
             now = time.time(); dt = now - self._tl; self._tl = now
             if dt > 0:
                 inst = 1.0 / dt

@@ -53,8 +53,18 @@ static imx296_reg imx296_mode_common[] = {
 	{0x40a2, 0x06}, {0x40c1, 0xf6}, {0x40c7, 0x0f}, {0x40c8, 0x00},
 	{0x4174, 0x00},
 
-	/* full-resolution window (ROI off) */
-	{0x3300, 0x00},			/* FID0_ROI */
+	/* Horizontal ROI crop 1456 -> 1440 so the sensor's MIPI line is itself
+	 * 64-byte aligned (1440*2 = 2880 = 45*64). The Tegra VI 64-aligns every
+	 * captured line; the native 1456 (2912 B, mod 64 = 32) makes it pad odd
+	 * lines by 32 B = 16 px -> even/odd comb. Cropping in the SENSOR (not the
+	 * VI) keeps CSI line-length == VI capture width (no corr_err) while making
+	 * the stride natively aligned -> no pad -> no comb. Costs 16 columns,
+	 * centered (start = 8). FID0_ROIPH1/ROIWH1 16-bit LE; mainline imx296. */
+	{0x3300, 0x03},			/* FID0_ROI: ROIH1ON | ROIV1ON */
+	{0x3310, 0x08}, {0x3311, 0x00},	/* ROIPH1 = 8  (h start, center crop) */
+	{0x3312, 0x00}, {0x3313, 0x00},	/* ROIPV1 = 0  (v start) */
+	{0x3314, 0xa0}, {0x3315, 0x05},	/* ROIWH1 = 1440 (0x05a0) */
+	{0x3316, 0x40}, {0x3317, 0x04},	/* ROIWV1 = 1088 (0x0440) */
 	/* MIPIC_AREA3W = 1088 (0x0440) MIPI active height, 16-bit LE @0x4182.
 	 * Tegra-specific; written by the known-good FRC971 driver, absent from
 	 * mainline RPi imx296 (RPi unicam tolerates it, Tegra VI does not).
@@ -102,7 +112,12 @@ static imx296_reg *mode_table[] = {
 static const int imx296_60fps[] = { 60 };
 
 static const struct camera_common_frmfmt imx296_frmfmt[] = {
-	{{1456, 1088}, imx296_60fps, 1, 0, IMX296_MODE_1456x1088},
+	/* Capture 1440 (of the sensor's 1456) so the Y10 line is 64-byte aligned
+	 * (1440*2=2880=64*45). The Tegra VI 64-aligns each line; 1456*2=2912
+	 * (mod 64 = 32) makes it offset odd lines 32B=16px -> even/odd comb.
+	 * 1440 reads WITHIN the 1456 line (no over-read that breaks streaming) and
+	 * is natively aligned -> no per-line pad -> no comb. Costs 16 right columns. */
+	{{1440, 1088}, imx296_60fps, 1, 0, IMX296_MODE_1456x1088},
 };
 
 #endif /* __IMX296_I2C_TABLES__ */

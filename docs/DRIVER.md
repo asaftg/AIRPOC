@@ -4,7 +4,9 @@ Production Tegracam V4L2 driver for the **Waveshare IMX296-130** (Sony IMX296,
 mono global-shutter) on the **Jetson Orin Nano** (P3768 / P3767-0005), JetPack
 6.2.2 / L4T r36.4.4, kernel 5.15.148-tegra.
 
-Streams **Y10 mono 1456×1088 @ 60 fps** with working exposure/gain v4l2 controls.
+Streams **Y10 mono 1440×1088 @ 60 fps** with working exposure/gain v4l2 controls.
+(The sensor is ROI-cropped from its native 1456 to **1440** so the Y10 line is
+64-byte aligned — see *"Even/odd comb"* below. Costs the 16 rightmost columns.)
 
 Files: `jetson/camera/nv_imx296.c`, `imx296_mode_tbls.h`,
 `tegra234-p3767-camera-p3768-imx296-C.dts`.
@@ -30,6 +32,9 @@ Files: `jetson/camera/nv_imx296.c`, `imx296_mode_tbls.h`,
 | GTTABLENUM | `0x4114` | 8-bit | `0xc5` |
 | CTRL418C | `0x418c` | 8-bit | 54 MHz: `0xa8` (168) |
 | MIPIC_AREA3W | `0x4182` | 16-bit LE | **1088** — Tegra-specific MIPI active height; without it the MIPI frame never forms → VI timeout |
+| FID0_ROI | `0x3300` | 8-bit | `0x03` (H+V ROI on) — crop sensor output to 1440 wide (stride alignment) |
+| FID0_ROIPH1 / ROIWH1 | `0x3310` / `0x3314` | 16-bit LE | H start = **8**, H width = **1440** (centered crop of the 1456 array) |
+| FID0_ROIPV1 / ROIWV1 | `0x3312` / `0x3316` | 16-bit LE | V start = **0**, V height = **1088** (full) |
 | BLKLEVEL | `0x3254` | — | `0x3c` (60) — the black-level floor seen in raw |
 | STANDBY / XMSTA | `0x3000` / `0x300a` | — | stream start clears both (master free-run) |
 
@@ -85,6 +90,43 @@ not a vblank-timing race.
 > deprioritized — the frame-diff showed the tearing is write-induced (dynamic),
 > not a static stride/metadata shift, and changing metadata height risks the
 > working stream. Revisit only if REGHOLD doesn't fully clear it.
+
+## Even/odd comb (the 7th issue) — Tegra VI 64-byte line stride
+
+After the stream was clean and AE-stable, the image still showed a fine **even/odd
+"comb"**: every odd row was shifted **+16 px** relative to its even neighbours.
+Measured objectively on the raw Y10: even↔odd cross-correlation peaked at a lag of
+**exactly 16 px (corr 0.999)**, even↔even at lag 0. It is **not** a sensor, focus,
+or scene effect and **not** write-induced (REGHOLD does not touch it).
+
+**Root cause — the Tegra VI aligns every captured line to a 64-byte boundary.**
+Native width 1456 → Y10 line = 1456 × 2 = **2912 bytes**, and `2912 mod 64 = 32`.
+The VI pads the odd-line start by 32 bytes = **16 px**, interleaving the two fields.
+This is documented Tegra VI behaviour (same class of bug as the 720→768 and
+Y10-1296→1312 cases on the NVIDIA forums).
+
+Fixes that **don't** work (and why):
+- Padding/cropping only the VI capture width (`active_w` 1472 or 1440) → the CSI
+  still receives the sensor's native **1456**-px line; VI/CSI line-length mismatch
+  → `corr_err err_data 256/256`, **zero frames**. The VI width must equal what the
+  sensor actually emits.
+- `preferred_stride` / `cil_settletime` / `discontinuous_clk` → no effect on the
+  pad, or they break streaming outright.
+
+**Fix (source-level, no software correction) — crop the *sensor* to 1440.**
+`FID0_ROI` (`0x3300 = 0x03`) with a centered 1440-wide window makes the sensor's
+**MIPI line itself 1440 px = 2880 bytes = 45 × 64** (natively 64-aligned). Now the
+CSI receives 1440, the VI captures 1440 (matched → no `corr_err`), and there is no
+per-line pad → **no comb**. Cost: the 16 rightmost columns. `active_w` in the
+overlay is set to the same **1440** so VI == sensor.
+
+Verified: raw even↔odd cross-correlation lag = **0, corr 1.000** on a high-contrast
+row, with **no** software de-interleave. Row-band and col-band residual std < 0.4
+(no fixed-pattern lines); 10-frame temporal noise ≈ 0.35 LSB.
+
+> This replaced an earlier software de-interleave (`np.roll(odd, 16)`) in the
+> preview — that was a compensation for the misaligned data, not a fix. With the
+> sensor ROI it is removed; the preview slices the driver's real `bytesperline`.
 
 ## Controls — semantics
 

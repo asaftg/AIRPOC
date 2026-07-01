@@ -120,10 +120,16 @@
 								lane_polarity = "0";	/* IMX296 1-lane: no swizzle (per INNO-MAKER known-good) */
 								dpcm_enable = "false";
 								cil_settletime = "0";
-								active_w = "1456";
+								/* Capture 1440 (of 1456): the sensor is ROI-cropped to
+								 * 1440 (FID0_ROI) so its Y10 line is 64-byte aligned
+								 * (1440*2 = 2880). The Tegra VI 64-aligns each line;
+								 * the native 1456 (2912 B, mod 64 = 32) would pad odd
+								 * lines by 16 px -> even/odd comb. Sensor + VI both at
+								 * 1440 => matched line length, no pad, no comb. */
+								active_w = "1440";
 								active_h = "1088";
-								mode_type = "bayer";
-								pixel_phase = "rggb";
+								mode_type = "gray";		/* mono, not Bayer */
+								pixel_phase = "y10";
 								pixel_t = "mono_y10";	/* mono Y10, not Bayer RG10 */
 								csi_pixel_bit_depth = "10";
 								readout_orientation = "0";
