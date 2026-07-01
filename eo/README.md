@@ -6,6 +6,9 @@ exposure/gain, a focus tool, a quality preview, and an MJPEG stream. Global shut
 means no rolling-shutter skew — the whole frame is exposed at once, which suits
 fast-moving targets.
 
+The on-device production datapath (capture + AE + ISP, in C) is
+[`eo/pipeline/`](pipeline/README.md); the Python tools are bench/diagnostic.
+
 Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md) ·
 [STREAMING](docs/STREAMING.md) · [FOCUS](docs/FOCUS.md).
 
@@ -17,9 +20,10 @@ Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md
         ▼
  Tegra NVCSI ─► VI5 (nv_imx296 advertises Y10) ─► /dev/video0   [Y10, 60 fps]
         │
-        ├─► preview tool   eo/tools/imx296_preview.py   (i2c AE + ISP → MJPEG :8091)
-        ├─► focus tool     eo/tools/imx296_focus_web.py (sharpness metrics → MJPEG :8090)
-        └─► MJPEG stream   eo/streaming/                (low-latency UDP/RTP)
+        ├─► eo/pipeline/   PRODUCTION C: capture + AE + ISP → detector + MJPEG :8091
+        ├─► preview tool   eo/tools/imx296_preview.py   (bench: i2c AE + ISP → :8091)
+        ├─► focus tool     eo/tools/imx296_focus_web.py (bench: sharpness → :8090)
+        └─► MJPEG stream   eo/streaming/                (bench: low-latency UDP/RTP)
 ```
 
 | Layer | Implementation | State |
@@ -27,7 +31,7 @@ Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md
 | Sensor driver | `nv_imx296` tegracam C driver (`eo/driver/`) | ✅ Y10 60 fps, exposure/gain |
 | DT overlay | `...imx296-C.dtbo` (CAM1 / serial_c) | ✅ |
 | Capture | V4L2 `/dev/video0`, mmap | ✅ sustained 60 fps (verified) |
-| AE + ISP | black-level + adaptive-white tone + gamma | ✅ working + validated (Python tool); C/C++ shipping port is the only gap |
+| AE + ISP | production C datapath (`eo/pipeline/`), same law as bench | 🟡 written; on-device build+verify pending (Jetson offline) |
 | Encode/stream | software MJPEG | ✅ target has no HW video encoder; detector consumes frames on-device |
 
 ## Key facts (read before changing anything)
