@@ -1,7 +1,7 @@
 # AIRPOC — Airborne-target Interception Proof of Concept
 
-AIRPOC is a counter-UAS (anti-drone) sensing-and-guidance proof of concept: it
-**detects, tracks, and guides against small aerial targets**. A pan/tilt seeker
+AIRPOC is the FAZE head one-way-attack aerial proof of concept: it
+**detects, tracks, and guides against small aerial targets (A/A), humans and vehicles (A/G)**. A pan/tilt seeker
 head carries the sensors; the compute stack turns their data into a track and
 points the head (and, later, an effector) at the target.
 
