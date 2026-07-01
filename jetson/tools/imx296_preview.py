@@ -15,7 +15,7 @@ ISP: Y10(>>6) -> 3x3 median -> row-noise de-band -> black-level + adaptive-white
 tone map -> gamma -> 8-bit -> MJPEG.  Run: python3 imx296_preview.py -> :8091
 """
 from __future__ import annotations
-import argparse, ctypes, fcntl, glob, mmap, os, subprocess, threading, time
+import argparse, collections, ctypes, fcntl, glob, json, mmap, os, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
@@ -43,15 +43,28 @@ def _probe_fmt(dev=DEV):
 
 W, H, BPL, FRAME_BYTES = _probe_fmt()
 PORT = 8091
-PREVIEW_W = 900
-JPEG_QUALITY = 92
-ENGINE_MAX_FPS = 30
+DISP_W_WIDE = 900          # bandwidth-friendly display width (use over WiFi)
+JPEG_QUALITY = 90
+ENGINE_MAX_FPS = 60        # match the 60 fps sensor; actual display fps is measured
 GAMMA = 0.85
 TARGET = 450.0
 ADDR = "0x1a"
 SHS1_MIN, SHS1_MAX = 8, 1100
 GAIN_MIN, GAIN_MAX = 0, 480
 BLACK = 60.0
+
+# ── sensor timing (1440x1088 @ 60 fps mode) — for exposure/duty math ──────────
+VMAX = 1125                              # frame length in lines
+LINE_US = 1100.0 / 74_250_000 * 1e6      # HMAX / pixel_clock = 14.815 us per line
+FRAME_US = VMAX * LINE_US                # 16667 us (60 fps)
+MAX_EXP_LINES = VMAX - SHS1_MIN          # 1117 = longest integration at 60 fps
+MIN_EXP_LINES = VMAX - SHS1_MAX          # 25
+# duty = exposure_time / frame_time = exposure_lines / VMAX (== NIR strobe duty)
+
+# ── lens + sensor geometry for FOV: CommonLands CIL122 f=12mm, IMX296 3.45um ──
+FOCAL_MM = 12.0
+PIX_UM = 3.45
+ZOOMS = (1, 2, 4, 8)
 
 _GAMMA_LUT = np.array([((i / 255.0) ** (1.0 / GAMMA)) * 255.0
                        for i in range(256)], dtype=np.uint8)
@@ -145,14 +158,29 @@ class Cap:
 class Engine:
     def __init__(self):
         self.cap = Cap()
-        self.shs1 = 400
-        self.gain = 40
+        self.exp_lines = 725                 # integration in lines; shs1 = VMAX - exp_lines
+        self.gain = 40                       # 0..480 (0.1 dB/step)
+        self.shs1 = VMAX - self.exp_lines
+        self.mean_ema = TARGET               # filtered metric -> smooth, flicker-free AE
+        self.zoom = 1                        # digital zoom 1/2/4/8 (center crop)
+        self.native = False                  # False -> 900px display, True -> full 1440
         _apply_exposure(self.shs1, self.gain)
-        self._lock = threading.Lock(); self._jpeg = b""; self._running = True
+        self._lock = threading.Lock(); self._jpeg = b""; self._jpeg_id = 0
+        self._running = True
         self._fps = 0.0; self._tl = time.time(); self._mean = 0.0; self._frame_n = 0
         self._latest = None; self._llock = threading.Lock()
+        self.trace = collections.deque(maxlen=300)   # (t, mean, shs1, gain, exp_us, duty)
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def _gain_lin(self, g):
+        return 10.0 ** (g * 0.1 / 20.0)      # register step 0.1 dB -> linear brightness
+
+    def _fov(self):
+        w_mm = (W * PIX_UM / 1000.0) / self.zoom
+        h_mm = (H * PIX_UM / 1000.0) / self.zoom
+        return (float(np.degrees(2 * np.arctan(w_mm / (2 * FOCAL_MM)))),
+                float(np.degrees(2 * np.arctan(h_mm / (2 * FOCAL_MM)))))
 
     def _reader(self):
         while self._running:
@@ -164,20 +192,26 @@ class Engine:
                 self._latest = raw
 
     def _ae(self, mean10):
+        # Flicker-free AE: filter the metric (EMA), act in the log/multiplicative
+        # domain with damping + a per-update slew cap, and use a wide deadband.
+        # The old loop took fixed 25%-exposure / 24-gain steps that overshot the
+        # deadband near a bright light -> pumping. Here a single "brightness" B =
+        # exposure_lines x gain_linear is nudged toward target and re-decomposed
+        # (exposure first for low noise, gain only when exposure is maxed).
         self._mean = mean10
-        err = TARGET - mean10
-        if abs(err) < 30:
+        self.mean_ema = 0.6 * self.mean_ema + 0.4 * mean10
+        ratio = TARGET / max(1.0, self.mean_ema)
+        if 0.90 < ratio < 1.11:              # +/-10% deadband -> no hunting
             return
-        if err > 0:
-            if self.shs1 > SHS1_MIN:
-                self.shs1 = max(SHS1_MIN, self.shs1 - max(4, int(self.shs1 * 0.25)))
-            elif self.gain < GAIN_MAX:
-                self.gain = min(GAIN_MAX, self.gain + 24)
-        else:
-            if self.gain > GAIN_MIN:
-                self.gain = max(GAIN_MIN, self.gain - 24)
-            elif self.shs1 < SHS1_MAX:
-                self.shs1 = min(SHS1_MAX, self.shs1 + max(4, int(self.shs1 * 0.25)))
+        factor = ratio ** 0.5                # damping: correct half the error/update
+        factor = min(1.5, max(0.667, factor))  # slew cap: <=1.5x brightness per update
+        B = self.exp_lines * self._gain_lin(self.gain) * factor
+        exp = min(MAX_EXP_LINES, max(MIN_EXP_LINES, B))   # spend exposure first
+        g_lin_needed = max(1.0, B / exp)                  # remainder -> analog gain
+        g = int(round(20.0 * np.log10(g_lin_needed) / 0.1))
+        self.exp_lines = int(round(exp))
+        self.gain = int(min(GAIN_MAX, max(GAIN_MIN, g)))
+        self.shs1 = int(min(SHS1_MAX, max(SHS1_MIN, VMAX - self.exp_lines)))
         _apply_exposure(self.shs1, self.gain)
 
     def _loop(self):
@@ -200,22 +234,37 @@ class Engine:
             self._frame_n += 1
             if self._frame_n % 4 == 0:
                 self._ae(float(f10[::8, ::8].mean()))
-            den = cv2.medianBlur(f10.astype(np.uint16), 3).astype(np.float32)
-            # No row de-band: measured raw row-FPN is ~0.5 LSB (negligible). A
-            # content-derived row correction (row median - vertical smooth) can't
-            # tell a real horizontal edge from row noise, so it bleeds the tree/sky
-            # edge into ±15-row streaks (up to ~150 LSB) that track the scene as it
-            # pans. The sensor line is clean at the source (1440 ROI); leave it be.
-            white = float(np.percentile(den[::4, ::4], 99.5))
+            # digital zoom = centered crop (upscaled to the display size below)
+            z = self.zoom if self.zoom in ZOOMS else 1
+            if z > 1:
+                ch, cw = H // z, W // z
+                y0, x0 = (H - ch) // 2, (W - cw) // 2
+                view = f10[y0:y0 + ch, x0:x0 + cw]
+            else:
+                view = f10
+            # Resize to the display size FIRST, then tone-map on the smaller image
+            # -> the heavy per-pixel ISP runs on ~1/2.5 the pixels, lifting fps
+            # toward 60. INTER_AREA (when downscaling) averages out hot pixels, so
+            # no median is needed; the sensor line is already clean (no de-band).
+            # No row de-band: raw row-FPN ~0.5 LSB; a content-derived one bleeds
+            # horizontal edges into moving streaks (see IMAGE_PIPELINE.md).
+            dispw = W if self.native else DISP_W_WIDE
+            disph = int(dispw * H / W)
+            interp = cv2.INTER_AREA if view.shape[1] >= dispw else cv2.INTER_LINEAR
+            small = cv2.resize(view.astype(np.float32), (dispw, disph), interpolation=interp)
+            white = float(np.percentile(small[::2, ::2], 99.5))
             if white <= BLACK + 1:
                 white = BLACK + 1
-            y8 = np.clip((den - BLACK) * (255.0 / (white - BLACK)), 0, 255).astype(np.uint8)
+            y8 = np.clip((small - BLACK) * (255.0 / (white - BLACK)), 0, 255).astype(np.uint8)
             y8 = cv2.LUT(y8, _GAMMA_LUT)
-            sc = PREVIEW_W / W
-            disp = cv2.cvtColor(cv2.resize(y8, (int(W * sc), int(H * sc))), cv2.COLOR_GRAY2BGR)
+            disp = cv2.cvtColor(y8, cv2.COLOR_GRAY2BGR)
+            exp_us = self.exp_lines * LINE_US
+            duty = 100.0 * self.exp_lines / VMAX
+            hf, vf = self._fov()
             lines = [f"IMX296 Y10  {self._fps:.0f} fps  mean={self._mean:.0f}/1023",
-                     f"AE: exp(SHS1)={self.shs1}  gain={self.gain}/480  (mmap)"]
-            yt = int(H * sc) - 12
+                     f"exp={exp_us / 1000:.2f}ms  duty={duty:.0f}%  gain={self.gain}/480",
+                     f"FOV {hf:.1f}x{vf:.1f}deg  zoom {z}x  {W if self.native else DISP_W_WIDE}px"]
+            yt = disph - 12
             for ln in reversed(lines):
                 cv2.putText(disp, ln, (10, yt), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
                 cv2.putText(disp, ln, (10, yt), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1, cv2.LINE_AA)
@@ -223,7 +272,9 @@ class Engine:
             ok, b = cv2.imencode(".jpg", disp, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             if ok:
                 with self._lock:
-                    self._jpeg = b.tobytes()
+                    self._jpeg = b.tobytes(); self._jpeg_id = self._frame_n
+            if self._frame_n % 2 == 0:
+                self.trace.append((now, self._mean, self.shs1, self.gain, exp_us, duty))
             slack = period - (time.time() - t0)
             if slack > 0:
                 time.sleep(slack)
@@ -234,10 +285,29 @@ class Engine:
 
 
 ENGINE = None
-HTML = (b"<!DOCTYPE html><html><head><title>IMX296 Live</title>"
-        b"<style>body{background:#111;margin:0;display:flex;justify-content:center;"
-        b"align-items:center;height:100vh}img{max-width:100vw;max-height:100vh}</style>"
-        b"</head><body><img src='/stream'></body></html>")
+HTML = ("""<!DOCTYPE html><html><head><title>IMX296 Live</title>
+<style>
+ body{background:#111;margin:0;font-family:monospace;color:#0f0}
+ #wrap{display:flex;flex-direction:column;align-items:center}
+ img{max-width:100vw;max-height:88vh}
+ .bar{padding:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+ button{background:#222;color:#0f0;border:1px solid #0a0;padding:6px 10px;cursor:pointer}
+ button.on{background:#0a0;color:#000}
+ span{color:#6f6;margin:0 6px}
+</style></head><body><div id="wrap">
+ <div class="bar">
+  <span>zoom</span>
+  <button onclick="z(1)" id="z1">1x</button><button onclick="z(2)" id="z2">2x</button>
+  <button onclick="z(4)" id="z4">4x</button><button onclick="z(8)" id="z8">8x</button>
+  <span>res</span>
+  <button onclick="r(0)" id="r0">900</button><button onclick="r(1)" id="r1">native 1440</button>
+ </div>
+ <img src="/stream">
+</div><script>
+ function z(v){fetch('/ctl?zoom='+v);[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=(i==v)?'on':'')}
+ function r(v){fetch('/ctl?native='+v);document.getElementById('r0').className=v?'':'on';document.getElementById('r1').className=v?'on':''}
+ z(1);r(0);
+</script></body></html>""").encode()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -256,14 +326,42 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.end_headers()
+            last = -1
             try:
                 while True:
-                    j = ENGINE.get()
-                    if j:
+                    with ENGINE._lock:
+                        j = ENGINE._jpeg; jid = ENGINE._jpeg_id
+                    if j and jid != last:                # push each new frame promptly
+                        last = jid
                         self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                                          + str(len(j)).encode() + b"\r\n\r\n" + j + b"\r\n")
-                    time.sleep(0.03)
+                    else:
+                        time.sleep(0.002)
             except (BrokenPipeError, ConnectionResetError): pass
+        elif self.path.startswith("/ctl"):
+            q = self.path.split("?", 1)[1] if "?" in self.path else ""
+            for kv in q.split("&"):
+                if "=" not in kv:
+                    continue
+                k, v = kv.split("=", 1)
+                if k == "zoom" and v.isdigit() and int(v) in ZOOMS:
+                    ENGINE.zoom = int(v)
+                elif k == "native":
+                    ENGINE.native = (v == "1")
+            self.send_response(200); self.send_header("Content-Length", "2")
+            self.end_headers(); self.wfile.write(b"ok")
+        elif self.path.startswith("/stats"):
+            hf, vf = ENGINE._fov()
+            body = json.dumps({
+                "fps": round(ENGINE._fps, 1), "zoom": ENGINE.zoom,
+                "native": ENGINE.native, "hfov_deg": round(hf, 2), "vfov_deg": round(vf, 2),
+                "cols": ["t", "mean", "shs1", "gain", "exp_us", "duty_pct"],
+                "trace": [[round(t, 3), round(m, 1), s, g, round(e, 1), round(d, 1)]
+                          for (t, m, s, g, e, d) in list(ENGINE.trace)],
+            }).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
         else:
             self.send_response(404); self.end_headers()
 

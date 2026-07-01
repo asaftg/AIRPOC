@@ -17,8 +17,15 @@ plan for the hot path.
 ## Pipeline (current, in `imx296_preview.py`)
 
 ```
-Y10 (>>6) → 3×3 median → black-level + adaptive-white tone map → γ=0.85 → 8-bit
+Y10 (>>6) → [digital-zoom crop] → resize-to-display (INTER_AREA)
+          → black-level + adaptive-white tone map → γ=0.85 → 8-bit
 ```
+Resizing to the display size *before* the tone map runs the per-pixel work on
+~1/2.5 the pixels (58 fps @ 900 px vs 45 fps full-res; native 1440 ≈ 32 fps —
+CPU JPEG-limited, the Orin Nano has no HW encoder). INTER_AREA averages out hot
+pixels, so the old 3×3 median was dropped. **AE / duty / FOV / zoom / native**
+toggles and a `/stats` JSON trace (mean, shs1, gain, exp_us, duty) live in the
+preview tool; duty = exposure_lines / VMAX (== the NIR strobe duty to plan for).
 
 ### Auto-exposure (AE)
 Meters mean of a subsampled luma; drives **exposure first** (low noise), raising
