@@ -2,7 +2,7 @@
 
 Fresh **Jetson Orin Nano Super** dev kit → a running, tuned compute platform ready
 for the sensor modules. This chapter is the **Jetson only** — flashing, base
-config, cooling. Camera bring-up is in [`eo/`](../eo/README.md).
+config, cooling.
 
 > Target: **JetPack 6.2.2 / L4T r36.4.4**, kernel `5.15.148-tegra`, module
 > **P3767-0005**, carrier **P3768**. Power mode **MAXN_SUPER**.
