@@ -169,6 +169,7 @@ class Engine:
         self._running = True
         self._fps = 0.0; self._tl = time.time(); self._mean = 0.0; self._frame_n = 0
         self._latest = None; self._llock = threading.Lock()
+        self._new = threading.Event()                # reader posts each new frame here
         self.trace = collections.deque(maxlen=300)   # (t, mean, shs1, gain, exp_us, duty)
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._loop, daemon=True).start()
@@ -190,6 +191,7 @@ class Engine:
                 time.sleep(0.01); continue
             with self._llock:
                 self._latest = raw
+            self._new.set()                          # wake the ISP loop immediately
 
     def _ae(self, mean10):
         # Flicker-free AE: filter the metric (EMA), act in the log/multiplicative
@@ -215,13 +217,13 @@ class Engine:
         _apply_exposure(self.shs1, self.gain)
 
     def _loop(self):
-        period = 1.0 / ENGINE_MAX_FPS
         while self._running:
-            t0 = time.time()
+            self._new.wait(0.1)          # block until a new frame arrives (no timed
+            self._new.clear()            # sleep -> tracks the true 60 fps, no overshoot)
             with self._llock:
                 raw = self._latest; self._latest = None
             if raw is None:
-                time.sleep(0.004); continue
+                continue
             # Stride is the driver's real bytesperline (BPL); slice to W. The
             # sensor ROI crop (1440) makes the Y10 line 64-byte aligned, so the
             # Tegra VI adds no per-line pad and there is NO even/odd comb to
@@ -275,9 +277,6 @@ class Engine:
                     self._jpeg = b.tobytes(); self._jpeg_id = self._frame_n
             if self._frame_n % 2 == 0:
                 self.trace.append((now, self._mean, self.shs1, self.gain, exp_us, duty))
-            slack = period - (time.time() - t0)
-            if slack > 0:
-                time.sleep(slack)
 
     def get(self):
         with self._lock:
