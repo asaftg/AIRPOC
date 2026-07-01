@@ -84,6 +84,7 @@ int main(int argc, char **argv)
 
         isp_tonemap(frame, cap.bytesperline, cap.width, cap.height, out8);
         isp_zoom(out8, cap.width, cap.height, mjpeg_zoom(), disp);   /* digital zoom */
+        mjpeg_set_sharp(isp_sharpness(disp, cap.width, cap.height)); /* focus assist */
 
         double t = now_s(), dt = t - t_last; t_last = t;
         if (dt > 0) { double inst = 1.0 / dt; fps = fps ? 0.85 * fps + 0.15 * inst : inst; }

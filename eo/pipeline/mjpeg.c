@@ -19,8 +19,10 @@ static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
 static struct { double fps, mean; int exp_lines, gain; } g_stat;
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
+static double          g_sharp = 0;        /* focus-assist sharpness (Tenengrad) */
 
-int mjpeg_zoom(void) { return g_zoom; }
+int  mjpeg_zoom(void)          { return g_zoom; }
+void mjpeg_set_sharp(double s) { g_sharp = s; }
 
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
@@ -30,21 +32,29 @@ static const char *PAGE =
 "img{max-width:100vw;max-height:100vh;display:block}"
 "#ov{position:absolute;left:10px;bottom:10px;color:#0f0;font-size:16px;line-height:1.4;"
 "white-space:pre;text-shadow:0 0 3px #000,0 0 3px #000,0 0 3px #000}"
+"#roi{position:absolute;left:30%;top:30%;width:40%;height:40%;border:2px solid #0f0;"
+"box-sizing:border-box;display:none;pointer-events:none}"
 "#bar{position:fixed;top:8px;left:8px;color:#6f6;z-index:2}"
 "button{background:#222;color:#0f0;border:1px solid #0a0;padding:5px 9px;cursor:pointer}"
 "button.on{background:#0a0;color:#000}</style></head><body>"
 "<div id=bar>zoom "
 "<button onclick=z(1) id=z1>1x</button><button onclick=z(2) id=z2>2x</button>"
-"<button onclick=z(4) id=z4>4x</button><button onclick=z(8) id=z8>8x</button></div>"
-"<div id=wrap><img src=/stream><div id=ov></div></div><script>"
+"<button onclick=z(4) id=z4>4x</button><button onclick=z(8) id=z8>8x</button>"
+"&nbsp;&nbsp;<button onclick=f() id=fb>focus</button></div>"
+"<div id=wrap><img src=/stream><div id=roi></div><div id=ov></div></div><script>"
+"var foc=false,peak=0;"
 "function z(v){fetch('/ctl?zoom='+v)}"
+"function f(){foc=!foc;peak=0;document.getElementById('roi').style.display=foc?'block':'none';"
+"document.getElementById('fb').className=foc?'on':''}"
 "async function t(){try{let d=await(await fetch('/stats')).json();"
-"document.getElementById('ov').textContent="
-"'IMX296 Y10  '+d.fps.toFixed(0)+' fps  mean='+d.mean+'/1023\\n'+"
+"var s='IMX296 Y10  '+d.fps.toFixed(0)+' fps  mean='+d.mean+'/1023\\n'+"
 "'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480\\n'+"
 "'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x';"
+"if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
+"s+='\\nFOCUS  '+Math.round(d.sharp)+'  peak '+Math.round(peak)+'  '+p+'%  (turn ring to max)';}"
+"document.getElementById('ov').textContent=s;"
 "[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'')}catch(e){}}"
-"setInterval(t,250);t();</script></body></html>";
+"setInterval(t,150);t();</script></body></html>";
 
 static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *len)
 {
@@ -97,11 +107,11 @@ static void *client(void *arg)
         int z = g_zoom;
         double hf = 2 * atan((EO_WIDTH  * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
         double vf = 2 * atan((EO_HEIGHT * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
-        char body[320];
+        char body[360];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
-            "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f}\n",
-            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e), g, z, hf, vf);
+            "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f}\n",
+            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e), g, z, hf, vf, g_sharp);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
         close(fd);

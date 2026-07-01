@@ -91,10 +91,13 @@ void   isp_tonemap(const uint8_t *y10, int bpl, int w, int h, uint8_t *out8);
 /* Digital zoom: nearest-neighbour upscale of a centered 1/zoom crop (zoom 1/2/4/8).
  * zoom==1 is a copy. src and dst are both w*h 8-bit. */
 void   isp_zoom(const uint8_t *src, int w, int h, int zoom, uint8_t *dst);
+/* Focus-assist sharpness (Tenengrad) over a centered ROI; higher = sharper. */
+double isp_sharpness(const uint8_t *img8, int w, int h);
 
 /* ---- MJPEG monitor server (HTML overlay + zoom controls, /stream, /stats, /ctl) ---- */
 int  mjpeg_start(int port);                  /* spawns the HTTP server thread    */
 int  mjpeg_zoom(void);                       /* current digital zoom (1/2/4/8)   */
+void mjpeg_set_sharp(double sharpness);      /* focus metric for /stats          */
 void mjpeg_publish(const uint8_t *gray, int w, int h,   /* latest frame + stats   */
                    double fps, double mean, int exp_lines, int gain);
 
