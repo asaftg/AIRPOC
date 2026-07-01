@@ -48,7 +48,7 @@ illuminator/   NIR illuminator module: controller + docs
 |---|---|
 | Jetson platform bring-up | ✅ flashed, MAXN, fan pinned — see [`jetson/`](jetson/README.md) |
 | EO camera | ✅ streaming Y10 mono @ 60 fps, focused, auto-exposed — see [`eo/`](eo/README.md) |
-| NIR illuminator | 🟡 controller written, HW integration pending — see [`illuminator/`](illuminator/README.md) |
+| NIR illuminator | 🟡 controller HW-verified (on/off, power, FOV/zoom, status); GUI buttons + camera sync pending — see [`illuminator/`](illuminator/README.md) |
 | Radar, detection, fusion, tracking, gimbal, guidance | ⬜ not started |
 
 A per-item production readiness review lives in the System Overview.
