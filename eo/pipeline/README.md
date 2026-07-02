@@ -69,11 +69,14 @@ optimized feed from this module over HTTP. Everything below is served on `:8091`
 **Bandwidth presets** — the feed is downscaled + fps-capped + quality-tuned *before*
 encode, so the wire load is bounded regardless of scene or client count:
 
-| Preset | Resolution | fps cap | JPEG q | ~WiFi |
+| Preset | Resolution | fps cap | JPEG q | WiFi (measured, scene-dep.) |
 |---|---|---|---|---|
-| LOW  | 480×362 | 15 | 55 | ~1.5 Mb/s |
-| MED (default) | 640×484 | 20 | 72 | ~4 Mb/s |
-| HIGH | 960×725 | 25 | 82 | ~10 Mb/s |
+| LOW  | 480×362 | 15 | 55 | ~2 Mb/s |
+| MED (default) | 640×483 | 20 | 72 | ~7 Mb/s |
+| HIGH | 960×725 | 25 | 82 | ~25 Mb/s |
+
+(Bitrate scales with scene detail — a sharp, textured scene at full focus is the high
+end; drop a preset or the JPEG quality to hold a tighter WiFi budget.)
 
 Detection is unaffected — the detector always sees the **native full-res Y10** frame
 inside this process (`consume_frame`); the feed resolution is a display concern only.
@@ -122,8 +125,10 @@ make
 > detected + FOV/power/on-off controllable from the page. Illuminator integration
 > per [`illuminator/docs/PREVIEW_INTEGRATION.md`](../../illuminator/docs/PREVIEW_INTEGRATION.md).
 >
-> **This revision** splits capture/encoder into two threads and adds bandwidth presets
-> (the optimized EO output contract above) — pending on-device re-measure: confirm
-> capture holds the sensor rate while the encoder is capped at the preset and CPU +
-> WiFi drop. Remaining to fully retire the Python preview: a systemd unit, and wiring
-> the real detector into `consume_frame()`.
+> **This revision (verified on-device 2026-07-01):** capture/encoder split into two
+> threads + bandwidth presets. Capture holds **60 fps at every preset**; the whole
+> process draws **~0.42 of one core with no client and ~0.47 with a client** (down from
+> ~1 full core in the old encode-every-frame-full-res path — clients are nearly free
+> thanks to encode-once-serve-many). WiFi is bounded by the preset (LOW/MED/HIGH ≈
+> 2/7/25 Mb/s on a detailed scene) and presets switch live. Remaining to fully retire
+> the Python preview: a systemd unit, and wiring the real detector into `consume_frame()`.
