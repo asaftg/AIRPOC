@@ -38,6 +38,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + operator monitor | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
+| Operator console (`app/`) | — | 🟡 field GUI + main process; EO view/zoom/illuminator/stream presets/day-night live on the synthetic source, real EO handoff pending | [`app/`](../app/README.md) |
 | Radar | — | ⬜ not started | — |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |

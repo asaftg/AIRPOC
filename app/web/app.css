@@ -1,0 +1,119 @@
+/* AIRPOC operator console — self-contained, no external fonts/icons (offline field
+ * use over the drone AP). Full-viewport, no scroll, dark night + day mode. */
+
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden}
+body{
+  font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+}
+/* theme tokens */
+body.night{--bg:#0a0d0a;--fg:#e6fff0;--dim:#84a894;--tl:#39d98a;--am:#ef9f27;--rd:#e24b4a;
+  --pnl:#07101a;--bd:#22402e;--bd2:#2c4c38;--rbd:#22384a;--rln:#12324a;--rblu:#6a92b4;--top:rgba(0,0,0,.4)}
+body.day{--bg:#14170f;--fg:#ffffff;--dim:#cfe3cc;--tl:#57f0a2;--am:#ffb733;--rd:#ff5f5f;
+  --pnl:#0e1a26;--bd:#3c5e46;--bd2:#5c8e66;--rbd:#3c5c74;--rln:#2c5c7c;--rblu:#9dd;--top:rgba(0,0,0,.2)}
+body{background:#000;color:var(--fg)}
+
+#app{display:flex;flex-direction:column;height:100vh}
+.mono,.ov,.chip b,.chip s{font-family:ui-monospace,Menlo,Consolas,monospace}
+
+/* ---- top bar ---- */
+#bar{display:flex;align-items:center;gap:12px;height:44px;padding:0 12px;background:var(--bg);
+  border-bottom:1px solid var(--bd)}
+.unit{display:flex;align-items:center;gap:8px;font-size:14px;letter-spacing:1px;font-weight:500}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--tl)}
+.spacer{flex:1}
+.chip{display:flex;flex-direction:column;align-items:center;line-height:1.05}
+.chip b{font-size:14px;font-weight:500}.chip s{font-size:9px;color:var(--dim)}
+.chip:first-of-type b{color:var(--tl)}
+.seg{display:flex;border:1px solid var(--bd2);border-radius:8px;overflow:hidden}
+.seg button{background:none;border:0;color:var(--dim);padding:7px 16px;font:inherit;font-size:12px;cursor:pointer}
+.seg button.on{background:var(--tl);color:#04140c}
+.icb{background:none;border:1px solid var(--bd2);color:var(--fg);border-radius:8px;
+  padding:0 12px;height:32px;font:inherit;font-size:12px;letter-spacing:.5px;cursor:pointer}
+
+/* ---- stage ---- */
+#stage{position:relative;flex:1;overflow:hidden;background:#000}
+
+.hero{position:absolute;inset:0}
+.pip{position:absolute;right:14px;bottom:14px;width:min(24vw,220px);aspect-ratio:3/2;
+  border:1px solid var(--rbd);border-radius:10px;background:var(--pnl);overflow:hidden;cursor:pointer;z-index:3}
+
+#video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+#radar #video{display:none}
+
+.ov{position:absolute;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:clamp(11px,1.5vw,15px);
+  line-height:1.5;color:var(--dim);white-space:normal;text-shadow:0 0 3px #000,0 0 3px #000}
+.ov.tl{left:14px;top:12px}.ov.tr{right:14px;top:12px;text-align:right}
+#radar .ov{display:none}
+
+.reticle{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none}
+.reticle .ring{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;
+  border:1px solid var(--tl);border-radius:50%;opacity:.6}
+.reticle .dot{position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;
+  border-radius:50%;background:var(--tl)}
+#radar .reticle{display:none}
+
+.exp{position:absolute;top:8px;right:8px;width:34px;height:34px;padding:6px;background:rgba(0,0,0,.35);
+  border:1px solid var(--rbd);border-radius:8px;color:var(--rblu);cursor:pointer;z-index:4}
+.exp svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.hero .exp{display:none}                 /* swap handle lives on the small pane */
+
+.rhead{position:absolute;top:7px;left:9px;right:40px;display:flex;justify-content:space-between;font-size:11px}
+.rlabel{color:var(--rblu);letter-spacing:.5px}.rtrk{color:var(--tl)}
+.scope{position:absolute;inset:0;width:100%;height:100%}
+.scope .rl{fill:none;stroke:var(--rln);stroke-width:1}
+.scope .rn{fill:var(--rblu);font-size:7px;text-anchor:middle;font-family:ui-monospace,monospace}
+
+/* ---- bottom cluster ---- */
+#cluster{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:12px;
+  padding:8px;background:rgba(0,0,0,.35);border-radius:16px;z-index:5}
+.big{width:clamp(64px,9vw,86px);height:clamp(60px,8.5vw,80px);border:1px solid var(--bd2);border-radius:12px;
+  background:#0f1a12;color:var(--fg);font:inherit;cursor:pointer;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;line-height:1.1}
+.big span{font-size:clamp(12px,1.5vw,15px);font-weight:500}
+.big small{font-size:10px;color:var(--dim)}
+.big.on{border-color:var(--tl);background:#0c2119;color:var(--tl)}
+#light.armed{border-color:var(--am);background:#241803;color:var(--am)}
+#light.firing{border-color:var(--rd);background:#3a0e0e;color:#ffd7d7}
+
+#zoombar{position:absolute;left:14px;bottom:14px;display:flex;flex-direction:column;
+  border:1px solid var(--bd2);border-radius:10px;overflow:hidden;background:#0f1a12;z-index:5}
+#zoombar button{width:52px;height:38px;background:none;border:0;color:var(--fg);font-size:20px;cursor:pointer}
+#v-zval{width:52px;height:30px;display:flex;align-items:center;justify-content:center;color:var(--dim);
+  border-top:1px solid var(--bd);border-bottom:1px solid var(--bd);font-family:ui-monospace,monospace;font-size:12px}
+
+/* ---- DEV panel ---- */
+#dev{position:absolute;top:0;right:0;bottom:0;width:min(46%,440px);background:var(--pnl);
+  border-left:1px solid var(--bd2);padding:14px 16px;transform:translateX(103%);transition:transform .18s;
+  z-index:8;overflow-y:auto}
+#dev.open{transform:translateX(0)}
+.dev-head{display:flex;justify-content:space-between;align-items:center}
+.dev-head b{color:var(--tl);letter-spacing:1px;font-weight:500}
+#devclose{background:none;border:0;color:var(--fg);font-size:18px;cursor:pointer}
+.sec{font-size:10px;letter-spacing:1px;color:var(--dim);margin:16px 0 8px}
+.presets{display:flex;gap:6px;flex-wrap:wrap}
+.presets button{flex:1;min-width:70px;padding:8px 6px;border:1px solid var(--bd2);border-radius:7px;
+  background:none;color:var(--dim);font:inherit;font-size:12px;cursor:pointer}
+.presets button.on{background:var(--tl);color:#04140c;border-color:var(--tl)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0;
+  font-size:13px;font-family:ui-monospace,monospace}
+.row input[type=range]{flex:1;accent-color:var(--tl)}
+.row.est{color:var(--tl)}.row.src{color:var(--dim)}.muted{color:var(--dim)}
+.sysbtns{display:flex;gap:8px;margin-top:8px}
+.sysbtns button{flex:1;padding:10px;border:1px solid var(--bd2);border-radius:8px;background:none;
+  color:var(--fg);font:inherit;font-size:12px;letter-spacing:.5px;cursor:pointer}
+
+/* ---- swap state: radar becomes hero, EO becomes the pip ---- */
+#stage.swap #eo{inset:auto;right:14px;bottom:14px;width:min(24vw,220px);aspect-ratio:3/2;
+  border:1px solid var(--rbd);border-radius:10px;overflow:hidden;z-index:3}
+#stage.swap #eo .exp{display:block}
+#stage.swap #radar{inset:0;width:auto;aspect-ratio:auto;border:0;border-radius:0;background:#050b12;z-index:1}
+#stage.swap #radar .exp{display:none}
+#stage.swap #radar .rhead{right:14px;left:14px;font-size:13px}
+
+/* short screens: shrink chrome so nothing scrolls */
+@media (max-height:560px){
+  #bar{height:38px}.big{height:clamp(52px,7vw,68px)}
+  .chip s{display:none}
+}

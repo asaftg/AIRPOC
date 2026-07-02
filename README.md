@@ -40,6 +40,7 @@ docs/          system-level docs (overview, engineering guidelines)
 jetson/        compute-platform bring-up: flash JetPack, base config, fan
 eo/            EO camera module: driver, tools, streaming, EO docs
 illuminator/   NIR illuminator module: controller + docs
+app/           the main process + operator console (field GUI)
 ```
 
 ## Status (high level)
@@ -49,6 +50,7 @@ illuminator/   NIR illuminator module: controller + docs
 | Jetson platform bring-up | ✅ flashed, MAXN, fan pinned — see [`jetson/`](jetson/README.md) |
 | EO camera | ✅ Y10 mono @ 60 fps, focused, auto-exposed; **production C pipeline + operator monitor** (zoom/focus/illuminator controls) — see [`eo/`](eo/README.md) |
 | NIR illuminator | ✅ controller HW-verified **+ on/off·power·beam-FOV controls live in the EO reviewer**; camera-sync (NIR strobe) pending — see [`illuminator/`](illuminator/README.md) |
+| Operator console (`app/`) | 🟡 field GUI + main process: EO view, zoom, illuminator, stream presets, day/night — on the synthetic EO source until the EO channel handoff lands — see [`app/`](app/README.md) |
 | Radar, detection, fusion, tracking, gimbal, guidance | ⬜ not started |
 
 A per-item production readiness review lives in the System Overview.
