@@ -4,7 +4,7 @@
  *   { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
  *     num_points, num_targets,
  *     points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
- *     targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,coasting,class}, ...] }
+ *     targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
  * SNR that is NaN (firmware without SideInfo) serialises as null. */
 #ifndef AIRPOC_WIRE_H
 #define AIRPOC_WIRE_H

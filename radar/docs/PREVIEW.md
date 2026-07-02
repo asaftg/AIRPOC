@@ -13,12 +13,14 @@ target: the point cloud + target boxes the ground-bench GUI showed.
 - **FOV wedge** = the cfg's published azimuth span (±90°; useful AoA ~±60°).
 - **Points** coloured by Doppler: **red approaching**, **blue receding**, **dim
   cyan static** (|v| < 0.2 m/s). Opacity scales with SNR when present.
-- **Target boxes**: **solid** = live (measured this frame), **dashed/dim** =
-  coasting (dead-reckoned through a dropout). Arrow = 1 s of velocity; label is
-  `R#<id>  <speed> m/s · <range> m`. IDs are transient radar-track ids
-  (`R#`) — fusion assigns global ids later.
-- **Trails** = per-track history, EMA-smoothed, aged out over 10 s.
+- **Target boxes**: one per cluster **detected this frame** (no coasting — a box
+  that stops clustering just disappears). Arrow = 1 s of velocity; label is
+  `R#<id>  <speed> m/s · <range> m`. IDs are transient radar-track ids (`R#`,
+  stable frame-to-frame via association) — fusion assigns global ids later.
 - **HUD** (top-left) = profile, Hz, point/target counts, dropped-frame count.
+
+The previewer draws only the current frame — no trails or persistence. Holding
+a box through a one-frame miss (fade) is the operator GUI's job, not the radar's.
 
 ## Transport
 

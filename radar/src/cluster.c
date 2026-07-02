@@ -14,19 +14,19 @@
 #define MIN_SIZE_M       0.25f
 #define MAX_SIZE_M       3.0f
 #define ASSOC_GATE_M     5.0f
-#define GATE_GROWTH      2.0f     /* m per s of coast */
+#define GATE_GROWTH      2.0f     /* m per s since last detection */
 #define MERGE_OVERLAP_M  5.0f
-#define COAST_MAX_FRAMES 30
 #define CONFIRM_MIN_HITS 2
 #define CONFIRM_WINDOW   3
-#define COAST_VEL_HALFLIFE_S 1.0
 #define Q_ACCEL_MPS2     3.0
 #define R_POS_M          0.4
-#define GRAVEYARD_TTL_S  4.0
-#define RESURRECT_RADIUS_M 12.0
+/* Internal-only: how many missed frames a track survives (frozen, NEVER
+ * published) so its id/confirm-state stay stable across a brief dropout.
+ * This is NOT coasting — undetected targets are never emitted. Real
+ * motion-model coasting is the future tracking module's job. */
+#define TRACK_MAX_MISSES 5
 
 #define MAX_TRACKS   RADAR_MAX_TARGETS
-#define MAX_GRAVE    RADAR_MAX_TARGETS
 
 typedef struct {
     int    used;
@@ -40,16 +40,8 @@ typedef struct {
     double last_hit_t;
 } Track;
 
-typedef struct {
-    int    used;
-    int    tid;
-    double xyz[3];
-    double reap_t;
-} Grave;
-
 struct RadarClusterer {
     Track  tracks[MAX_TRACKS];
-    Grave  grave[MAX_GRAVE];
     int    next_tid;
     float  eps_pos;          /* DBSCAN spacing, m (live via /ctl) */
     int    min_samples;      /* DBSCAN min-samples (live via /ctl) */
@@ -77,10 +69,7 @@ static void kf_predict(Track *t, double dt) {
     double q = Q_ACCEL_MPS2 * Q_ACCEL_MPS2;
     double dt2 = dt * dt, dt3 = dt2 * dt, dt4 = dt2 * dt2;
     double Qpp = 0.25 * dt4 * q, Qpv = 0.5 * dt3 * q, Qvv = dt2 * q;
-    int coasting = t->misses > 0;
-    double decay = coasting ? pow(0.5, dt / COAST_VEL_HALFLIFE_S) : 1.0;
     for (int a = 0; a < 3; a++) {
-        if (coasting) t->v[a] *= decay;
         t->p[a] += t->v[a] * dt;
         /* F=[[1,dt],[0,1]]; P = F P F^T + Q */
         double p00 = t->P[a][0][0], p01 = t->P[a][0][1];
@@ -227,60 +216,32 @@ static int overlaps_matched(RadarClusterer *R, const double c[3], const int *mat
     return 0;
 }
 
-static int try_resurrect(RadarClusterer *R, const double c[3]) {
-    double g2 = RESURRECT_RADIUS_M * RESURRECT_RADIUS_M, best = INFINITY;
-    int bi = -1;
-    for (int i = 0; i < MAX_GRAVE; i++) {
-        if (!R->grave[i].used) continue;
-        double dx = R->grave[i].xyz[0]-c[0], dy = R->grave[i].xyz[1]-c[1], dz = R->grave[i].xyz[2]-c[2];
-        double d2 = dx*dx + dy*dy + dz*dz;
-        if (d2 < g2 && d2 < best) { best = d2; bi = i; }
-    }
-    if (bi >= 0) { R->grave[bi].used = 0; return R->grave[bi].tid; }
-    return -1;
-}
-
 static Track *alloc_track(RadarClusterer *R) {
     for (int i = 0; i < MAX_TRACKS; i++) if (!R->tracks[i].used) return &R->tracks[i];
     return NULL;
 }
 
-static void reap(RadarClusterer *R, double now_t) {
+static void reap(RadarClusterer *R) {
     for (int i = 0; i < MAX_TRACKS; i++) {
         Track *t = &R->tracks[i];
-        if (!t->used || t->misses <= COAST_MAX_FRAMES) continue;
-        if (t->confirmed) {
-            for (int g = 0; g < MAX_GRAVE; g++) if (!R->grave[g].used) {
-                R->grave[g].used = 1; R->grave[g].tid = t->tid;
-                R->grave[g].xyz[0]=t->p[0]; R->grave[g].xyz[1]=t->p[1]; R->grave[g].xyz[2]=t->p[2];
-                R->grave[g].reap_t = now_t; break;
-            }
-        }
-        t->used = 0;
+        if (t->used && t->misses > TRACK_MAX_MISSES) t->used = 0;
     }
-    for (int g = 0; g < MAX_GRAVE; g++)
-        if (R->grave[g].used && (now_t - R->grave[g].reap_t) > GRAVEYARD_TTL_S)
-            R->grave[g].used = 0;
 }
 
+/* Emit ONLY tracks detected (matched) this frame and confirmed. A track not
+ * matched this frame is never published — no coasting, no dead-reckoning. */
 static int publish(RadarClusterer *R, RadarTarget *out, int max_out) {
     int n = 0;
     for (int i = 0; i < MAX_TRACKS && n < max_out; i++) {
         Track *t = &R->tracks[i];
-        if (!t->used || !t->confirmed) continue;
-        int coasting = t->misses > 0;
+        if (!t->used || !t->confirmed || t->misses > 0) continue;
         double conf = t->hits / 10.0; if (conf > 1.0) conf = 1.0;
-        if (coasting) {
-            double f = 1.0 - (double)t->misses / (COAST_MAX_FRAMES > 0 ? COAST_MAX_FRAMES : 1);
-            if (f < 0.3) f = 0.3;
-            conf *= f;
-        }
         RadarTarget *o = &out[n++];
         o->tid = t->tid;
         o->x = t->p[0]; o->y = t->p[1]; o->z = t->p[2];
         o->vx = t->v[0]; o->vy = t->v[1]; o->vz = t->v[2];
         o->sx = t->size_half[0]; o->sy = t->size_half[1]; o->sz = t->size_half[2];
-        o->conf = (float)conf; o->num_points = t->hits; o->coasting = coasting;
+        o->conf = (float)conf; o->num_points = t->hits;
     }
     return n;
 }
@@ -288,12 +249,15 @@ static int publish(RadarClusterer *R, RadarTarget *out, int max_out) {
 int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                  double now_t, double dt, RadarTarget *out, int max_out) {
     if (dt <= 0) dt = 0.05;
+    /* Predict only tracks detected last frame (to gate this frame's clusters).
+     * Missed tracks freeze — no motion-model extrapolation of undetected
+     * targets. */
     for (int i = 0; i < MAX_TRACKS; i++)
-        if (R->tracks[i].used) kf_predict(&R->tracks[i], dt);
+        if (R->tracks[i].used && R->tracks[i].misses == 0) kf_predict(&R->tracks[i], dt);
 
     if (n <= 0) {
         for (int i = 0; i < MAX_TRACKS; i++) if (R->tracks[i].used) hist_push(&R->tracks[i], 0);
-        reap(R, now_t);
+        reap(R);
         return publish(R, out, max_out);
     }
 
@@ -340,12 +304,9 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         int ti = find_best_track(R, c->c, now_t, matched);
         if (ti < 0) {
             if (overlaps_matched(R, c->c, matched)) continue;
-            int rtid = try_resurrect(R, c->c);
             Track *t = alloc_track(R);
             if (!t) continue;
-            int tid = (rtid >= 0) ? rtid : R->next_tid++;
-            track_init(t, tid, c->c, c->v, c->half, now_t);
-            if (rtid >= 0) t->confirmed = 1;   /* resurrected skips re-warmup */
+            track_init(t, R->next_tid++, c->c, c->v, c->half, now_t);
             ti = (int)(t - R->tracks);
         } else {
             Track *t = &R->tracks[ti];
@@ -361,7 +322,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     for (int i = 0; i < MAX_TRACKS; i++)
         if (R->tracks[i].used && !matched[i]) hist_push(&R->tracks[i], 0);
 
-    reap(R, now_t);
+    reap(R);
 
     for (int i = 0; i < n; i++) {
         int lbl = labels[i];

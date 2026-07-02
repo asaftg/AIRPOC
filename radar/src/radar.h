@@ -28,7 +28,8 @@ typedef struct {
     int   tid;            /* assigned cluster/track id, 255 = unassigned */
 } RadarPoint;
 
-/* One published class-less target (confirmed track, live or coasting). */
+/* One published class-less target — a cluster detected this frame (no
+ * coasting; ids kept stable frame-to-frame via association). */
 typedef struct {
     int   tid;
     float x, y, z;                /* centroid, m */
@@ -36,7 +37,6 @@ typedef struct {
     float sx, sy, sz;             /* half-extents, m */
     float conf;                   /* 0..1 */
     int   num_points;             /* hits accumulated */
-    int   coasting;               /* 1 = dead-reckoned this frame */
 } RadarTarget;
 
 /* A fully parsed + clustered frame, ready to serialise. */

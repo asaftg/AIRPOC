@@ -25,10 +25,14 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
   num_points, num_targets,
   points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
-  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,coasting,class}, ...] }
+  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
 ```
 Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres. `snr` is
 `null` when the firmware omits SideInfo. `class` is always `radar_detection`.
+`targets` are **per-frame detections only** — a box is emitted only for a
+cluster seen this frame (**no coasting**); `tid` is stable across frames via
+association. Display persistence and motion-model coasting are the GUI's and
+the future tracking module's jobs, not the radar's.
 
 ## Build & run (on the Jetson, native aarch64)
 
@@ -54,12 +58,13 @@ Standalone-runnable: with no board present it serves the page and reports
 The **heavy DSP runs on the AWR2944P** — range/Doppler FFT, CFAR detection, and
 angle-of-arrival are all in the mmw_demo firmware. The Jetson never does an FFT;
 it receives the finished point cloud over UART. The host daemon only does
-**drop-free parse + clustering + tracking + serialize**, which is cheap:
+**drop-free parse + per-frame clustering (light association for stable ids +
+velocity, no coasting) + serialize**, which is cheap:
 
 | Host work per frame | Cost (Orin est., ~2–3× the x86 measurement) |
 |---|---|
 | Full path, typical ~100-pt frame | ~50 µs |
-| DBSCAN + track, worst case 500 pts | ~1 ms |
+| DBSCAN + association, worst case 500 pts | ~1 ms |
 
 That is **~1–2 % of one core at 30 Hz**, <1 MB RAM, and adds **<1 ms** latency —
 the end-to-end latency floor is the chip's frame period, not this code. The only
@@ -67,11 +72,13 @@ superlinear cost is DBSCAN's O(N²); fine at mmw_demo point counts, swap to a
 spatial-grid O(N) if counts ever spike. (Reproduce with the microbench under
 `src/` — not shipped.)
 
-**Migration to fully on-chip:** clustering/tracking is host-side only because
-today's firmware has no Group Tracker. The parser already handles the tracker
-TLVs (308/309), so once Phase-2 firmware links `gtrack`, the chip emits target
-boxes directly and this daemon drops to a pure parse-and-forward — no rewrite.
-See [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
+**Migration to fully on-chip:** host-side clustering exists only because today's
+firmware has no Group Tracker. The parser already handles the tracker TLVs
+(308/309), so once Phase-2 firmware links `gtrack`, the chip emits target boxes
+directly and this daemon drops to a pure parse-and-forward — no rewrite. (Full
+tracking — motion-model coasting, long-term ids — is the downstream **tracking**
+module regardless; the radar only ever emits per-frame detections.) See
+[`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 
 ## Layout
 - `src/` — C daemon (`serial`, `cfg_push`, `tlv`, `cluster`, `wire`, `http`).

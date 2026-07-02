@@ -3,7 +3,9 @@
  * Port of the ground bench's radar/clustering.py — the PRIMARY box source
  * while the firmware has no on-chip Group Tracker (see docs/FIRMWARE.md).
  * Per frame: DBSCAN over (x,y,z,doppler) -> per-cluster centroid/extent ->
- * greedy gated NN association -> CV Kalman update / coast -> M-of-N confirm.
+ * greedy gated NN association (stable ids) -> CV Kalman update (velocity) ->
+ * M-of-N confirm. Emits ONLY targets detected this frame — no coasting.
+ * Motion-model coasting/persistence is the future tracking module + GUI.
  *
  * The 6-state [p,v] Kalman of the original is block-diagonal per axis, so
  * this is implemented as three independent 2-state (pos,vel) filters —
@@ -38,8 +40,8 @@ void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
 /* Cluster+track one frame. `pts`/`n` are updated in place (each point's
  * .tid is set to its cluster/track id, or 255). `now_s` is a monotonic
  * timestamp (seconds); `dt` is seconds since the previous step. Confirmed
- * targets (live or coasting within budget) are written to `out` up to
- * `max_out`; returns the count. */
+ * targets detected THIS frame are written to `out` up to `max_out`; returns
+ * the count. */
 int cluster_step(RadarClusterer *c, RadarPoint *pts, int n,
                  double now_s, double dt,
                  RadarTarget *out, int max_out);

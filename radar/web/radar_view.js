@@ -1,19 +1,21 @@
 // AIRPOC radar previewer — half-circle PPI over Server-Sent Events.
 // Standalone port of the ground bench's gui/static/js/radar_view.js, minus
 // the fusion/gimbal coupling: draws the AWR2944P point cloud + DBSCAN target
-// boxes + per-track trails on a top-down polar canvas.
+// boxes on a top-down polar canvas. Per-frame only — no trails/persistence
+// (that's the operator GUI's job, not the radar's).
 //
 // Wire (SSE /stream):
 //   { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
 //     num_points, num_targets,
 //     points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
-//     targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,coasting,class}, ...] }
+//     targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
+// Targets are per-frame detections only (no coasting) — display persistence,
+// if wanted, is the operator GUI's job, not the radar's.
 // Sensor frame: +x right, +y forward (boresight up on screen), +z up.
 
 const TARGET_COLORS = ["#ff4d6d","#40c4ff","#ffd54f","#81c784","#ba68c8","#ff8a65","#4dd0e1","#dce775"];
 const STATIC_DOPPLER_MPS = 0.2;
 const NEAR_VIEW_M = 100, FAR_VIEW_M = 500, FAR_TRIGGER_M = 105, SHRINK_FRAMES = 30;
-const TRAIL_MAX_AGE_MS = 10000, TRAIL_MAX_POINTS = 200, TRAIL_EMA_ALPHA = 0.35;
 
 class RadarView {
   constructor(canvasId) {
@@ -23,7 +25,6 @@ class RadarView {
     this.viewRangeM = NEAR_VIEW_M;
     this.shrinkCounter = 0;
     this.fovHalfDeg = 60;   // pre-frame default (useful AoA); replaced by wire fov_half_deg
-    this.trails = new Map();
     window.addEventListener("resize", () => this.fit());
     this.fit();
   }
@@ -46,7 +47,6 @@ class RadarView {
   updateViewRange(r) {
     let far = false;
     for (const t of (r.targets || [])) {
-      if (t.coasting) continue;
       if (Math.hypot(t.x || 0, t.y || 0) > FAR_TRIGGER_M) { far = true; break; }
     }
     if (far) { this.viewRangeM = FAR_VIEW_M; this.shrinkCounter = 0; }
@@ -104,38 +104,6 @@ class RadarView {
       ctx.beginPath(); ctx.arc(px, py, rad, 0, 2 * Math.PI); ctx.fill();
     }
   }
-  ingestTrails(targets) {
-    const nowMs = performance.now();
-    for (const t of (targets || [])) {
-      if (t.tid == null) continue;
-      let hist = this.trails.get(t.tid);
-      if (!hist) { hist = []; this.trails.set(t.tid, hist); }
-      let sx = t.x, sy = t.y;
-      if (hist.length) { const p = hist[hist.length - 1]; sx = TRAIL_EMA_ALPHA * t.x + (1 - TRAIL_EMA_ALPHA) * p.x; sy = TRAIL_EMA_ALPHA * t.y + (1 - TRAIL_EMA_ALPHA) * p.y; }
-      hist.push({ x: sx, y: sy, t: nowMs });
-      if (hist.length > TRAIL_MAX_POINTS) hist.splice(0, hist.length - TRAIL_MAX_POINTS);
-    }
-    for (const [tid, hist] of this.trails) {
-      while (hist.length && nowMs - hist[0].t > TRAIL_MAX_AGE_MS) hist.shift();
-      if (!hist.length) this.trails.delete(tid);
-    }
-  }
-  drawTrails() {
-    const ctx = this.ctx, nowMs = performance.now(), dpr = window.devicePixelRatio || 1;
-    ctx.lineWidth = 1.4 * dpr; ctx.lineCap = "round";
-    for (const [tid, hist] of this.trails) {
-      if (hist.length < 2) continue;
-      const colour = TARGET_COLORS[((tid % 8) + 8) % 8];
-      const pts = hist.map(h => { const p = this.toCanvas(h.x, h.y); return { px: p.px, py: p.py, t: h.t }; });
-      for (let i = 1; i < pts.length; i++) {
-        const alpha = Math.max(0, 1 - (nowMs - pts[i].t) / TRAIL_MAX_AGE_MS) * 0.8;
-        if (alpha <= 0.02) continue;
-        ctx.globalAlpha = alpha; ctx.strokeStyle = colour;
-        ctx.beginPath(); ctx.moveTo(pts[i - 1].px, pts[i - 1].py); ctx.lineTo(pts[i].px, pts[i].py); ctx.stroke();
-      }
-    }
-    ctx.globalAlpha = 1; ctx.lineCap = "butt";
-  }
   drawTargets(targets) {
     const ctx = this.ctx, dpr = window.devicePixelRatio || 1;
     ctx.lineWidth = 1.5 * dpr; ctx.font = `${Math.round(11 * dpr)}px monospace`; ctx.textAlign = "left";
@@ -143,31 +111,28 @@ class RadarView {
       const colour = TARGET_COLORS[((t.tid % 8) + 8) % 8];
       const { px, py, pxPerM } = this.toCanvas(t.x, t.y);
       const wpx = Math.max(6, 2 * t.sx * pxPerM), hpx = Math.max(6, 2 * t.sy * pxPerM);
-      if (t.coasting) { ctx.setLineDash([5 * dpr, 4 * dpr]); ctx.globalAlpha = 0.55; }
-      else { ctx.setLineDash([]); ctx.globalAlpha = 1; }
-      ctx.strokeStyle = colour; ctx.strokeRect(px - wpx / 2, py - hpx / 2, wpx, hpx); ctx.setLineDash([]);
+      ctx.strokeStyle = colour; ctx.strokeRect(px - wpx / 2, py - hpx / 2, wpx, hpx);
       const tip = this.toCanvas(t.x + t.vx, t.y + t.vy);
       ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tip.px, tip.py); ctx.stroke();
       const speed = Math.hypot(t.vx, t.vy), range = Math.hypot(t.x, t.y);
       ctx.fillStyle = colour;
-      ctx.fillText(`R#${t.tid}  ${speed.toFixed(1)} m/s · ${range.toFixed(0)} m${t.coasting ? " · coast" : ""}`,
+      ctx.fillText(`R#${t.tid}  ${speed.toFixed(1)} m/s · ${range.toFixed(0)} m`,
                    px - wpx / 2 + 2 * dpr, py - hpx / 2 - 2 * dpr);
-      ctx.globalAlpha = 1;
     }
   }
   redraw() {
     this.backdrop();
     const r = this.last;
     if (!r || !r.connected) return;
-    this.drawPoints(r.points); this.drawTrails(); this.drawTargets(r.targets);
+    this.drawPoints(r.points); this.drawTargets(r.targets);
   }
   update(r) {
     if (r && typeof r.fov_half_deg === "number" && r.fov_half_deg > 0) this.fovHalfDeg = r.fov_half_deg;
     this.last = r;
-    if (!r || !r.connected) { this.trails.clear(); this.viewRangeM = NEAR_VIEW_M; this.backdrop(); return; }
-    this.ingestTrails(r.targets); this.updateViewRange(r); this.redraw();
+    if (!r || !r.connected) { this.viewRangeM = NEAR_VIEW_M; this.backdrop(); return; }
+    this.updateViewRange(r); this.redraw();
   }
-  setDisconnected() { this.last = null; this.trails.clear(); this.viewRangeM = NEAR_VIEW_M; this.backdrop(); }
+  setDisconnected() { this.last = null; this.viewRangeM = NEAR_VIEW_M; this.backdrop(); }
 }
 
 // ── wiring: SSE stream + stats poll ──

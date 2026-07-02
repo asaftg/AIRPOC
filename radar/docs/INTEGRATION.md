@@ -25,8 +25,8 @@ optional — an absent one keeps its current value.
 `/stats` echoes the currently-applied `cluster_eps_m` and `cluster_min_pts`
 (post-clamp), so initialise the sliders from `/stats` on load rather than
 assuming defaults. Tighter `eps` / higher `minpts` = fewer, tighter boxes;
-looser = more merging. (Changes affect DBSCAN immediately; existing tracks may
-**coast** for up to ~1.5 s before dropping, by design.)
+looser = more merging. Changes take effect on the **next frame** — a box that
+stops clustering disappears immediately (no coasting).
 
 ## Frame JSON (the `/stream` payload)
 
@@ -37,7 +37,7 @@ looser = more merging. (Changes affect DBSCAN immediately; existing tracks may
   "points":  [{"x":-11.9,"y":30.5,"z":0.1,"v":0.45,"snr":null,"r":32.7,"az":-21.4,"el":0.2,"tid":1}],
   "targets": [{"tid":1,"x":-11.6,"y":30.2,"z":0.1,"vx":1.34,"vy":0.25,"vz":0.04,
                "sx":0.95,"sy":0.99,"sz":0.25,"conf":1.0,"np":61,
-               "coasting":false,"class":"radar_detection"}] }
+               "class":"radar_detection"}] }
 ```
 
 - **Frame:** sensor frame, metres. `+x` right, `+y` forward (boresight), `+z`
@@ -51,11 +51,17 @@ looser = more merging. (Changes affect DBSCAN immediately; existing tracks may
   (**inert until Phase-2 firmware**, since `snr` is `null` now). Default the
   azimuth slider to ~±60 (useful AoA) and grey out the SNR slider while every
   `snr` is `null`.
-- **targets[]:** confirmed **class-less** tracks (live or coasting). `sx/sy/sz`
-  are box half-extents. `conf` 0..1. `coasting:true` = dead-reckoned this frame
-  (draw dashed/dim). `tid` is a transient per-sensor radar id — **fusion assigns
-  the global id**; do not treat `tid` as stable across a track's whole life.
-  `class` is always `"radar_detection"` — person/vehicle labelling is fusion's.
+- **targets[]:** **class-less per-frame detections** — a box is emitted **only
+  for a cluster detected this frame**. There is **no coasting**: a target the
+  sensor doesn't see this frame simply isn't in the list (it does not linger or
+  dead-reckon). `sx/sy/sz` are box half-extents; `vx/vy/vz` a light per-frame
+  velocity estimate; `conf` 0..1. `tid` is stable across frames via nearest-
+  neighbour association (so boxes keep their colour), but is a transient per-
+  sensor id — **fusion assigns the global id**. `class` is always
+  `"radar_detection"` — labelling is fusion's.
+  > Display persistence is the **GUI's** job — if you don't want a box to blink
+  > on a one-frame miss, hold-and-fade it briefly on your side (~300 ms). Real
+  > motion-model coasting belongs to the future **tracking** module, not here.
 
 ## Consuming it
 
@@ -64,7 +70,7 @@ Simplest — subscribe directly (what the previewer does):
 const es = new EventSource("http://<jetson>:8092/stream");
 es.onmessage = (e) => render(JSON.parse(e.data));
 ```
-`web/radar_view.js` is the reference PPI renderer (points, boxes, trails,
+`web/radar_view.js` is the reference PPI renderer (points, boxes,
 velocity arrows, breathing range rings, FOV wedge) — reuse or adapt it. If the
 GUI prefers to proxy rather than hit :8092 cross-origin, forward `/stream` and
 `/stats` through the GUI's own server.
