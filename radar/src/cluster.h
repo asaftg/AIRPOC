@@ -1,0 +1,32 @@
+/* DBSCAN + constant-velocity Kalman tracker for the AWR2944P point cloud.
+ *
+ * Port of the ground bench's radar/clustering.py — the PRIMARY box source
+ * while the firmware has no on-chip Group Tracker (see docs/FIRMWARE.md).
+ * Per frame: DBSCAN over (x,y,z,doppler) -> per-cluster centroid/extent ->
+ * greedy gated NN association -> CV Kalman update / coast -> M-of-N confirm.
+ *
+ * The 6-state [p,v] Kalman of the original is block-diagonal per axis, so
+ * this is implemented as three independent 2-state (pos,vel) filters —
+ * identical maths, much simpler in C. This module is deliberately behind
+ * a clean interface so on-chip gtrack TLVs (308/309) can replace it later
+ * without touching the parser or the previewer. */
+#ifndef AIRPOC_CLUSTER_H
+#define AIRPOC_CLUSTER_H
+
+#include "radar.h"
+
+typedef struct RadarClusterer RadarClusterer;
+
+RadarClusterer *cluster_new(void);
+void            cluster_free(RadarClusterer *c);
+
+/* Cluster+track one frame. `pts`/`n` are updated in place (each point's
+ * .tid is set to its cluster/track id, or 255). `now_s` is a monotonic
+ * timestamp (seconds); `dt` is seconds since the previous step. Confirmed
+ * targets (live or coasting within budget) are written to `out` up to
+ * `max_out`; returns the count. */
+int cluster_step(RadarClusterer *c, RadarPoint *pts, int n,
+                 double now_s, double dt,
+                 RadarTarget *out, int max_out);
+
+#endif /* AIRPOC_CLUSTER_H */
