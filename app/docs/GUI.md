@@ -21,6 +21,7 @@ sector, not a 360° PPI). Minimal text, large touch targets (14″ laptop → ta
 | `/` · `/app.css` · `/app.js` | the embedded page |
 | `/stream` | MJPEG multipart (the latest small picture, fanned to every screen) |
 | `/stats` | JSON, polled ~6 Hz (below) |
+| `/radar` | JSON radar frame, polled ~8 Hz: `connected`, `max_range_m`, `fov_half_deg`, `points:[[x,y,v,snr],…]`, `targets:[[tid,x,y,vx,vy,sx,sy,conf],…]` (metres, sensor frame). Source `radar_stub.c` until the AWR module lands. |
 | `/ctl?…` | one-shot controls (below) |
 
 `/stats` fields: `fps` (encoder), `src_fps` (EO channel), `mbps`, `zoom`, `res_w/h`,

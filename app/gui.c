@@ -7,6 +7,7 @@
 #define _GNU_SOURCE
 #include "gui.h"
 #include "eo_frame.h"
+#include "radar.h"
 #include "view.h"
 #include "illum.h"
 #include "web_assets.h"
@@ -231,6 +232,11 @@ static void handle_stats(int fd)
     int lon, lpw, lpr; double lfov;
     illum_snapshot(&lon, &lpw, &lfov, &lpr);
 
+    radar_frame_t rf;
+    char tracks_s[16];
+    if (radar_get_latest(&rf) && rf.connected) snprintf(tracks_s, sizeof tracks_s, "%d", rf.num_targets);
+    else snprintf(tracks_s, sizeof tracks_s, "null");
+
     double cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
     char cpu_s[16]; if (cpu < 0) snprintf(cpu_s, sizeof cpu_s, "null");
     else snprintf(cpu_s, sizeof cpu_s, "%.0f", cpu);
@@ -246,14 +252,45 @@ static void handle_stats(int fd)
         "\"hfov\":%.2f,\"vfov\":%.2f,\"mode\":\"%s\","
         "\"cpu_c\":%s,\"cam_c\":null,"
         "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d,"
-        "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"tracks\":null}\n",
+        "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"tracks\":%s}\n",
         efps, sfps, mbps,
         g_zoom, w, h, g_fps, g_q, preset,
         cam_hfov_deg(), cam_vfov_deg(), g_mode ? "track" : "scan",
-        cpu_s, lon, lpw, lfov, lpr);
+        cpu_s, lon, lpw, lfov, lpr, tracks_s);
 
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
+}
+
+static void handle_radar(int fd)
+{
+    radar_frame_t r;
+    int ok = radar_get_latest(&r);
+    size_t cap = 16384;
+    char *b = malloc(cap);
+    if (!b) { close(fd); return; }
+    int n = snprintf(b, cap,
+        "{\"connected\":%d,\"max_range_m\":%.0f,\"fov_half_deg\":%.0f,"
+        "\"num_points\":%d,\"num_targets\":%d,\"points\":[",
+        ok ? r.connected : 0, ok ? r.max_range_m : 0.0, ok ? r.fov_half_deg : 60.0,
+        ok ? r.num_points : 0, ok ? r.num_targets : 0);
+    if (ok) {
+        for (int i = 0; i < r.num_points && n < (int)cap - 64; i++)
+            n += snprintf(b + n, cap - n, "%s[%.1f,%.1f,%.1f,%.0f]",
+                          i ? "," : "", r.points[i].x, r.points[i].y, r.points[i].v, r.points[i].snr);
+        n += snprintf(b + n, cap - n, "],\"targets\":[");
+        for (int i = 0; i < r.num_targets && n < (int)cap - 96; i++)
+            n += snprintf(b + n, cap - n, "%s[%d,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f]",
+                          i ? "," : "", r.targets[i].tid, r.targets[i].x, r.targets[i].y,
+                          r.targets[i].vx, r.targets[i].vy, r.targets[i].sx, r.targets[i].sy,
+                          r.targets[i].conf);
+        n += snprintf(b + n, cap - n, "]}\n");
+    } else {
+        n += snprintf(b + n, cap - n, "],\"targets\":[]}\n");
+    }
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, b);
+    free(b);
 }
 
 static void stream_mjpeg(int fd)
@@ -292,6 +329,7 @@ static void *client(void *arg)
     req[n] = 0;
 
     if (has(req, "/stats"))          handle_stats(fd);
+    else if (has(req, "/radar"))     handle_radar(fd);
     else if (has(req, "/ctl")) {
         handle_ctl(req);
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";

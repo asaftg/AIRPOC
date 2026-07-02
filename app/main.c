@@ -6,6 +6,7 @@
  *   ./app [-d /dev/video0] [-p 8080] [-i /dev/sg-ir850]
  */
 #include "eo_frame.h"
+#include "radar.h"
 #include "gui.h"
 #include "illum.h"
 #include <getopt.h>
@@ -37,9 +38,11 @@ int main(int argc, char **argv)
         return 1;
     }
     illum_start(iport);                     /* optional; no-ops if absent */
+    radar_start(NULL);                      /* synthetic until the AWR module lands */
 
     if (gui_start(port) != 0) {
         fprintf(stderr, "app: GUI server failed to start\n");
+        radar_stop();
         eo_stop();
         return 1;
     }
@@ -49,6 +52,7 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "app: shutting down\n");
     gui_stop();
+    radar_stop();
     eo_stop();
     return 0;
 }
