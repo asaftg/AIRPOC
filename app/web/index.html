@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>AIRPOC · FAZE-1</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body class="night">
+<div id="app">
+
+  <header class="topbar">
+    <h1>FAZE-1</h1>
+    <div class="pills">
+      <span class="pill on" id="p-link"><span class="dot"></span><b id="v-link">—</b> Mb/s</span>
+      <span class="pill">BATT <b id="v-batt">—</b></span>
+      <span class="pill">ALT <b id="v-alt">—</b></span>
+      <span class="pill"><b id="v-zulu">--:--</b> Z</span>
+      <button class="icb" id="theme">NIGHT</button>
+      <button class="icb" id="devbtn">DEV</button>
+    </div>
+  </header>
+
+  <main id="stage">
+
+    <section id="eo" class="hero">
+      <img id="video" src="/stream" alt="EO">
+      <canvas id="eo-ovl"></canvas>
+      <div class="otl" id="eo-tl">EO</div>
+      <div class="otr" id="eo-tr">BRG —  RNG —</div>
+      <div class="track-hint" id="track-hint" hidden>MANUAL · tap a target</div>
+      <button class="exp" data-swap aria-label="swap radar and EO">
+        <svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6M4 4l7 7M20 20l-7-7"/></svg>
+      </button>
+    </section>
+
+    <section id="radar" class="pip">
+      <div class="panel-head"><span class="panel-title">RADAR</span><span class="hz" id="v-tracks">no data</span></div>
+      <div class="rwrap">
+        <canvas id="radar-cv"></canvas>
+        <button class="exp" data-swap aria-label="swap radar and EO">
+          <svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6M4 4l7 7M20 20l-7-7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <nav id="cluster">
+      <button class="big" id="light">LIGHT<small id="light-s">OFF</small></button>
+      <button class="big" id="illum">ILLUM<small id="illum-s">AUTO</small></button>
+      <button class="big" id="track">TRACK<small id="track-s">AUTO</small></button>
+      <button class="big" id="rec">REC</button>
+    </nav>
+
+    <div id="zoombar">
+      <button data-zoom="1">+</button>
+      <div id="v-zval">1.0×</div>
+      <button data-zoom="-1">−</button>
+    </div>
+
+    <aside id="dev">
+      <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
+
+      <div class="sec">STREAM</div>
+      <div class="presets" id="presets">
+        <button data-preset="LEAN">LEAN</button>
+        <button data-preset="SMOOTH" class="active">SMOOTH</button>
+        <button data-preset="BALANCED">BAL</button>
+        <button data-preset="CLEAR">CLEAR</button>
+      </div>
+      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="1" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
+      <div class="srow"><label>QUAL</label><input type="range" id="s-q" min="10" max="95" step="1" value="45"><span class="val" id="o-q">45</span></div>
+      <div class="est" id="v-est">EST — Mb/s · — fps</div>
+
+      <div class="sec">ILLUMINATOR <span class="tag" id="illum-tag">AUTO</span></div>
+      <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
+      <div class="srow"><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
+      <div class="kv muted" id="illum-note">AUTO fits the beam to the EO FOV at max power. Switch ILLUM to MAN to use these.</div>
+
+      <div class="sec">RADAR · display filters</div>
+      <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="17" max="40" step="0.5" value="17"><span class="val" id="ro-snr">17.0 dB</span></div>
+      <div class="srow"><label>FOV ±</label><input type="range" id="r-fov" min="5" max="60" step="1" value="60"><span class="val" id="ro-fov">60°</span></div>
+      <div class="srow"><label>SPEED MIN</label><input type="range" id="r-speed" min="0" max="5" step="0.1" value="0.4"><span class="val" id="ro-speed">0.4 m/s</span></div>
+      <div class="srow"><label>RANGE MIN</label><input type="range" id="r-rmin" min="0" max="30" step="0.5" value="0"><span class="val" id="ro-rmin">0 m</span></div>
+      <div class="kv muted">Display filter only. Chip cfg (SNR ≥17 dB floor, max FOV) is set by the radar module.</div>
+
+      <div class="sec">RADAR · cluster cfg <span class="tag" id="cluster-tag">→ radar</span></div>
+      <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>
+      <div class="srow"><label>MIN PTS</label><input type="range" id="r-minpts" min="2" max="8" step="1" value="2"><span class="val" id="ro-minpts">2</span></div>
+      <div class="kv muted">DBSCAN spacing (ε) and required points — pushed to the radar module's clusterer.</div>
+
+      <div class="sec">SYSTEM</div>
+      <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>
+      <div class="kv">EO SOURCE <b><span id="v-srcfps">—</span> fps</b></div>
+      <div class="sysbtns"><button id="restart">RESTART</button><button id="logs">LOGS</button></div>
+    </aside>
+
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+[Unit]
+Description=AIRPOC operator console (EO + illuminator GUI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@DIR@
+ExecStart=@BIN@ -d /dev/video0 -p 8080 -i /dev/sg-ir850
+Restart=on-failure
+RestartSec=2
+User=@USER@
+# camera (video) + illuminator serial (dialout) access via groups
+SupplementaryGroups=video dialout
+
+[Install]
+WantedBy=multi-user.target

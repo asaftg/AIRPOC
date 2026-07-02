@@ -24,6 +24,12 @@ maintains target state; the gimbal points the head at the track; guidance steers
 an effector. The NIR illuminator is a sensing aid for the EO camera, not a
 detection source.
 
+The **operator console (`app/`) is the system's main process**: it starts the
+sensors, streams the EO video + radar scope to the operator's laptop over WiFi, and
+relays operator commands back (target select for tracking, illuminator, zoom, and —
+later — gimbal). It reads each sensor's latest frame read-only and never sits in the
+control loop.
+
 ## Compute platform
 
 NVIDIA **Jetson Orin Nano Super** — the compute for both bench and the production
@@ -38,6 +44,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
+| Operator console (`app/`) | — | 🟡 field GUI + main process: real V4L2 EO view, digital zoom, tracking auto/manual, illuminator auto/manual, radar scope, stream presets, bright day/night — on-device runtime pending Jetson power | [`app/`](../app/README.md) |
 | Radar | — | 🟨 previewer + C daemon (builds clean, sim-verified; HW bring-up pending) | [`radar/`](../radar/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
@@ -57,10 +64,25 @@ use. Global shutter (no rolling-shutter skew) suits fast-moving targets. Detail:
 ### NIR illuminator (controls done; sync pending)
 SG-IR850-8M 850 nm illuminator with motor zoom over TTL UART; C controller +
 `sgctl` CLI, **HW-verified**. On/off, drive power, and beam-FOV controls are **live
-in the EO preview** (`eo/pipeline/`, via the illuminator shim). Purpose:
-light the EO scene so exposure can be short enough to freeze a moving target. The
-open item is **syncing the pulse to the camera exposure window** (see
-[`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail: [`illuminator/`](../illuminator/README.md).
+in the EO preview** (`eo/pipeline/`, via the illuminator shim) and in the operator
+console. Purpose: light the EO scene so exposure can be short enough to freeze a
+moving target. The open item is **syncing the pulse to the camera exposure window**
+(see [`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail:
+[`illuminator/`](../illuminator/README.md).
+
+### Operator console (`app/`) — main process (in progress)
+The field GUI and the system's main process. Owns the EO capture→AE→ISP→shrink→MJPEG
+path (real V4L2 via `eo/pipeline`, default; a synthetic thermal source for no-camera
+dev), the radar polar scope, tracking target-selection (AUTO = most important:
+fused → nearer → confidence; MANUAL = tap), and illuminator control (AUTO fits the
+beam to the camera FOV at max power; MANUAL from DEV). Serves the console over
+**MJPEG `/stream` + polled `/stats` + `/radar` + `GET /ctl`** — no websockets, no CDN,
+software MJPEG only (no NVENC/NVJPG on this SKU). Adds no load to the sensor capture
+paths. **Radar integration:** the scope runs on a synthetic source (`app/radar_stub.c`)
+today; it will consume the radar daemon per
+[`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md) — a reconciliation
+follow-up. Detail + endpoints: [`app/README.md`](../app/README.md) ·
+[`app/docs/GUI.md`](../app/docs/GUI.md).
 
 ### Radar (previewer done; on-HW bring-up pending)
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA** — data is the mmw_demo TLV
@@ -76,7 +98,8 @@ integrate with the board off; on-hardware bring-up pending. GUI contract:
 
 ### Detection / Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
-current state, and a link to its module folder.
+current state, and a link to its module folder. (Tracking target *selection* lives in
+`app/` today; the *tracker/gimbal pointing* is the future module.)
 
 ## Production readiness
 

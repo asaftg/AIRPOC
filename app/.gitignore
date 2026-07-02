@@ -1,0 +1,4 @@
+# build artifacts
+app
+*.o
+web_assets.h

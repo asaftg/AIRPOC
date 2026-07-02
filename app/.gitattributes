@@ -1,0 +1,5 @@
+# Line-ending discipline: scripts and source must stay LF (they run on the Jetson).
+* text=auto eol=lf
+# Windows-only launchers keep CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
