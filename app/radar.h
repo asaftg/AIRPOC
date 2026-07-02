@@ -20,5 +20,8 @@ int  radar_num_targets(void);    /* target count in the latest frame (for /stats
  * daemon control endpoint — see the request in radar/docs/INTEGRATION.md follow-up;
  * a no-op if the daemon doesn't implement it yet. */
 void radar_set_tune(double cluster_eps_m, int min_points);
+/* The daemon's APPLIED (clamped) cluster cfg, for the slider to reflect reality.
+ * Each is -1 until known. */
+void radar_applied_tune(double *eps, int *minpts);
 
 #endif /* AIRPOC_RADAR_H */

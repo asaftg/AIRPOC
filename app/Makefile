@@ -3,9 +3,9 @@
 # embedded.
 #
 #   sudo apt-get install -y libjpeg-turbo8-dev xxd
-#   make                 # real camera (V4L2 EO via eo/pipeline) + radar + illuminator
-#   make EO_SRC=stub     # deskside dev: synthetic EO source (no camera needed)
-#   ./app -d /dev/video0 -p 8080 -i /dev/sg-ir850
+#   make                 # V4L2 EO (via eo/pipeline) + radar + illuminator
+#   ./app -d /dev/video0 -p 8080 -i /dev/sg-ir850 -r 127.0.0.1:8092
+# No camera present? the app still runs and the GUI shows EO NOT CONNECTED.
 
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra -pthread
@@ -14,15 +14,8 @@ EOP      := ../eo/pipeline
 CPPFLAGS += -I$(ILLUM) -I$(EOP)
 LDLIBS   += -ljpeg -lm
 
-# EO source: real V4L2 datapath (default) or synthetic stub for no-camera dev.
-EO_SRC ?= v4l2
-ifeq ($(EO_SRC),stub)
-  EO_OBJ := eo_frame_stub.o
-else
-  EO_OBJ := eo_frame_v4l2.o capture.o ae.o isp.o sensor.o
-endif
-
-OBJ := main.o gui.o view.o radar_client.o illum.o sg_ir850.o $(EO_OBJ)
+OBJ := main.o gui.o view.o radar_client.o illum.o sg_ir850.o \
+       eo_frame_v4l2.o capture.o ae.o isp.o sensor.o
 
 app: web_assets.h $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
@@ -38,8 +31,6 @@ view.o: view.c view.h eo_frame.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ view.c
 radar_client.o: radar_client.c radar.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ radar_client.c
-eo_frame_stub.o: eo_frame_stub.c eo_frame.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ eo_frame_stub.c
 eo_frame_v4l2.o: eo_frame_v4l2.c eo_frame.h $(EOP)/pipeline.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ eo_frame_v4l2.c
 

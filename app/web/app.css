@@ -59,6 +59,10 @@ body.day{
   padding:4px 9px;font-size:11px;letter-spacing:.5px;color:var(--ambert);border-radius:2px;white-space:pre}
 .otl{left:10px}.otr{right:10px;text-align:right}
 #radar .otl,#radar .otr{display:none}
+.scrim{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
+  background:var(--canvas);color:var(--err);font-size:18px;letter-spacing:3px}
+.scrim[hidden]{display:none}
+#eo.hide-video #video,#eo.hide-video #eo-ovl{visibility:hidden}
 
 /* swap handle (only on the small pane) */
 .exp{position:absolute;top:7px;right:7px;width:30px;height:30px;padding:6px;background:rgba(0,0,0,.5);

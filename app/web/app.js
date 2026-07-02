@@ -89,18 +89,20 @@
   $("restart").onclick = function () { if (confirm("Restart AIRPOC service?")) ctl("restart=1"); };
   $("logs").onclick = function () { var l = $("logs"); l.textContent = "reserved"; setTimeout(function () { l.textContent = "LOGS"; }, 900); };
 
-  /* ── target model + selection (daemon schema: objects, class-less, coasting flag) ── */
+  /* ── target model + selection (daemon schema: class-less objects) ── */
   function targets(radar) {
     if (!radar || !radar.targets) return [];
     return radar.targets.map(function (t) {
       return { tid: t.tid, x: t.x, y: t.y, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, conf: t.conf,
-               coasting: !!t.coasting,
                rng: Math.hypot(t.x, t.y), az: Math.atan2(t.x, t.y) * 180 / Math.PI };
     }).filter(function (t) { return t.rng >= rp.rmin && Math.abs(t.az) <= rp.fov; });
   }
-  /* AUTO priority: fused (EO+radar) first [pending detector], then live-over-coasting,
-   * then nearer, then higher conf. */
-  function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.coasting - b.coasting) || (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
+  /* AUTO priority: fused (EO+radar) first [pending detector], then nearer, then conf. */
+  function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
+  /* Display persistence (GUI-owned): hold a dropped target's box at its last spot and
+   * fade over HOLD_MS so a one-frame miss doesn't blink. Not motion prediction — that
+   * (real coasting) belongs to the tracking module, not the display. */
+  var held = {}, HOLD_MS = 300;
   function engage(tid) {
     engagedTid = tid;
     $("track-hint").hidden = (trackMode !== "man") || (tid !== null);
@@ -173,7 +175,7 @@
     ctx.globalAlpha = 0.4; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - maxR); ctx.stroke();
     ctx.globalAlpha = 0.6; ctx.fillStyle = cyan; ctx.textAlign = "center"; ctx.fillText("N", cx, cy - maxR + 12 * dpr); ctx.textAlign = "left";
 
-    if (!radar || !radar.connected) { ctx.globalAlpha = 0.5; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NO DATA", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
+    if (!radar || !radar.connected) { ctx.globalAlpha = 0.5; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
     radarGeom = { cx: cx, cy: cy, scale: scale, dpr: dpr };
 
     /* returns — gated by the display filters (fov/range/speed; snr only when the
@@ -197,22 +199,22 @@
       ctx.globalAlpha = 0.5; ctx.stroke(); ctx.globalAlpha = 1;
     });
 
-    targets(radar).forEach(function (t) {
+    var now = Date.now();
+    Object.keys(held).forEach(function (tid) {
+      var h = held[tid], t = h.t, fade = Math.max(0, 1 - (now - h.ts) / HOLD_MS);
+      if (fade <= 0.02) return;
       var tc = W2C(t.x, t.y), locked = (t.tid === engagedTid);
       var col = locked ? css("--on") : TARGET_COLORS[t.tid % TARGET_COLORS.length];
       var wpx = Math.max(8 * dpr, 2 * t.sx * scale), hpx = Math.max(8 * dpr, 2 * t.sy * scale);
-      ctx.strokeStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
-      ctx.globalAlpha = t.coasting ? 0.5 : 1;                    /* coasting = dead-reckoned */
-      if (t.coasting) ctx.setLineDash([5 * dpr, 4 * dpr]);
+      ctx.globalAlpha = fade; ctx.strokeStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
       if (locked) {
         var cc = 8 * dpr, x0 = tc[0] - wpx / 2, y0 = tc[1] - hpx / 2;
         [[x0, y0, 1, 1], [x0 + wpx, y0, -1, 1], [x0, y0 + hpx, 1, -1], [x0 + wpx, y0 + hpx, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
       } else ctx.strokeRect(tc[0] - wpx / 2, tc[1] - hpx / 2, wpx, hpx);
-      ctx.setLineDash([]);
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
       var spd = Math.hypot(t.vx, t.vy);
       ctx.fillStyle = col; ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      ctx.fillText((locked ? "LOCK " : "R#") + t.tid + " " + spd.toFixed(0) + "m/s " + t.rng.toFixed(0) + "m" + (t.coasting ? " ·coast" : ""), tc[0] - wpx / 2, tc[1] - hpx / 2 - 3 * dpr);
+      ctx.fillText((locked ? "LOCK " : "R#") + t.tid + " " + spd.toFixed(0) + "m/s " + t.rng.toFixed(0) + "m", tc[0] - wpx / 2, tc[1] - hpx / 2 - 3 * dpr);
       ctx.globalAlpha = 1;
     });
   }
@@ -255,11 +257,13 @@
   function poll() {
     fetch("/stats").then(function (r) { return r.json(); }).then(function (d) {
       lastStats = d;
+      var eoc = !!d.eo_connected;                       /* real camera present? */
+      $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       $("v-link").textContent = num(d.mbps, 1); $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
       $("eo-tl").textContent = "EO · FOV " + num(d.hfov, 1, "°") + " · " + (d.zoom ? d.zoom.toFixed(1) : "1.0") + "×";
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
-      $("v-tracks").textContent = d.tracks === null ? "no data" : d.tracks + " TRK";
+      $("v-tracks").textContent = d.tracks === null ? "—" : d.tracks + " TRK";
       $("v-est").textContent = "EST " + num(d.mbps, 1) + " Mb/s · " + num(d.fps, 0) + " fps";
       $("v-srcfps").textContent = num(d.src_fps, 0); $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = num(d.cam_c, 0);
       if (typeof d.zoom === "number" && ZOOMS.indexOf(d.zoom) >= 0) { zoom = d.zoom; $("v-zval").textContent = zoom.toFixed(1) + "×"; }
@@ -269,15 +273,22 @@
         if (typeof d.lpower === "number" && idle($("s-pow"))) { var pc = Math.round(d.lpower * 100 / 255); $("s-pow").value = pc; $("o-pow").textContent = pc + "%"; }
         if (typeof d.lfov === "number" && idle($("s-fov"))) { $("s-fov").value = Math.round(d.lfov); $("o-fov").textContent = Math.round(d.lfov) + "°"; }
       } else { if (typeof d.lfov === "number") $("o-fov").textContent = Math.round(d.lfov) + "°"; $("o-pow").textContent = "MAX"; }
+      /* cluster cfg: reflect the daemon's APPLIED (clamped) value, not the request */
+      if (typeof d.radar_eps === "number" && idle($("r-eps"))) { $("r-eps").value = d.radar_eps; $("ro-eps").textContent = d.radar_eps.toFixed(1) + " m"; }
+      if (typeof d.radar_minpts === "number" && idle($("r-minpts"))) { $("r-minpts").value = d.radar_minpts; $("ro-minpts").textContent = d.radar_minpts; }
     }).catch(function () { $("v-link").textContent = "—"; $("p-link").classList.remove("on"); });
   }
 
   function pollRadar() {
     fetch("/radar").then(function (r) { return r.json(); }).then(function (d) {
-      lastRadar = d; ingestTrails(d);
-      var ts = targets(d);
-      if (trackMode === "auto") { var best = pickAuto(ts); engage(best ? best.tid : null); }
-      else if (engagedTid !== null && !ts.some(function (t) { return t.tid === engagedTid; })) engage(null); /* engaged target left the scene */
+      lastRadar = d;
+      if (!d.connected) { held = {}; trails = {}; engage(trackMode === "man" ? engagedTid : null); drawRadar(d); drawEO(); return; }
+      var cur = targets(d), now = Date.now(), present = {};
+      cur.forEach(function (t) { held[t.tid] = { t: t, ts: now }; present[t.tid] = 1; });
+      Object.keys(held).forEach(function (tid) { if (!present[tid] && now - held[tid].ts > HOLD_MS) delete held[tid]; });
+      ingestTrails(d);
+      if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
+      else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
       drawRadar(d); drawEO();
     }).catch(function () {});
   }

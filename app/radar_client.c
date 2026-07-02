@@ -23,6 +23,8 @@ static char           *g_json = NULL;      /* latest frame JSON (grown as needed
 static int             g_len = 0, g_cap = 0;
 static volatile int    g_connected = 0;    /* daemon reports a radar connected     */
 static volatile int    g_ntargets = 0;
+static volatile double g_ap_eps = -1;      /* daemon-applied cluster cfg (clamped) */
+static volatile int    g_ap_minpts = -1;
 static char            g_host[96] = "127.0.0.1";
 static int             g_port = 8092;
 
@@ -50,6 +52,23 @@ static void store_frame(const char *json, int len)
     if (g_json && len + 1 <= g_cap) { memcpy(g_json, json, len); g_json[len] = 0; g_len = len; }
     g_connected = conn; g_ntargets = nt;
     pthread_mutex_unlock(&lk);
+}
+
+/* One-shot GET /stats to read the daemon's APPLIED (clamped) cluster cfg, so the GUI
+ * slider reflects reality rather than the requested value. */
+static void refresh_applied_tune(void)
+{
+    int fd = connect_daemon();
+    if (fd < 0) return;
+    const char *req = "GET /stats HTTP/1.0\r\nHost: radar\r\n\r\n";
+    if (write(fd, req, strlen(req)) < 0) { close(fd); return; }
+    char buf[1024]; int len = 0; ssize_t n;
+    while (len < (int)sizeof(buf) - 1 && (n = read(fd, buf + len, sizeof(buf) - 1 - len)) > 0) len += (int)n;
+    close(fd);
+    buf[len < 0 ? 0 : len] = 0;
+    char *p;
+    if ((p = strstr(buf, "\"cluster_eps_m\":")))   g_ap_eps = atof(p + 16);
+    if ((p = strstr(buf, "\"cluster_min_pts\":"))) g_ap_minpts = atoi(p + 18);
 }
 
 /* Read one SSE session: send GET /stream, skip headers, extract `data: <json>` lines
@@ -95,6 +114,7 @@ static void *reader(void *a)
     while (run_flag) {
         int fd = connect_daemon();
         if (fd < 0) { pthread_mutex_lock(&lk); g_connected = 0; pthread_mutex_unlock(&lk); nap(1000); continue; }
+        refresh_applied_tune();          /* sync applied cluster cfg on (re)connect */
         run_session(fd);
         close(fd);
         pthread_mutex_lock(&lk); g_connected = 0; g_ntargets = 0; pthread_mutex_unlock(&lk);
@@ -146,4 +166,11 @@ void radar_set_tune(double cluster_eps_m, int min_points)
         cluster_eps_m, min_points);
     ssize_t w = write(fd, req, n); (void)w;
     close(fd);
+    refresh_applied_tune();              /* read back the applied (clamped) value */
+}
+
+void radar_applied_tune(double *eps, int *minpts)
+{
+    if (eps)    *eps = g_ap_eps;
+    if (minpts) *minpts = g_ap_minpts;
 }

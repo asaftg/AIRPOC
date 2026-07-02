@@ -35,10 +35,8 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_sig);
     signal(SIGPIPE, SIG_IGN);              /* dropped screens must not kill us */
 
-    if (eo_start(dev) != 0) {
-        fprintf(stderr, "app: EO channel failed to start\n");
-        return 1;
-    }
+    if (eo_start(dev) != 0)                  /* camera absent → GUI shows NOT CONNECTED */
+        fprintf(stderr, "app: EO camera not present — running with EO not connected\n");
     illum_start(iport);                     /* optional; no-ops if absent */
     radar_start(rport);                     /* consume the radar daemon's SSE feed */
 

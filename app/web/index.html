@@ -26,6 +26,7 @@
     <section id="eo" class="hero">
       <img id="video" src="/stream" alt="EO">
       <canvas id="eo-ovl"></canvas>
+      <div class="scrim" id="eo-scrim" hidden>EO · NOT CONNECTED</div>
       <div class="otl" id="eo-tl">EO</div>
       <div class="otr" id="eo-tr">BRG —  RNG —</div>
       <div class="track-hint" id="track-hint" hidden>MANUAL · tap a target</div>
@@ -86,7 +87,7 @@
       <div class="sec">RADAR · cluster cfg <span class="tag" id="cluster-tag">→ radar</span></div>
       <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>
       <div class="srow"><label>MIN PTS</label><input type="range" id="r-minpts" min="2" max="8" step="1" value="2"><span class="val" id="ro-minpts">2</span></div>
-      <div class="kv muted">DBSCAN spacing (ε) + required points → the radar daemon (needs its <code>/ctl</code> endpoint — pending from the radar agent).</div>
+      <div class="kv muted">DBSCAN spacing (ε) + required points → the radar daemon (live). Sliders show the daemon's <em>applied</em> value (clamped); tracks may coast ~1.5 s before a change shows.</div>
 
       <div class="sec">SYSTEM</div>
       <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>

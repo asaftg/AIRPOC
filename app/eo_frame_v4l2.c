@@ -1,8 +1,9 @@
-/* Real EO source — implements the eo_frame.h handoff on top of the eo/pipeline
- * capture + AE + ISP datapath (the EO module). A capture thread dequeues Y10 frames
- * from V4L2, runs the flicker-free AE, tone-maps to 8-bit, and publishes the latest
- * display frame to a small ring. This is the production EO provider; the synthetic
- * eo_frame_stub.c is the no-camera dev build (make EO_SRC=stub).
+/* EO source — implements the eo_frame.h handoff on top of the eo/pipeline capture +
+ * AE + ISP datapath (the EO module: IMX296 mono visible camera). A capture thread
+ * dequeues Y10 frames from V4L2, runs the flicker-free AE, tone-maps to 8-bit, and
+ * publishes the latest display frame to a small ring. If the camera isn't present,
+ * eo_start() fails cleanly, eo_connected() stays 0, and the GUI shows "NOT CONNECTED"
+ * (there is no synthetic fallback).
  *
  * Lane note: this reuses the EO module's capture/ae/isp/sensor as-is (links their
  * objects) — it does not reimplement or "optimize" them; that stays the EO datapath's
@@ -28,6 +29,7 @@ static uint64_t        seqv = 0;
 static double          t_cap = 0.0;
 static Sensor          sensor;
 static Capture         cap;
+static int             g_open = 0;         /* 1 once the camera opened successfully */
 
 static double now_s(void)
 {
@@ -63,7 +65,10 @@ static void *capture_thread(void *a)
         }
 
         int nb = (latest + 1) % NBUF;            /* only this thread writes `latest` */
-        isp_tonemap(frame, cap.bytesperline, cap.width, cap.height, out[nb]);
+        /* full-frame tone map to GRAY8 (no crop/scale here; the GUI's view.c does the
+         * transport shrink). eo/pipeline's fused crop+scale+tonemap API. */
+        isp_scale_tonemap(frame, cap.bytesperline, 0, 0, cap.width, cap.height,
+                          out[nb], cap.width, cap.height);
 
         pthread_mutex_lock(&lk);
         latest = nb; seqv++; t_cap = now_s();
@@ -93,17 +98,23 @@ int eo_start(const char *dev)
     }
     run_flag = 1;
     if (pthread_create(&th, NULL, capture_thread, NULL) != 0) { run_flag = 0; return -1; }
+    g_open = 1;
     fprintf(stderr, "eo: V4L2 %s %dx%d (real camera)\n", d, W, H);
     return 0;
 }
 
 void eo_stop(void)
 {
+    if (!g_open) return;                     /* never started (no camera) — nothing to close */
     if (run_flag) { run_flag = 0; pthread_join(th, NULL); }
     cap_close(&cap);
     sensor_close(&sensor);
     for (int i = 0; i < NBUF; i++) { free(out[i]); out[i] = NULL; }
+    g_open = 0;
 }
+
+/* 1 once the camera is open and has produced at least one frame; 0 if absent. */
+int eo_connected(void) { return g_open && latest >= 0; }
 
 int eo_get_latest(eo_frame_t *o)
 {

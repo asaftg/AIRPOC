@@ -1,9 +1,10 @@
 /* EO frame handoff — the single contract between the EO channel and the GUI.
  *
- * The EO agent owns capture/AE/ISP and implements this. The GUI only READS the
- * most-recent finished frame; it never copies on the capture path and adds no load
- * to it. Until the real EO channel lands, `eo_frame_stub.c` provides a synthetic
- * source so the app builds, streams, and is testable standalone.
+ * The EO camera is the Waveshare IMX296 (Sony IMX296, mono global-shutter, visible —
+ * not thermal). The EO channel owns capture/AE/ISP and implements this; the GUI only
+ * READS the most-recent finished frame, never copies on the capture path, and adds no
+ * load to it. If the camera isn't present the GUI shows "EO · NOT CONNECTED" (no
+ * synthetic imagery) — `eo_connected()` gates that.
  *
  * Zero-copy contract: eo_get_latest() returns a BORROWED pointer into an EO-owned
  * buffer. It stays valid until the next eo_get_latest() by the same consumer — the
@@ -30,8 +31,8 @@ typedef struct {
     double         t_capture; /* CLOCK_MONOTONIC seconds at capture (frame age)  */
 } eo_frame_t;
 
-/* Lifecycle. eo_start() returns 0 on success. dev is the capture device (ignored
- * by the stub). */
+/* Lifecycle. eo_start() returns 0 on success (camera opened); non-zero if absent —
+ * the app keeps running and the GUI shows NOT CONNECTED. dev is the capture device. */
 int  eo_start(const char *dev);
 void eo_stop(void);
 
@@ -39,8 +40,10 @@ void eo_stop(void);
  * is available, else 0. Must not add load to the capture path. */
 int  eo_get_latest(eo_frame_t *out);
 
-/* Optics for camera-FOV math (constants for the stub; from the sensor/lens in the
- * real channel). */
+/* 1 if the camera is present and streaming; 0 if absent (GUI shows NOT CONNECTED). */
+int  eo_connected(void);
+
+/* Optics for camera-FOV math (from the IMX296 sensor + lens). */
 double eo_focal_mm(void);
 double eo_pixel_um(void);
 

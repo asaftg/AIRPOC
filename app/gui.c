@@ -252,6 +252,10 @@ static void handle_stats(int fd)
     char tracks_s[16];
     if (radar_connected()) snprintf(tracks_s, sizeof tracks_s, "%d", radar_num_targets());
     else snprintf(tracks_s, sizeof tracks_s, "null");
+    double reps; int rmp; radar_applied_tune(&reps, &rmp);
+    char reps_s[16], rmp_s[16];
+    if (reps >= 0) snprintf(reps_s, sizeof reps_s, "%.1f", reps); else snprintf(reps_s, sizeof reps_s, "null");
+    if (rmp >= 0)  snprintf(rmp_s, sizeof rmp_s, "%d", rmp);       else snprintf(rmp_s, sizeof rmp_s, "null");
 
     double cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
     char cpu_s[16]; if (cpu < 0) snprintf(cpu_s, sizeof cpu_s, "null");
@@ -263,17 +267,18 @@ static void handle_stats(int fd)
 
     char body[720];
     int bl = snprintf(body, sizeof body,
-        "{\"fps\":%.0f,\"src_fps\":%.0f,\"mbps\":%.2f,"
+        "{\"fps\":%.0f,\"src_fps\":%.0f,\"mbps\":%.2f,\"eo_connected\":%d,"
         "\"zoom\":%d,\"res_w\":%d,\"res_h\":%d,\"fps_cap\":%d,\"q\":%d,\"preset\":\"%s\","
         "\"hfov\":%.2f,\"vfov\":%.2f,\"track\":\"%s\",\"illum_mode\":\"%s\",\"engage\":%d,"
         "\"cpu_c\":%s,\"cam_c\":null,"
         "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d,"
-        "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"tracks\":%s}\n",
-        efps, sfps, mbps,
+        "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"tracks\":%s,"
+        "\"radar_eps\":%s,\"radar_minpts\":%s}\n",
+        efps, sfps, mbps, eo_connected(),
         g_zoom, w, h, g_fps, g_q, preset,
         cam_hfov_deg(), cam_vfov_deg(), g_track_man ? "man" : "auto",
         g_illum_auto ? "auto" : "man", g_engage,
-        cpu_s, lon, lpw, lfov, lpr, tracks_s);
+        cpu_s, lon, lpw, lfov, lpr, tracks_s, reps_s, rmp_s);
 
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
