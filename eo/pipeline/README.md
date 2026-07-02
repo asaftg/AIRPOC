@@ -8,9 +8,10 @@ the validated bench tool (`eo/tools/imx296_preview.py`) — a port to C, not a r
 
 It runs **two decoupled threads** so the wire feed can never throttle capture or the
 detector. Capture runs at the full sensor rate on native Y10; the encoder runs
-rate-capped at the wire preset and does the only heavy pixel work (crop + downscale +
-tone-map + JPEG). This is the **"100% optimized EO output"** the GUI consumes — small,
-capped, and light on both CPU and WiFi **at all times**, whether or not anyone watches.
+rate-capped (`EO_FEED_FPS`) and does the only heavy pixel work (tone-map + JPEG at
+**full native resolution** — no downscale). This is the EO output the GUI consumes:
+full-detail image, kept light on CPU/WiFi by capping the encode rate and JPEG quality
+rather than by throwing away pixels — at all times, whether or not anyone watches.
 
 ```
 capture thread (~60 fps, native full-res):
@@ -18,8 +19,8 @@ capture thread (~60 fps, native full-res):
                        │                            └─► consume_frame() ─► detector (linear 10-bit; stub)
                        └─► publish newest Y10 + stats ─► framestore (mutex/cond)
                                                               │
-encoder thread (rate-capped to preset fps):                  ▼
-  wait for frame ─► crop(zoom)+downscale+tonemap to preset WxH, one fused pass (isp.c) ─► MJPEG :8091 (mjpeg.c)
+encoder thread (rate-capped, EO_FEED_FPS):                   ▼
+  wait for frame ─► crop(zoom)+tonemap at native res, one pass (isp.c) ─► MJPEG :8091 (mjpeg.c)
                 └─► focus sharpness on native ROI
  SG-IR850 illuminator (illum.c → ../../illuminator/src) ◄─ monitor buttons (/ctl)
 ```
@@ -29,8 +30,8 @@ encoder thread (rate-capped to preset fps):                  ▼
 | `capture.c` | V4L2 mmap capture; geometry probed from the driver |
 | `sensor.c` | IMX296 exposure(SHS1)/gain over i2c, REGHOLD-latched |
 | `ae.c` | flicker-free AE law (EMA + log-domain damped, exposure-first) |
-| `isp.c` | Y10 metering + focus sharpness (native); `isp_scale_tonemap` = fused crop+downscale+tone-map to the preset resolution |
-| `mjpeg.c` | preview: HTML page + MJPEG + `/stats` + `/ctl` + bandwidth presets (libjpeg-turbo) |
+| `isp.c` | Y10 metering + focus sharpness (native); `isp_scale_tonemap` = crop(zoom)+tone-map at native resolution |
+| `mjpeg.c` | preview: HTML page + MJPEG + `/stats` + `/ctl` (libjpeg-turbo) |
 | `illum.c` / `illum.h` | thread-safe shim over the SG-IR850 illuminator (optional device) |
 | `main.c` | capture thread + encoder thread + framestore hand-off; `consume_frame()` is the detector hook |
 
@@ -42,10 +43,9 @@ The illuminator controller itself lives in `illuminator/src/` and is linked in
 A single HTML page over the MJPEG stream with a live overlay and control bar:
 
 - **Overlay** (bottom-left, polled from `/stats` at ~7 Hz): fps, mean, exposure ms,
-  duty %, gain, camera FOV, zoom, and the current **feed preset** (resolution @ fps cap)
-  — plus a **focus** readout and a red **LASER ON** line when firing.
+  duty %, gain, camera FOV, zoom — plus a **focus** readout and a red **LASER ON**
+  line when firing.
 - **Digital zoom** 1× / 2× / 4× / 8× (center crop; capture stays at the sensor rate).
-- **Feed** LOW / MED / HIGH — the bandwidth preset (see the contract below).
 - **Focus** button: shows a center target box + a sharpness value with peak-%
   (turn the M12 ring to maximize) — reads the native frame, correct at any zoom.
 - **Illuminator** (if attached): **LASER ON/OFF** (ON confirms — invisible 850 nm
@@ -60,27 +60,21 @@ optimized feed from this module over HTTP. Everything below is served on `:8091`
 | Path | Purpose |
 |---|---|
 | `/` | the operator preview page (self-contained; for bring-up/testing, not the GUI) |
-| `/stream` | **the feed** — `multipart/x-mixed-replace` MJPEG, encode-once-serve-many, already cropped/downscaled/tone-mapped to the active preset. Just `<img src>` it. |
-| `/stats` | JSON telemetry (poll ~5–7 Hz): `fps, mean, exp_ms, duty_pct, gain, zoom, hfov, vfov, sharp, laser, lpower, lfov, lpresent, preset, width, height, maxfps` |
+| `/stream` | **the feed** — `multipart/x-mixed-replace` MJPEG, encode-once-serve-many, full native resolution (zoom-cropped), tone-mapped. Just `<img src>` it. |
+| `/stats` | JSON telemetry (poll ~5–7 Hz): `fps, mean, exp_ms, duty_pct, gain, zoom, hfov, vfov, sharp, laser, lpower, lfov, lpresent` |
 | `/ctl?zoom=N` | digital zoom 1/2/4/8 (center crop) |
-| `/ctl?preset=low\|med\|high` | bandwidth preset (below) |
 | `/ctl?laser=0\|1` · `power=0..255` · `fov=<deg>` | illuminator control |
 
-**Bandwidth presets** — the feed is downscaled + fps-capped + quality-tuned *before*
-encode, so the wire load is bounded regardless of scene or client count:
-
-| Preset | Resolution | fps cap | JPEG q | WiFi (measured, scene-dep.) |
-|---|---|---|---|---|
-| LOW  | 480×362 | 15 | 55 | ~2 Mb/s |
-| MED (default) | 640×483 | 20 | 72 | ~7 Mb/s |
-| HIGH | 960×725 | 25 | 82 | ~25 Mb/s |
-
-(Bitrate scales with scene detail — a sharp, textured scene at full focus is the high
-end; drop a preset or the JPEG quality to hold a tighter WiFi budget.)
+**Wire load.** The feed is **full native resolution** (1440×1088, or the zoom crop) —
+kept light without sacrificing image quality by capping the encode rate (`EO_FEED_FPS`,
+default 25; capture and detection still run at ~60 fps) and the JPEG quality
+(`EO_FEED_QUALITY`, default 85). On a detailed scene that lands around ~25 Mb/s; tune
+those two constants for a tighter WiFi budget rather than downscaling — a 1.6 MP sensor
+is already modest and small-target detail is what matters for counter-UAS.
 
 Detection is unaffected — the detector always sees the **native full-res Y10** frame
-inside this process (`consume_frame`); the feed resolution is a display concern only.
-The `/stream` MJPEG is grayscale (mono sensor); dimensions are reported live in `/stats`.
+inside this process (`consume_frame`). The `/stream` MJPEG is grayscale (mono sensor);
+dimensions are reported live in `/stats`.
 
 ## Build & run (on the Jetson)
 ```bash
@@ -93,14 +87,14 @@ make
 - **Two threads, decoupled through a mutex/cond framestore.** The capture thread runs
   at the sensor rate on native Y10 (dqbuf → memcpy → requeue → detector → AE) and never
   waits on the encoder. It publishes the newest frame + AE stats every 2nd frame; the
-  encoder thread wakes, rate-caps to the preset fps (dropping frames it's ahead of), and
-  does the only heavy pixel work on a private copy. Result: the WiFi feed is light and
-  bounded **at all times** and can't slow capture or detection — the feed is lean whether
-  or not anyone is watching (no client-gating; the cost is fixed and small by design).
-- **The encoder does one fused pass.** `isp_scale_tonemap` crops (the digital zoom),
-  box-average downscales to the preset width, and tone-maps to 8-bit in a single loop —
-  it never materializes a full-res 8-bit image, so encode cost scales with the *output*
-  size, not the sensor size.
+  encoder thread wakes, rate-caps to `EO_FEED_FPS` (dropping frames it's ahead of), and
+  does the only heavy pixel work on a private copy. Result: the feed can't slow capture
+  or detection, and its cost is fixed and small whether or not anyone is watching (no
+  client-gating). Bound the wire budget with `EO_FEED_FPS`/`EO_FEED_QUALITY`, not by
+  reducing resolution.
+- **The encoder does one pass.** `isp_scale_tonemap` crops (the digital zoom) and
+  tone-maps to 8-bit at native resolution in a single loop — no separate full-res
+  buffer built and discarded.
 - **Copy the frame out of the V4L2 mmap before processing.** The DMA buffer is
   *uncached*: per-pixel work read straight from it is latency-bound, ~100× slower
   (measured 414 ms vs 3.6 ms for the tone map). The capture thread does one streaming
@@ -125,10 +119,9 @@ make
 > detected + FOV/power/on-off controllable from the page. Illuminator integration
 > per [`illuminator/docs/PREVIEW_INTEGRATION.md`](../../illuminator/docs/PREVIEW_INTEGRATION.md).
 >
-> **This revision (verified on-device 2026-07-01):** capture/encoder split into two
-> threads + bandwidth presets. Capture holds **60 fps at every preset**; the whole
-> process draws **~0.42 of one core with no client and ~0.47 with a client** (down from
-> ~1 full core in the old encode-every-frame-full-res path — clients are nearly free
-> thanks to encode-once-serve-many). WiFi is bounded by the preset (LOW/MED/HIGH ≈
-> 2/7/25 Mb/s on a detailed scene) and presets switch live. Remaining to fully retire
-> the Python preview: a systemd unit, and wiring the real detector into `consume_frame()`.
+> **This revision:** capture/encoder split into two threads; the feed is **full native
+> resolution** (no downscale), kept light by capping the encode rate (`EO_FEED_FPS`) and
+> JPEG quality (`EO_FEED_QUALITY`). Capture/detection stay at ~60 fps while the encoder
+> runs capped; encode-once-serve-many so extra clients are nearly free. Remaining to
+> fully retire the Python preview: a systemd unit, and wiring the real detector into
+> `consume_frame()`.

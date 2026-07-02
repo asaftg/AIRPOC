@@ -1,8 +1,9 @@
 /* Light mono ISP for the wire feed. Two jobs:
  *   - metrics on the NATIVE frame: AE mean (isp_mean10) + focus sharpness (isp_sharpness)
- *   - isp_scale_tonemap: crop(zoom) + box-average downscale + black-level/adaptive-white
- *     tone map + gamma, in ONE fused pass to the preset resolution. Never builds a
- *     full-res 8-bit image — keeps the encoder cheap. The detector uses the raw Y10. */
+ *   - isp_scale_tonemap: crop(zoom) + black-level/adaptive-white tone map + gamma in one
+ *     pass. Output is native resolution (ow=cw, oh=ch): no downscale, full detail. It
+ *     supports box-average downscale if ever asked (ow<cw), but the feed runs 1:1.
+ *     The detector uses the raw Y10; tone/gamma here is for the human view only. */
 #include "pipeline.h"
 #include <math.h>
 #include <stdint.h>

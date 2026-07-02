@@ -63,7 +63,7 @@ static void *encoder_thread(void *arg)
 {
     FrameStore *fs = arg;
     uint8_t *local = malloc((size_t)fs->w * fs->h * 2 + 64);       /* private Y10 copy */
-    uint8_t *out8  = malloc((size_t)EO_WIDTH * EO_HEIGHT);         /* max preset output */
+    uint8_t *out8  = malloc((size_t)EO_WIDTH * EO_HEIGHT);         /* full-res 8-bit out */
     if (!local || !out8) { perror("malloc(enc)"); return NULL; }
     unsigned long seen = 0;
     double last_pub = 0.0;
@@ -74,9 +74,9 @@ static void *encoder_thread(void *arg)
             pthread_cond_wait(&fs->cond, &fs->lock);
         if (fs->stop) { pthread_mutex_unlock(&fs->lock); break; }
 
-        /* Rate-cap to the preset without copying if we're ahead of schedule. */
-        EoPreset p = mjpeg_preset();
-        double t = now_s(), min_dt = p.fps > 0 ? 1.0 / p.fps : 0.0;
+        /* Rate-cap the encode without copying if we're ahead of schedule. Capture and
+         * the detector keep running at the sensor rate regardless. */
+        double t = now_s(), min_dt = EO_FEED_FPS > 0 ? 1.0 / EO_FEED_FPS : 0.0;
         if (last_pub > 0 && (t - last_pub) < min_dt) { seen = fs->seq; pthread_mutex_unlock(&fs->lock); continue; }
 
         int bpl = fs->bpl, w = fs->w, h = fs->h;
@@ -87,12 +87,12 @@ static void *encoder_thread(void *arg)
 
         mjpeg_set_sharp(isp_sharpness(local, bpl, w, h));          /* focus, native ROI */
 
-        int z = mjpeg_zoom();                                       /* 1/2/4/8 crop     */
+        /* Digital zoom = center crop; feed stays native resolution (no downscale). */
+        int z = mjpeg_zoom();                                       /* 1/2/4/8          */
         int cw = w / z, ch = h / z, cx = (w - cw) / 2, cy = (h - ch) / 2;
-        int ow = p.width, oh = p.width * h / w;
-        isp_scale_tonemap(local, bpl, cx, cy, cw, ch, out8, ow, oh);
+        isp_scale_tonemap(local, bpl, cx, cy, cw, ch, out8, cw, ch);
 
-        mjpeg_publish(out8, ow, oh, fps, mean, el, g);
+        mjpeg_publish(out8, cw, ch, fps, mean, el, g);
         last_pub = t;
     }
     free(local); free(out8);

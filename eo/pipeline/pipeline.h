@@ -88,19 +88,20 @@ void cap_requeue(Capture *c, int index);
 double isp_mean10(const uint8_t *y10, int bpl, int w, int h);
 /* Focus metric: Tenengrad over the native center ROI, on 10-bit values. */
 double isp_sharpness(const uint8_t *y10, int bpl, int w, int h);
-/* Wire feed: crop(cx,cy,cw,ch) -> box-average downscale to ow*oh -> tone map -> 8-bit
- * (one fused pass; crop = digital zoom). */
+/* Wire feed: crop(cx,cy,cw,ch) of the Y10 frame -> tone map -> 8-bit, native pixels
+ * (crop = digital zoom; ow=cw/oh=ch keeps full resolution, no downscale). */
 void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
                          uint8_t *out8, int ow, int oh);
 
-/* ---- Bandwidth presets for the wire feed (display quality only; detection is
- * always native/full-res). Selected via /ctl?preset=low|med|high. ---- */
-typedef struct { const char *name; int width; int fps; int quality; } EoPreset;
+/* ---- Wire feed tuning. Full native resolution; kept light on WiFi/CPU by capping
+ * the encode rate (capture + detection still run at the sensor rate) and the JPEG
+ * quality — NOT by downscaling. ---- */
+#define EO_FEED_FPS      25            /* encoder rate cap; capture stays ~60 fps */
+#define EO_FEED_QUALITY  85            /* MJPEG quality (libjpeg-turbo)           */
 
-/* ---- MJPEG monitor server (HTML overlay + zoom/preset controls, /stream, /stats, /ctl) ---- */
+/* ---- MJPEG monitor server (HTML overlay + zoom control, /stream, /stats, /ctl) ---- */
 int      mjpeg_start(int port);              /* spawns the HTTP server thread    */
 int      mjpeg_zoom(void);                   /* current digital zoom (1/2/4/8)   */
-EoPreset mjpeg_preset(void);                 /* current wire preset (LOW/MED/HIGH) */
 void     mjpeg_set_sharp(double sharpness);  /* focus metric for /stats          */
 void     mjpeg_publish(const uint8_t *gray, int w, int h,   /* encoded feed + stats */
                        double fps, double mean, int exp_lines, int gain);
