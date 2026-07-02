@@ -38,7 +38,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
-| Radar | — | 🟨 previewer + C daemon (untested on HW) | [`radar/`](../radar/README.md) |
+| Radar | — | 🟨 previewer + C daemon (builds clean, sim-verified; HW bring-up pending) | [`radar/`](../radar/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -68,7 +68,10 @@ point cloud over UART. The C daemon (`radar/src/`) pushes the A/G long-range
 profile, parses the stream drop-free, clusters it into **class-less** target
 boxes (host DBSCAN + Kalman, until on-chip gtrack lands), and serves a PPI
 previewer over SSE on `:8092`. Detects vehicles/drones/humans out to max range
-(human baseline ~100 m). Built but not yet compiled/run on the board. Detail:
+(human baseline ~100 m). Builds clean and is verified end-to-end in a `-s`
+simulation mode (synthetic scene through the real pipeline) so the GUI can
+integrate with the board off; on-hardware bring-up pending. GUI contract:
+[`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md). Detail:
 [`radar/`](../radar/README.md).
 
 ### Detection / Fusion / Tracking / Gimbal / Guidance (not started)

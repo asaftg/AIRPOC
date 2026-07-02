@@ -18,6 +18,7 @@
 #include "cluster.h"
 #include "wire.h"
 #include "http.h"
+#include "sim.h"
 #include <getopt.h>
 #include <math.h>
 #include <signal.h>
@@ -91,9 +92,9 @@ int main(int argc, char **argv) {
     const char *data_dev = "/dev/radar-data";
     const char *cfg      = "cfg/awr2944P_ag.cfg";
     const char *webroot  = "web";
-    int http_port = 8092, data_baud = 3125000, cli_baud = 115200, skip_cfg = 0, opt;
+    int http_port = 8092, data_baud = 3125000, cli_baud = 115200, skip_cfg = 0, sim = 0, opt;
 
-    while ((opt = getopt(argc, argv, "C:D:c:b:p:w:n")) != -1) {
+    while ((opt = getopt(argc, argv, "C:D:c:b:p:w:ns")) != -1) {
         switch (opt) {
             case 'C': cli_dev = optarg; break;
             case 'D': data_dev = optarg; break;
@@ -102,9 +103,10 @@ int main(int argc, char **argv) {
             case 'p': http_port = atoi(optarg); break;
             case 'w': webroot = optarg; break;
             case 'n': skip_cfg = 1; break;
+            case 's': sim = 1; break;
             default:
                 fprintf(stderr, "usage: %s [-C cli] [-D data] [-c cfg] "
-                        "[-b baud] [-p port] [-w web] [-n]\n", argv[0]);
+                        "[-b baud] [-p port] [-w web] [-n] [-s]\n", argv[0]);
                 return 2;
         }
     }
@@ -127,6 +129,26 @@ int main(int argc, char **argv) {
     http_start(http_port, webroot);
     fprintf(stderr, "radar_preview: previewer http://0.0.0.0:%d/  profile=%s\n",
             http_port, profile);
+
+    /* Simulation mode: no hardware. Feed synthetic mmw_demo TLV bytes
+     * through the real parser+clusterer so the whole pipeline and the
+     * previewer run with the board off (for the GUI agent to develop). */
+    if (sim) {
+        fprintf(stderr, "radar_preview: SIMULATION mode (no board)\n");
+        TLVStream *st = tlv_stream_new();
+        if (!st) { perror("tlv_stream_new"); return 1; }
+        static uint8_t sbuf[64 * 1024];
+        uint32_t fn = 0;
+        double t0 = now_s();
+        while (g_run) {
+            size_t n = sim_build_frame(sbuf, sizeof(sbuf), fn++, now_s() - t0);
+            if (n) tlv_stream_feed(st, sbuf, n, on_frame, &ctx);
+            usleep(50000);      /* 20 Hz */
+        }
+        tlv_stream_free(st);
+        cluster_free(ctx.clust); free(ctx.json);
+        return 0;
+    }
 
     /* Push the profile over the CLI UART once (best effort). */
     if (!skip_cfg) {

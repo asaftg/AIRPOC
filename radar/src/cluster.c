@@ -7,6 +7,10 @@
 #define EPS_POS_M        8.0f
 #define EPS_DOP_MPS      3.0f
 #define MIN_SAMPLES      2
+/* Dynamic-only: points slower than this (|radial doppler|) are static
+ * clutter — never seed or join a cluster, so no boxes form on walls/ground.
+ * Matches the ground bench's speed_min_mps gate; humans walk >0.4 m/s. */
+#define SPEED_MIN_MPS    0.4f
 #define MIN_SIZE_M       0.25f
 #define MAX_SIZE_M       3.0f
 #define ASSOC_GATE_M     5.0f
@@ -135,11 +139,13 @@ static int dbscan(const RadarPoint *pts, int n, int *labels) {
     for (int i = 0; i < n; i++) {
         if (visited[i]) continue;
         visited[i] = 1;
-        /* count neighbours of i */
+        if (fabsf(pts[i].doppler) < SPEED_MIN_MPS) continue;   /* static: never seeds */
+        /* count neighbours of i (static points are ineligible as neighbours) */
         int cnt = 0;
         for (int j = 0; j < n; j++) {
             float dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, dz = pts[i].z - pts[j].z;
-            int ok = (dx*dx + dy*dy + dz*dz) <= eps2 &&
+            int ok = fabsf(pts[j].doppler) >= SPEED_MIN_MPS &&
+                     (dx*dx + dy*dy + dz*dz) <= eps2 &&
                      fabsf(pts[i].doppler - pts[j].doppler) <= EPS_DOP_MPS;
             nbr[j] = ok; cnt += ok;
         }
@@ -156,7 +162,8 @@ static int dbscan(const RadarPoint *pts, int n, int *labels) {
             static uint8_t nbr2[RADAR_MAX_POINTS];
             for (int k = 0; k < n; k++) {
                 float dx = pts[jj].x - pts[k].x, dy = pts[jj].y - pts[k].y, dz = pts[jj].z - pts[k].z;
-                int ok = (dx*dx + dy*dy + dz*dz) <= eps2 &&
+                int ok = fabsf(pts[k].doppler) >= SPEED_MIN_MPS &&
+                         (dx*dx + dy*dy + dz*dz) <= eps2 &&
                          fabsf(pts[jj].doppler - pts[k].doppler) <= EPS_DOP_MPS;
                 nbr2[k] = ok; cnt2 += ok;
             }

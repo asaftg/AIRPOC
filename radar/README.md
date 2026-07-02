@@ -34,9 +34,16 @@ Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres. `snr` is
 ```
 cd radar/src && make            # pure C + pthreads + libm, no external deps
 ./radar_preview -w ../web       # push cfg/awr2944P_ag.cfg, stream, serve :8092
+./radar_preview -s -w ../web    # SIMULATION: full pipeline, no board (see below)
 ```
 Options: `-C` cli dev, `-D` data dev, `-c` cfg, `-b` data baud, `-p` port,
-`-w` webroot, `-n` skip cfg push (chip already configured).
+`-w` webroot, `-n` skip cfg push (chip already configured), `-s` simulate.
+
+**Develop without hardware.** `-s` feeds a synthetic scene (walking person +
+receding vehicle + static clutter) through the real parser/clusterer/wire path
+and serves the same endpoints — so the previewer and the GUI can be built with
+the Jetson off. The GUI integration contract is in
+[`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 
 Standalone-runnable: with no board present it serves the page and reports
 `connected:false`, retrying the ports — it never crashes on a missing peer.

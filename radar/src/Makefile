@@ -4,8 +4,8 @@ CC     ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -pthread
 LDLIBS  = -lpthread -lm
 
-SRC = main.c serial.c cfg_push.c tlv.c cluster.c wire.c http.c
-HDR = radar.h serial.h cfg_push.h tlv.h cluster.h wire.h http.h
+SRC = main.c serial.c cfg_push.c tlv.c cluster.c wire.c http.c sim.c
+HDR = radar.h serial.h cfg_push.h tlv.h cluster.h wire.h http.h sim.h
 OBJ = $(SRC:.c=.o)
 BIN = radar_preview
 
