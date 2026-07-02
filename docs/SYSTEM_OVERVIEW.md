@@ -24,6 +24,12 @@ maintains target state; the gimbal points the head at the track; guidance steers
 an effector. The NIR illuminator is a sensing aid for the EO camera, not a
 detection source.
 
+The **operator console (`app/`) is the system's main process**: it starts the
+sensors, streams the EO video + radar scope to the operator's laptop over WiFi, and
+relays operator commands back (target select for tracking, illuminator, zoom, and —
+later — gimbal). It reads each sensor's latest frame read-only and never sits in the
+control loop.
+
 ## Compute platform
 
 NVIDIA **Jetson Orin Nano Super** — the compute for both bench and the production
@@ -38,8 +44,8 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + operator monitor | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
-| Operator console (`app/`) | — | 🟡 field GUI + main process; EO view/zoom/illuminator/stream presets/day-night live on the synthetic source, real EO handoff pending | [`app/`](../app/README.md) |
-| Radar | — | ⬜ not started | — |
+| Operator console (`app/`) | — | 🟡 field GUI + main process: real V4L2 EO view, digital zoom, tracking auto/manual, illuminator auto/manual, radar scope, stream presets, bright day/night — on-device runtime pending Jetson power | [`app/`](../app/README.md) |
+| Radar | — | 🟡 GUI scope + `radar.h` contract + synthetic source live in `app/`; real AWR reader not started | [`app/radar.h`](../app/radar.h) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -63,9 +69,30 @@ light the EO scene so exposure can be short enough to freeze a moving target. Th
 open item is **syncing the pulse to the camera exposure window** (see
 [`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail: [`illuminator/`](../illuminator/README.md).
 
-### Radar / Detection / Fusion / Tracking / Gimbal / Guidance (not started)
+### Operator console (`app/`) — main process (in progress)
+The field GUI and the system's main process. Owns the EO capture→AE→ISP→shrink→MJPEG
+path (real V4L2 via `eo/pipeline`, default; a synthetic thermal source for no-camera
+dev), the radar polar scope, tracking target-selection (AUTO = most important:
+fused → nearer → confidence; MANUAL = tap), and illuminator control (AUTO fits the
+beam to the camera FOV at max power; MANUAL from DEV). Serves the console over
+**MJPEG `/stream` + polled `/stats` + `/radar` + `GET /ctl`** — no websockets, no CDN,
+software MJPEG only (no NVENC/NVJPG on this SKU). Adds no load to the sensor capture
+paths. Detail + endpoints: [`app/README.md`](../app/README.md) ·
+[`app/docs/GUI.md`](../app/docs/GUI.md).
+
+### Radar (GUI-integrated; sensor module not started)
+The GUI already renders a live radar sector scope and consumes the point cloud +
+clustered targets over the `app/radar.h` contract (`/radar`), with a synthetic source
+(`app/radar_stub.c`) until the real reader lands. The **real AWR reader is not
+started** — when built it implements `radar_start/stop/get_latest/set_tune`. Chip cfg
+expectation: **SNR floor ≥17 dB** (below it the chip collapses) and **max FOV**, set by
+the radar module (not the GUI); the GUI only filters the display and pushes DBSCAN
+cluster cfg (ε / min-pts).
+
+### Detection / Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
-current state, and a link to its module folder.
+current state, and a link to its module folder. (Tracking target *selection* lives in
+`app/` today; the *tracker/gimbal pointing* is the future module.)
 
 ## Production readiness
 

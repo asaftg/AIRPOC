@@ -39,6 +39,8 @@ static volatile int  g_q     = 45;        /* JPEG quality                      *
 static volatile int  g_track_man  = 0;    /* tracking: 0 auto / 1 manual       */
 static volatile int  g_illum_auto = 1;    /* illuminator: 1 auto(fit+max)/0 man*/
 static volatile int  g_engage     = -1;   /* engaged target tid, -1 = none     */
+static double        g_r_eps      = 8.0;  /* radar cluster cfg (pushed to radar) */
+static int           g_r_minpts   = 2;
 static char          g_preset[16] = "SMOOTH";
 static pthread_mutex_t g_preset_lk = PTHREAD_MUTEX_INITIALIZER;
 
@@ -201,6 +203,7 @@ static int has(const char *req, const char *path)   /* "GET <path>" prefix match
 static void send_asset(int fd, const char *ctype, const unsigned char *body, unsigned len)
 {
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\n"
+                "Cache-Control: no-cache, must-revalidate\r\n"
                 "Content-Length: %u\r\nConnection: close\r\n\r\n", ctype, len);
     ssize_t wr = write(fd, body, len); (void)wr;
 }
@@ -226,6 +229,8 @@ static void handle_ctl(const char *req)
     }
     if ((q = strstr(req, "track=")))  g_track_man = (strncmp(q + 6, "man", 3) == 0);
     if ((q = strstr(req, "engage="))) g_engage = atoi(q + 7);
+    if ((q = strstr(req, "radar_eps=")))    { g_r_eps = atof(q + 10); radar_set_tune(g_r_eps, g_r_minpts); }
+    if ((q = strstr(req, "radar_minpts="))) { g_r_minpts = atoi(q + 13); radar_set_tune(g_r_eps, g_r_minpts); }
     if ((q = strstr(req, "illum=")))  { g_illum_auto = (strncmp(q + 6, "auto", 4) == 0); if (g_illum_auto) apply_illum_auto(); }
     if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));
     if (!g_illum_auto) {                 /* manual beam control only when not auto */

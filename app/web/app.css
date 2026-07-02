@@ -17,11 +17,14 @@ body.night{
   --fg:#d8dee9;--muted:#99a3b8;--dim:#5a6173;
   --amber:#ffb454;--ambert:#ffd7a3;--on:#6cdf8a;--err:#ff6b6b;--cyan:#00d4ff;
 }
+/* DAY = bright/high-contrast for direct sun: light chrome + dark text. Video and
+ * on-glass symbology (reticle, scope, locks, overlay chips) stay bright — they sit on
+ * the dark sensor image, so those accent vars stay vivid in both modes. */
 body.day{
-  --bg:#111621;--panel:#1a2130;--head:#22293a;--sub:#161c29;--canvas:#0a0f18;
-  --bd:#39435a;--bd2:#4a566f;--bd3:#5a698a;
-  --fg:#ffffff;--muted:#cdd6e6;--dim:#8b96ad;
-  --amber:#ffc46a;--ambert:#ffe2bd;--on:#7bef99;--err:#ff8080;--cyan:#3fe0ff;
+  --bg:#eef1f5;--panel:#f8fafc;--head:#ffffff;--sub:#e7ebf1;--canvas:#0a0c10;
+  --bd:#c8cfda;--bd2:#aeb7c6;--bd3:#93a0b5;
+  --fg:#111621;--muted:#3d4553;--dim:#6b7484;
+  --amber:#d97a00;--ambert:#ffd7a3;--on:#188f45;--err:#d32f2f;--cyan:#0a93b5;
 }
 #app{display:flex;flex-direction:column;height:100vh;background:var(--bg)}
 

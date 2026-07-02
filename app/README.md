@@ -7,9 +7,10 @@ this process starts them too.
 
 ```
  EO channel (owned by eo/) ──read latest frame──►  app/ (this module)
-                                                    ├─ shrink + JPEG (one small
+ radar module (radar.h) ────read latest frame────►  ├─ shrink + JPEG (one small
                                                     │   picture per tick, ≤60 fps)
-                                                    ├─ HTTP: / /stream /stats /ctl
+                                                    ├─ tracking (auto/manual select)
+                                                    ├─ HTTP: / /stream /stats /radar /ctl
                                                     └─ illuminator control (illum shim)
  operator laptop browser ◄── MJPEG + JSON over WiFi ─┘
 ```
@@ -53,15 +54,22 @@ sh systemd/install.sh
 - **EO** — real V4L2 provider (`eo_frame_v4l2.c`) reuses the eo/pipeline capture+AE+ISP
   and is the default build; verify on the Jetson (needs the camera). `EO_SRC=stub` is
   the no-camera dev build with a realistic thermal scene.
-- **Radar** — GUI integration is done end-to-end: contract (`radar.h`), `/radar`
-  endpoint, and a live polar scope (range rings, limited-azimuth FOV wedge, doppler
-  returns, target boxes + trails, PIP↔hero swap). Source is `radar_stub.c` (synthetic)
-  until the real AWR reader lands — a link-time swap.
-- **Illuminator** — on/off·power·beam-FOV + AUTO-FOV, live via the illum shim.
-- Also live: digital zoom, stream presets (fps/quality/est-Mb/s), day/night, DEV, CPU
-  temp, tracks count.
-- Reserved (need their modules/bus): SCAN/TRACK logic, BRG/RNG, BATT/ALT, REC, NIR
-  strobe, EO detection box/confidence.
+- **Radar** — GUI integration done end-to-end: contract (`radar.h`), `/radar` endpoint,
+  live polar scope (rings, limited-azimuth FOV wedge, doppler returns, target boxes +
+  trails, PIP↔hero swap). Source is `radar_stub.c` (synthetic) until the real AWR reader
+  lands — a link-time swap.
+- **Tracking** — `TRACK` is AUTO/MANUAL. AUTO engages the most important target
+  (fused → nearer → higher confidence); MANUAL engages the target you tap (EO or scope).
+  Engaged target renders as a green LOCK; `engage` flows to `/ctl`/`/stats`.
+- **Illuminator** — `ILLUM` is AUTO/MANUAL. AUTO fits the beam to the camera FOV at max
+  power (re-applied on zoom); MANUAL uses the DEV PWR/BEAM sliders. `LIGHT` fires it.
+- **Radar tuning** — DEV has display filters (SNR / FOV / speed / range, client-side)
+  and cluster cfg (`CLUSTER ε` / `MIN PTS` → radar module via `radar_set_tune`). Chip cfg
+  (SNR ≥17 dB floor, max FOV) is the radar module's job, not the GUI.
+- Also live: digital zoom, stream presets (fps/quality/est-Mb/s), **day = bright white
+  theme**, DEV, CPU temp, tracks count.
+- Reserved (need their modules/bus): BRG/RNG, BATT/ALT, REC, NIR strobe, EO detection
+  box/confidence, gimbal pointing from the engaged track.
 
 > Pitfall: the operator laptop is on the drone's WiFi with **no internet** — the page
 > loads **no external fonts or icons**. Keep `web/` fully self-contained.

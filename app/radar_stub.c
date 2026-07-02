@@ -116,3 +116,12 @@ int radar_get_latest(radar_frame_t *out)
     pthread_mutex_unlock(&lk);
     return out->connected;
 }
+
+static double g_eps = 8.0;      /* DBSCAN spacing (m) — stored; real reader uses it */
+static int    g_minpts = 2;     /* required points per cluster                       */
+void radar_set_tune(double cluster_eps_m, int min_points)
+{
+    if (cluster_eps_m > 0) g_eps = cluster_eps_m;
+    if (min_points >= 1)   g_minpts = min_points;
+    (void)g_eps; (void)g_minpts;   /* synthetic targets are fixed; stored for parity */
+}

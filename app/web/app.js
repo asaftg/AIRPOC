@@ -80,6 +80,10 @@
   bindR("r-speed", "speed", function (v) { return v.toFixed(1) + " m/s"; });
   bindR("r-rmin", "rmin", function (v) { return v.toFixed(0) + " m"; });
 
+  /* cluster cfg — pushed to the radar module's DBSCAN (not a display filter) */
+  $("r-eps").oninput = function () { $("ro-eps").textContent = parseFloat(this.value).toFixed(1) + " m"; ctl("radar_eps=" + this.value); };
+  $("r-minpts").oninput = function () { $("ro-minpts").textContent = this.value; ctl("radar_minpts=" + this.value); };
+
   /* ── reserved ── */
   $("rec").onclick = function () { $("rec").classList.toggle("active"); };
   $("restart").onclick = function () { if (confirm("Restart AIRPOC service?")) ctl("restart=1"); };

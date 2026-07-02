@@ -50,7 +50,7 @@ app/           the main process + operator console (field GUI)
 | Jetson platform bring-up | ✅ flashed, MAXN, fan pinned — see [`jetson/`](jetson/README.md) |
 | EO camera | ✅ Y10 mono @ 60 fps, focused, auto-exposed; **production C pipeline + operator monitor** (zoom/focus/illuminator controls) — see [`eo/`](eo/README.md) |
 | NIR illuminator | ✅ controller HW-verified **+ on/off·power·beam-FOV controls live in the EO reviewer**; camera-sync (NIR strobe) pending — see [`illuminator/`](illuminator/README.md) |
-| Operator console (`app/`) | 🟡 field GUI + main process: real V4L2 EO view + zoom, illuminator controls, **radar polar scope** (synthetic source until the AWR reader lands), stream presets, day/night — see [`app/`](app/README.md) |
+| Operator console (`app/`) | 🟡 field GUI + main process: real V4L2 EO view + zoom, **tracking auto/manual**, **illuminator auto/manual**, **radar polar scope** (synthetic source until the AWR reader lands), stream presets, bright day/night — see [`app/`](app/README.md) |
 | Radar, detection, fusion, tracking, gimbal, guidance | ⬜ not started |
 
 A per-item production readiness review lives in the System Overview.

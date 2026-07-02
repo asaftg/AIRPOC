@@ -26,5 +26,9 @@ int  radar_start(const char *port);   /* 0 on success; optional device */
 void radar_stop(void);
 /* Copy the most-recent frame into *out. Returns 1 if connected + filled, else 0. */
 int  radar_get_latest(radar_frame_t *out);
+/* Cluster cfg from the GUI DEV panel — DBSCAN spacing (m) + required points. The real
+ * reader reconfigures its clusterer; the stub stores them. (SNR floor / max FOV are
+ * chip cfg set out-of-band by the radar module, not here.) */
+void radar_set_tune(double cluster_eps_m, int min_points);
 
 #endif /* AIRPOC_RADAR_H */

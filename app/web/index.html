@@ -83,6 +83,11 @@
       <div class="srow"><label>RANGE MIN</label><input type="range" id="r-rmin" min="0" max="30" step="0.5" value="0"><span class="val" id="ro-rmin">0 m</span></div>
       <div class="kv muted">Display filter only. Chip cfg (SNR ≥17 dB floor, max FOV) is set by the radar module.</div>
 
+      <div class="sec">RADAR · cluster cfg <span class="tag" id="cluster-tag">→ radar</span></div>
+      <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>
+      <div class="srow"><label>MIN PTS</label><input type="range" id="r-minpts" min="2" max="8" step="1" value="2"><span class="val" id="ro-minpts">2</span></div>
+      <div class="kv muted">DBSCAN spacing (ε) and required points — pushed to the radar module's clusterer.</div>
+
       <div class="sec">SYSTEM</div>
       <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>
       <div class="kv">EO SOURCE <b><span id="v-srcfps">—</span> fps</b></div>
