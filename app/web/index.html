@@ -9,52 +9,49 @@
 <body class="night">
 <div id="app">
 
-  <header id="bar">
-    <div class="unit"><span class="dot"></span>FAZE-1</div>
-    <div class="seg" id="mode">
-      <button data-mode="scan" class="on">SCAN</button>
+  <header class="topbar">
+    <h1>FAZE-1</h1>
+    <div class="tabs" id="mode">
+      <button data-mode="scan" class="active">SCAN</button>
       <button data-mode="track">TRACK</button>
     </div>
-    <div class="spacer"></div>
-    <div class="chip"><b id="c-link">—</b><s>Mb/s</s></div>
-    <div class="chip"><b id="c-batt">—</b><s>BATT</s></div>
-    <div class="chip"><b id="c-alt">—</b><s>ALT m</s></div>
-    <div class="chip"><b id="c-zulu">--:--</b><s>ZULU</s></div>
-    <button class="icb" id="theme">NIGHT</button>
-    <button class="icb" id="devbtn">DEV</button>
+    <div class="pills">
+      <span class="pill on" id="p-link"><span class="dot"></span><b id="v-link">—</b> Mb/s</span>
+      <span class="pill">BATT <b id="v-batt">—</b></span>
+      <span class="pill">ALT <b id="v-alt">—</b></span>
+      <span class="pill"><b id="v-zulu">--:--</b> Z</span>
+      <button class="icb" id="theme">NIGHT</button>
+      <button class="icb" id="devbtn">DEV</button>
+    </div>
   </header>
 
   <main id="stage">
 
     <section id="eo" class="hero">
       <img id="video" src="/stream" alt="EO">
-      <div class="ov tl">EO<br>FOV <span id="v-fov">—</span><br><span id="v-zoom">1.0×</span></div>
-      <div class="ov tr">BRG <span id="v-brg">—</span><br>RNG <span id="v-rng">—</span></div>
-      <div class="reticle"><i class="ring"></i><i class="dot"></i></div>
+      <canvas id="eo-ovl"></canvas>
+      <div class="otl" id="eo-tl">EO</div>
+      <div class="otr" id="eo-tr">BRG —  RNG —</div>
       <button class="exp" data-swap aria-label="swap radar and EO">
         <svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6M4 4l7 7M20 20l-7-7"/></svg>
       </button>
     </section>
 
     <section id="radar" class="pip">
-      <div class="rhead"><span class="rlabel">RADAR</span><span class="rtrk" id="v-tracks">no data</span></div>
-      <button class="exp" data-swap aria-label="swap radar and EO">
-        <svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6M4 4l7 7M20 20l-7-7"/></svg>
-      </button>
-      <svg class="scope" viewBox="0 0 100 82" preserveAspectRatio="xMidYMax meet" aria-hidden="true">
-        <path class="rl" d="M50 80 L2.4 52.5"/><path class="rl" d="M50 80 L97.6 52.5"/>
-        <path class="rl" d="M32.7 70 A20 20 0 0 1 67.3 70"/>
-        <path class="rl" d="M15.4 60 A40 40 0 0 1 84.6 60"/>
-        <path class="rl" d="M2.4 52.5 A55 55 0 0 1 97.6 52.5"/>
-        <text x="50" y="20" class="rn">N</text>
-      </svg>
+      <div class="panel-head"><span class="panel-title">RADAR</span><span class="hz" id="v-tracks">no data</span></div>
+      <div class="rwrap">
+        <canvas id="radar-cv"></canvas>
+        <button class="exp" data-swap aria-label="swap radar and EO">
+          <svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6M4 4l7 7M20 20l-7-7"/></svg>
+        </button>
+      </div>
     </section>
 
     <nav id="cluster">
-      <button class="big" id="light"><span>LIGHT</span></button>
-      <button class="big" id="autofov"><span>AUTO</span><small>FOV</small></button>
-      <button class="big" id="trackbtn"><span>TRACK</span></button>
-      <button class="big" id="rec"><span>REC</span></button>
+      <button class="big" id="light">LIGHT</button>
+      <button class="big" id="autofov">AUTO<small>FOV</small></button>
+      <button class="big" id="trackbtn">TRACK</button>
+      <button class="big" id="rec">REC</button>
     </nav>
 
     <div id="zoombar">
@@ -69,22 +66,22 @@
       <div class="sec">STREAM</div>
       <div class="presets" id="presets">
         <button data-preset="LEAN">LEAN</button>
-        <button data-preset="SMOOTH" class="on">SMOOTH</button>
-        <button data-preset="BALANCED">BALANCED</button>
+        <button data-preset="SMOOTH" class="active">SMOOTH</button>
+        <button data-preset="BALANCED">BAL</button>
         <button data-preset="CLEAR">CLEAR</button>
       </div>
-      <label class="row">FPS<input type="range" id="s-fps" min="1" max="60" step="1" value="60"><span id="o-fps">60</span></label>
-      <label class="row">QUAL<input type="range" id="s-q" min="10" max="95" step="1" value="45"><span id="o-q">45</span></label>
-      <div class="row est">EST <span id="v-mbps">—</span> Mb/s · <span id="v-encfps">—</span> fps</div>
+      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="1" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
+      <div class="srow"><label>QUAL</label><input type="range" id="s-q" min="10" max="95" step="1" value="45"><span class="val" id="o-q">45</span></div>
+      <div class="est" id="v-est">EST — Mb/s · — fps</div>
 
-      <div class="sec">SENSOR · ILLUM</div>
-      <div class="row">AE<span class="muted">reserved</span></div>
-      <label class="row">PWR<input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span id="o-pow">25%</span></label>
-      <label class="row">BEAM<input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span id="o-fov">70°</span></label>
+      <div class="sec">ILLUMINATOR</div>
+      <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
+      <div class="srow"><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
+      <div class="kv">AE <span class="muted">reserved</span></div>
 
       <div class="sec">SYSTEM</div>
-      <div class="row">TEMP<span>CPU <span id="v-cpu">—</span>° · CAM <span id="v-cam">—</span>°</span></div>
-      <div class="row src">EO SRC <span id="v-srcfps">—</span> fps</div>
+      <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>
+      <div class="kv">EO SOURCE <b><span id="v-srcfps">—</span> fps</b></div>
       <div class="sysbtns"><button id="restart">RESTART</button><button id="logs">LOGS</button></div>
     </aside>
 
