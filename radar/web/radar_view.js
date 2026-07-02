@@ -22,7 +22,7 @@ class RadarView {
     this.last = null;
     this.viewRangeM = NEAR_VIEW_M;
     this.shrinkCounter = 0;
-    this.fovHalfDeg = 30;
+    this.fovHalfDeg = 60;   // pre-frame default (useful AoA); replaced by wire fov_half_deg
     this.trails = new Map();
     window.addEventListener("resize", () => this.fit());
     this.fit();

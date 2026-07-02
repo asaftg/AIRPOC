@@ -16,7 +16,7 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 
 ```json
 { "connected": true, "frame_id": 60, "timestamp": 1248.807,
-  "profile": "awr2944P_ag.cfg", "max_range_m": 500.0, "fov_half_deg": 30.0,
+  "profile": "awr2944P_ag.cfg", "max_range_m": 500.0, "fov_half_deg": 90.0,
   "num_points": 18, "num_targets": 2,
   "points":  [{"x":-11.9,"y":30.5,"z":0.1,"v":0.45,"snr":null,"r":32.7,"az":-21.4,"el":0.2,"tid":1}],
   "targets": [{"tid":1,"x":-11.6,"y":30.2,"z":0.1,"vx":1.34,"vy":0.25,"vz":0.04,
@@ -29,6 +29,12 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 - **points[]:** raw cloud. `v` = radial Doppler m/s (**+approaching**). `snr`
   is **`null`** on the current firmware (no SideInfo TLV). `tid` = owning
   track, or `255` if unclustered (static clutter, gated out at 0.4 m/s).
+- **`fov_half_deg`:** the cfg's full azimuth span (±90) — the chip publishes the
+  whole span so the GUI can trim it live. **The GUI owns two filters:** an
+  azimuth slider (works today — every point has `az`) and an SNR slider
+  (**inert until Phase-2 firmware**, since `snr` is `null` now). Default the
+  azimuth slider to ~±60 (useful AoA) and grey out the SNR slider while every
+  `snr` is `null`.
 - **targets[]:** confirmed **class-less** tracks (live or coasting). `sx/sy/sz`
   are box half-extents. `conf` 0..1. `coasting:true` = dead-reckoned this frame
   (draw dashed/dim). `tid` is a transient per-sensor radar id — **fusion assigns

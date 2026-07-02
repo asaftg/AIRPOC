@@ -10,7 +10,7 @@ target: the point cloud + target boxes the ground-bench GUI showed.
 - **Range rings** at ¼ increments; the **100 m** ring is amber. The view
   "breathes" — parked at 100 m, jumps to 500 m when a confirmed target passes
   ~105 m, shrinks back after 30 quiet frames.
-- **FOV wedge** = the ±30° azimuth gate of the A/G profile.
+- **FOV wedge** = the cfg's published azimuth span (±90°; useful AoA ~±60°).
 - **Points** coloured by Doppler: **red approaching**, **blue receding**, **dim
   cyan static** (|v| < 0.2 m/s). Opacity scales with SNR when present.
 - **Target boxes**: **solid** = live (measured this frame), **dashed/dim** =
