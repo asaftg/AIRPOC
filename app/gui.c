@@ -36,7 +36,9 @@ static volatile int  g_zoom  = 1;         /* digital zoom 1/2/4/8              *
 static volatile int  g_dw    = 512;       /* stream width; height from src aspect */
 static volatile int  g_fps   = 60;        /* stream fps cap                    */
 static volatile int  g_q     = 45;        /* JPEG quality                      */
-static volatile int  g_mode  = 0;         /* 0 scan / 1 track (display only)   */
+static volatile int  g_track_man  = 0;    /* tracking: 0 auto / 1 manual       */
+static volatile int  g_illum_auto = 1;    /* illuminator: 1 auto(fit+max)/0 man*/
+static volatile int  g_engage     = -1;   /* engaged target tid, -1 = none     */
 static char          g_preset[16] = "SMOOTH";
 static pthread_mutex_t g_preset_lk = PTHREAD_MUTEX_INITIALIZER;
 
@@ -203,10 +205,17 @@ static void send_asset(int fd, const char *ctype, const unsigned char *body, uns
     ssize_t wr = write(fd, body, len); (void)wr;
 }
 
+/* Illuminator AUTO: fit the beam to the camera FOV at max power. */
+static void apply_illum_auto(void)
+{
+    illum_set_fov(cam_hfov_deg());
+    illum_set_power(255);
+}
+
 static void handle_ctl(const char *req)
 {
     char *q;
-    if ((q = strstr(req, "zoom=")))  { int v = atoi(q + 5); if (v==1||v==2||v==4||v==8) g_zoom = v; }
+    if ((q = strstr(req, "zoom=")))  { int v = atoi(q + 5); if (v==1||v==2||v==4||v==8) { g_zoom = v; if (g_illum_auto) apply_illum_auto(); } }
     if ((q = strstr(req, "res=")))   { int v = atoi(q + 4); if (v>=64 && v<=1600) g_dw = v; }
     if ((q = strstr(req, "fps=")))   { int v = atoi(q + 4); if (v>=1  && v<=60)   g_fps = v; }
     if ((q = strstr(req, "q=")))     { int v = atoi(q + 2); if (v>=10 && v<=95)   g_q  = v; }
@@ -215,11 +224,14 @@ static void handle_ctl(const char *req)
         sscanf(q + 7, "%15[A-Z]", nm);
         set_preset(nm);
     }
-    if ((q = strstr(req, "mode="))) g_mode = (strncmp(q + 5, "track", 5) == 0) ? 1 : 0;
+    if ((q = strstr(req, "track=")))  g_track_man = (strncmp(q + 6, "man", 3) == 0);
+    if ((q = strstr(req, "engage="))) g_engage = atoi(q + 7);
+    if ((q = strstr(req, "illum=")))  { g_illum_auto = (strncmp(q + 6, "auto", 4) == 0); if (g_illum_auto) apply_illum_auto(); }
     if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));
-    if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));
-    if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));
-    if (strstr(req, "autofov=1"))     illum_set_fov(cam_hfov_deg());   /* beam <- camera FOV */
+    if (!g_illum_auto) {                 /* manual beam control only when not auto */
+        if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));
+        if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));
+    }
 }
 
 static void handle_stats(int fd)
@@ -249,13 +261,14 @@ static void handle_stats(int fd)
     int bl = snprintf(body, sizeof body,
         "{\"fps\":%.0f,\"src_fps\":%.0f,\"mbps\":%.2f,"
         "\"zoom\":%d,\"res_w\":%d,\"res_h\":%d,\"fps_cap\":%d,\"q\":%d,\"preset\":\"%s\","
-        "\"hfov\":%.2f,\"vfov\":%.2f,\"mode\":\"%s\","
+        "\"hfov\":%.2f,\"vfov\":%.2f,\"track\":\"%s\",\"illum_mode\":\"%s\",\"engage\":%d,"
         "\"cpu_c\":%s,\"cam_c\":null,"
         "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"tracks\":%s}\n",
         efps, sfps, mbps,
         g_zoom, w, h, g_fps, g_q, preset,
-        cam_hfov_deg(), cam_vfov_deg(), g_mode ? "track" : "scan",
+        cam_hfov_deg(), cam_vfov_deg(), g_track_man ? "man" : "auto",
+        g_illum_auto ? "auto" : "man", g_engage,
         cpu_s, lon, lpw, lfov, lpr, tracks_s);
 
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"

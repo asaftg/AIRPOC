@@ -84,9 +84,19 @@ body.day{
 .big:hover{border-color:var(--amber)}
 .big.active{background:var(--amber);color:var(--bg);border-color:var(--amber)}
 .big.active small{color:var(--bg)}
+.big small{color:var(--dim)}
+.big.man{border-color:var(--amber)}.big.man small{color:var(--amber)}
+.big.auto small{color:var(--on)}
 #light.armed{background:#3a2a0e;color:var(--amber);border-color:var(--amber)}
 #light.firing{background:#5a1a1a;color:#ffb4b4;border-color:#7a2a2a;animation:pulse 1s infinite}
+#light.firing small{color:#ffb4b4}
 #rec.active{background:#ff3a3a;color:var(--bg);border-color:#ff3a3a}
+.track-hint{position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:4;
+  background:rgba(0,0,0,.6);border:1px solid var(--amber);color:var(--amber);
+  padding:4px 12px;border-radius:3px;font-size:12px;letter-spacing:1px}
+#stage.manual #eo{cursor:crosshair}
+.tag{font-size:10px;letter-spacing:1px;color:var(--on);border:1px solid var(--bd2);border-radius:2px;padding:1px 6px;margin-left:6px}
+.tag.man{color:var(--amber);border-color:var(--amber)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
 
 #zoombar{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;
