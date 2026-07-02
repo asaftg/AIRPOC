@@ -17,7 +17,8 @@ labelling is **not** done here — that is the fusion module's job.
 - `GET /` → PPI previewer page; `GET /radar_view.js` → its script.
 - `GET /stream` → **Server-Sent Events**, one JSON frame per radar frame.
 - `GET /stats` → `{fps, drops, num_points, num_targets, connected, profile,
-  max_range_m, fov_half_deg}`.
+  max_range_m, fov_half_deg, cluster_eps_m, cluster_min_pts}`.
+- `GET /ctl?eps=<m>&minpts=<int>` → set host DBSCAN live (`200 ok`).
 
 Frame JSON (stable — the GUI/fusion consume this unchanged):
 ```

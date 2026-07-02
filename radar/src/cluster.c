@@ -4,9 +4,9 @@
 #include <string.h>
 
 /* ── Tunables (match radar/clustering.py:ClusterParams) ── */
-#define EPS_POS_M        8.0f
+/* eps spacing and min-samples are runtime fields on RadarClusterer (live via
+ * /ctl, seeded from CLUSTER_DEFAULT_*); the rest are compile-time. */
 #define EPS_DOP_MPS      3.0f
-#define MIN_SAMPLES      2
 /* Dynamic-only: points slower than this (|radial doppler|) are static
  * clutter — never seed or join a cluster, so no boxes form on walls/ground.
  * Matches the ground bench's speed_min_mps gate; humans walk >0.4 m/s. */
@@ -51,10 +51,26 @@ struct RadarClusterer {
     Track  tracks[MAX_TRACKS];
     Grave  grave[MAX_GRAVE];
     int    next_tid;
+    float  eps_pos;          /* DBSCAN spacing, m (live via /ctl) */
+    int    min_samples;      /* DBSCAN min-samples (live via /ctl) */
 };
 
-RadarClusterer *cluster_new(void) { return calloc(1, sizeof(RadarClusterer)); }
+RadarClusterer *cluster_new(void) {
+    RadarClusterer *c = calloc(1, sizeof(RadarClusterer));
+    if (c) { c->eps_pos = (float)CLUSTER_DEFAULT_EPS_M; c->min_samples = CLUSTER_DEFAULT_MIN_PTS; }
+    return c;
+}
 void cluster_free(RadarClusterer *c) { free(c); }
+
+void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts) {
+    if (!c) return;
+    if (eps_m < CLUSTER_EPS_MIN_M) eps_m = CLUSTER_EPS_MIN_M;
+    if (eps_m > CLUSTER_EPS_MAX_M) eps_m = CLUSTER_EPS_MAX_M;
+    if (min_pts < CLUSTER_MIN_PTS_MIN) min_pts = CLUSTER_MIN_PTS_MIN;
+    if (min_pts > CLUSTER_MIN_PTS_MAX) min_pts = CLUSTER_MIN_PTS_MAX;
+    c->eps_pos = (float)eps_m;
+    c->min_samples = min_pts;
+}
 
 /* ── per-axis Kalman ── */
 static void kf_predict(Track *t, double dt) {
@@ -124,12 +140,13 @@ static void hist_push(Track *t, int hit) {
 }
 
 /* ── DBSCAN (hand-rolled, O(N^2), N is a few hundred) ── */
-static int dbscan(const RadarPoint *pts, int n, int *labels) {
+static int dbscan(const RadarPoint *pts, int n, int *labels,
+                  float eps_pos, int min_samples) {
     static uint8_t nbr[RADAR_MAX_POINTS];   /* scratch neighbour row */
     uint8_t *visited = calloc(n, 1);
     if (!visited) return 0;
     for (int i = 0; i < n; i++) labels[i] = -1;
-    float eps2 = EPS_POS_M * EPS_POS_M;
+    float eps2 = eps_pos * eps_pos;
     int next = 0;
 
     /* FIFO of indices — bounded by initial neighbours (<=n) plus each
@@ -149,7 +166,7 @@ static int dbscan(const RadarPoint *pts, int n, int *labels) {
                      fabsf(pts[i].doppler - pts[j].doppler) <= EPS_DOP_MPS;
             nbr[j] = ok; cnt += ok;
         }
-        if (cnt < MIN_SAMPLES) continue;
+        if (cnt < min_samples) continue;
         labels[i] = next;
         int qn = 0;
         for (int j = 0; j < n; j++) if (nbr[j]) { if (labels[j] == -1) labels[j] = next; if (qn < QCAP) queue[qn++] = j; }
@@ -167,7 +184,7 @@ static int dbscan(const RadarPoint *pts, int n, int *labels) {
                          fabsf(pts[jj].doppler - pts[k].doppler) <= EPS_DOP_MPS;
                 nbr2[k] = ok; cnt2 += ok;
             }
-            if (cnt2 >= MIN_SAMPLES) {
+            if (cnt2 >= min_samples) {
                 for (int k = 0; k < n; k++)
                     if (nbr2[k] && labels[k] == -1) { labels[k] = next; if (qn < QCAP) queue[qn++] = k; }
             } else if (labels[jj] == -1) {
@@ -281,7 +298,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     }
 
     static int labels[RADAR_MAX_POINTS];
-    int nlab = dbscan(pts, n, labels);
+    int nlab = dbscan(pts, n, labels, R->eps_pos, R->min_samples);
 
     /* per-cluster stats */
     static Cl cls[RADAR_MAX_TARGETS];

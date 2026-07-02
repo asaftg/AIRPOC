@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "http.h"
+#include "cluster.h"
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -14,6 +15,18 @@ static size_t         g_json_len = 0;
 static size_t         g_json_cap = 0;
 static uint64_t       g_seq = 0;
 static char           g_webroot[512] = "web";
+
+/* Live DBSCAN controls, set via /ctl and echoed in /stats so GUI sliders can
+ * initialise. The actual clustering values live in the RadarClusterer; the
+ * registered callback pushes changes there. */
+static void (*g_ctl_cb)(double eps_m, int min_pts, void *user) = NULL;
+static void  *g_ctl_user = NULL;
+static double g_eps    = CLUSTER_DEFAULT_EPS_M;
+static int    g_minpts = CLUSTER_DEFAULT_MIN_PTS;
+
+void http_set_ctl_cb(void (*cb)(double, int, void *), void *user) {
+    g_ctl_cb = cb; g_ctl_user = user;
+}
 
 static struct {
     double fps, max_range_m, fov_half_deg;
@@ -85,17 +98,40 @@ static void *client(void *arg) {
 
     if (!strncmp(req, "GET /stats", 10)) {
         pthread_mutex_lock(&g_lock);
-        char body[320];
+        char body[384];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"drops\":%lu,\"num_points\":%d,\"num_targets\":%d,"
             "\"connected\":%s,\"profile\":\"%s\",\"max_range_m\":%.1f,"
-            "\"fov_half_deg\":%.1f}\n",
+            "\"fov_half_deg\":%.1f,\"cluster_eps_m\":%.2f,\"cluster_min_pts\":%d}\n",
             g_stat.fps, g_stat.drops, g_stat.n_points, g_stat.n_targets,
             g_stat.connected ? "true" : "false", g_stat.profile,
-            g_stat.max_range_m, g_stat.fov_half_deg);
+            g_stat.max_range_m, g_stat.fov_half_deg, g_eps, g_minpts);
         pthread_mutex_unlock(&g_lock);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
+        close(fd); return NULL;
+    }
+
+    /* GET /ctl?eps=<m>&minpts=<int> — set the host DBSCAN live. Absent params
+     * keep their current value. Always 200 OK. */
+    if (!strncmp(req, "GET /ctl", 8)) {
+        char *q;
+        double eps = g_eps; int mp = g_minpts;
+        if ((q = strstr(req, "eps=")))    eps = atof(q + 4);
+        if ((q = strstr(req, "minpts="))) mp  = atoi(q + 7);
+        /* Clamp to the same bounds the clusterer uses, so /stats echoes the
+         * value actually applied (not a raw out-of-range request). */
+        if (eps < CLUSTER_EPS_MIN_M) eps = CLUSTER_EPS_MIN_M;
+        if (eps > CLUSTER_EPS_MAX_M) eps = CLUSTER_EPS_MAX_M;
+        if (mp < CLUSTER_MIN_PTS_MIN) mp = CLUSTER_MIN_PTS_MIN;
+        if (mp > CLUSTER_MIN_PTS_MAX) mp = CLUSTER_MIN_PTS_MAX;
+        pthread_mutex_lock(&g_lock);
+        g_eps = eps; g_minpts = mp;
+        pthread_mutex_unlock(&g_lock);
+        if (g_ctl_cb) g_ctl_cb(eps, mp, g_ctl_user);
+        const char *ok = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n"
+                         "Content-Length: 2\r\nConnection: close\r\n\r\nok";
+        ssize_t w = write(fd, ok, strlen(ok)); (void)w;
         close(fd); return NULL;
     }
 

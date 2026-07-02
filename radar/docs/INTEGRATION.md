@@ -10,7 +10,23 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 | GET | `/` | the standalone PPI previewer (works on its own) |
 | GET | `/radar_view.js` | the previewer script (reference renderer) |
 | GET | `/stream` | **SSE** — one `data: <frame-json>\n\n` per radar frame |
-| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, fov_half_deg}` |
+| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, fov_half_deg, cluster_eps_m, cluster_min_pts}` |
+| GET | `/ctl?eps=<m>&minpts=<int>` | set the host DBSCAN live → `200 ok` |
+
+## Live controls — `/ctl` (CLUSTER ε + MIN PTS sliders)
+
+`GET /ctl?eps=<metres>&minpts=<int>` sets the host-side DBSCAN **live** (no
+restart, applies on the next frame) and returns `200 ok`. Both params are
+optional — an absent one keeps its current value.
+
+- `eps` — cluster spacing in metres, clamped to **0.5 – 50** (default 8).
+- `minpts` — DBSCAN min-samples, clamped to **1 – 20** (default 2).
+
+`/stats` echoes the currently-applied `cluster_eps_m` and `cluster_min_pts`
+(post-clamp), so initialise the sliders from `/stats` on load rather than
+assuming defaults. Tighter `eps` / higher `minpts` = fewer, tighter boxes;
+looser = more merging. (Changes affect DBSCAN immediately; existing tracks may
+**coast** for up to ~1.5 s before dropping, by design.)
 
 ## Frame JSON (the `/stream` payload)
 

@@ -17,8 +17,23 @@
 
 typedef struct RadarClusterer RadarClusterer;
 
+/* Live-tunable DBSCAN knobs — defaults + clamp bounds, settable via the
+ * daemon's /ctl endpoint (CLUSTER eps + MIN PTS sliders in the GUI). */
+#define CLUSTER_DEFAULT_EPS_M    8.0
+#define CLUSTER_DEFAULT_MIN_PTS  2
+#define CLUSTER_EPS_MIN_M        0.5
+#define CLUSTER_EPS_MAX_M        50.0
+#define CLUSTER_MIN_PTS_MIN      1
+#define CLUSTER_MIN_PTS_MAX      20
+
 RadarClusterer *cluster_new(void);
 void            cluster_free(RadarClusterer *c);
+
+/* Set DBSCAN spacing (eps, metres) and min-samples live. Clamped to sane
+ * ranges. A single scalar store per field — safe to call from the HTTP
+ * thread while the radar thread clusters (worst case: one frame uses a
+ * just-changed value). */
+void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
 
 /* Cluster+track one frame. `pts`/`n` are updated in place (each point's
  * .tid is set to its cluster/track id, or 255). `now_s` is a monotonic

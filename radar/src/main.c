@@ -37,6 +37,11 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
+/* /ctl?eps=&minpts= handler — pushes live DBSCAN changes to the clusterer. */
+static void on_ctl(double eps_m, int min_pts, void *user) {
+    cluster_set_dbscan((RadarClusterer *)user, eps_m, min_pts);
+}
+
 static double now_s(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -129,6 +134,7 @@ int main(int argc, char **argv) {
     if (!ctx.clust || !ctx.json) { perror("malloc"); return 1; }
 
     http_start(http_port, webroot);
+    http_set_ctl_cb(on_ctl, ctx.clust);      /* GET /ctl?eps=&minpts= -> DBSCAN */
     fprintf(stderr, "radar_preview: previewer http://0.0.0.0:%d/  profile=%s\n",
             http_port, profile);
 
