@@ -3,7 +3,7 @@
  * NOT implement capture/AE/ISP (that is the EO channel) and it never touches frames
  * on the capture path — the GUI reads them read-only via eo_get_latest().
  *
- *   ./app [-d /dev/video0] [-p 8080] [-i /dev/sg-ir850]
+ *   ./app [-d /dev/video0] [-p 8080] [-i /dev/sg-ir850] [-r 127.0.0.1:8092]
  */
 #include "eo_frame.h"
 #include "radar.h"
@@ -21,12 +21,14 @@ static void on_sig(int s) { (void)s; g_run = 0; }
 int main(int argc, char **argv)
 {
     const char *dev = "/dev/video0";
-    const char *iport = "/dev/sg-ir850";   /* SG-IR850 illuminator (optional) */
+    const char *iport = "/dev/sg-ir850";       /* SG-IR850 illuminator (optional) */
+    const char *rport = "127.0.0.1:8092";      /* radar daemon SSE (radar/ module) */
     int port = 8080, opt;
-    while ((opt = getopt(argc, argv, "d:p:i:")) != -1) {
+    while ((opt = getopt(argc, argv, "d:p:i:r:")) != -1) {
         if      (opt == 'd') dev = optarg;
         else if (opt == 'p') port = atoi(optarg);
         else if (opt == 'i') iport = optarg;
+        else if (opt == 'r') rport = optarg;
     }
 
     signal(SIGINT, on_sig);
@@ -38,7 +40,7 @@ int main(int argc, char **argv)
         return 1;
     }
     illum_start(iport);                     /* optional; no-ops if absent */
-    radar_start(NULL);                      /* synthetic until the AWR module lands */
+    radar_start(rport);                     /* consume the radar daemon's SSE feed */
 
     if (gui_start(port) != 0) {
         fprintf(stderr, "app: GUI server failed to start\n");

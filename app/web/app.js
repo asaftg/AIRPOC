@@ -89,16 +89,18 @@
   $("restart").onclick = function () { if (confirm("Restart AIRPOC service?")) ctl("restart=1"); };
   $("logs").onclick = function () { var l = $("logs"); l.textContent = "reserved"; setTimeout(function () { l.textContent = "LOGS"; }, 900); };
 
-  /* ── target model + selection ── */
+  /* ── target model + selection (daemon schema: objects, class-less, coasting flag) ── */
   function targets(radar) {
     if (!radar || !radar.targets) return [];
     return radar.targets.map(function (t) {
-      return { tid: t[0], x: t[1], y: t[2], vx: t[3], vy: t[4], sx: t[5], sy: t[6], conf: t[7],
-               rng: Math.hypot(t[1], t[2]), az: Math.atan2(t[1], t[2]) * 180 / Math.PI };
+      return { tid: t.tid, x: t.x, y: t.y, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, conf: t.conf,
+               coasting: !!t.coasting,
+               rng: Math.hypot(t.x, t.y), az: Math.atan2(t.x, t.y) * 180 / Math.PI };
     }).filter(function (t) { return t.rng >= rp.rmin && Math.abs(t.az) <= rp.fov; });
   }
-  /* AUTO priority: fused (EO+radar) first [pending detector], then nearer, then higher conf. */
-  function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
+  /* AUTO priority: fused (EO+radar) first [pending detector], then live-over-coasting,
+   * then nearer, then higher conf. */
+  function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.coasting - b.coasting) || (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
   function engage(tid) {
     engagedTid = tid;
     $("track-hint").hidden = (trackMode !== "man") || (tid !== null);
@@ -174,13 +176,16 @@
     if (!radar || !radar.connected) { ctx.globalAlpha = 0.5; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NO DATA", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
     radarGeom = { cx: cx, cy: cy, scale: scale, dpr: dpr };
 
-    /* returns — gated by the DEV tuning (snr / speed / range / fov) */
+    /* returns — gated by the display filters (fov/range/speed; snr only when the
+     * firmware provides it — null on current fw). v = +approaching. */
     (radar.points || []).forEach(function (p) {
-      var rng = Math.hypot(p[0], p[1]), az = Math.abs(Math.atan2(p[0], p[1]) * 180 / Math.PI);
-      if (p[3] < rp.snr || Math.abs(p[2]) < rp.speed || rng < rp.rmin || az > rp.fov) return;
-      var pc = W2C(p[0], p[1]);
-      ctx.globalAlpha = Math.max(0.3, Math.min(1, (p[3] - 12) / 28));
-      ctx.fillStyle = Math.abs(p[2]) < 0.3 ? cyan : (p[2] > 0 ? "#ff5555" : "#50aaff");
+      var az = Math.abs(p.az != null ? p.az : Math.atan2(p.x, p.y) * 180 / Math.PI);
+      var rng = (p.r != null) ? p.r : Math.hypot(p.x, p.y);
+      if (rng < rp.rmin || az > rp.fov || Math.abs(p.v) < rp.speed) return;
+      if (p.snr != null && p.snr < rp.snr) return;
+      var pc = W2C(p.x, p.y);
+      ctx.globalAlpha = (p.snr != null) ? Math.max(0.3, Math.min(1, (p.snr - 12) / 28)) : 0.8;
+      ctx.fillStyle = Math.abs(p.v) < 0.3 ? cyan : (p.v > 0 ? "#ff5555" : "#50aaff");
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
     });
     ctx.globalAlpha = 1;
@@ -197,14 +202,18 @@
       var col = locked ? css("--on") : TARGET_COLORS[t.tid % TARGET_COLORS.length];
       var wpx = Math.max(8 * dpr, 2 * t.sx * scale), hpx = Math.max(8 * dpr, 2 * t.sy * scale);
       ctx.strokeStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
+      ctx.globalAlpha = t.coasting ? 0.5 : 1;                    /* coasting = dead-reckoned */
+      if (t.coasting) ctx.setLineDash([5 * dpr, 4 * dpr]);
       if (locked) {
         var cc = 8 * dpr, x0 = tc[0] - wpx / 2, y0 = tc[1] - hpx / 2;
         [[x0, y0, 1, 1], [x0 + wpx, y0, -1, 1], [x0, y0 + hpx, 1, -1], [x0 + wpx, y0 + hpx, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
       } else ctx.strokeRect(tc[0] - wpx / 2, tc[1] - hpx / 2, wpx, hpx);
+      ctx.setLineDash([]);
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
       var spd = Math.hypot(t.vx, t.vy);
       ctx.fillStyle = col; ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      ctx.fillText((locked ? "LOCK " : "R#") + t.tid + " " + spd.toFixed(0) + "m/s " + t.rng.toFixed(0) + "m", tc[0] - wpx / 2, tc[1] - hpx / 2 - 3 * dpr);
+      ctx.fillText((locked ? "LOCK " : "R#") + t.tid + " " + spd.toFixed(0) + "m/s " + t.rng.toFixed(0) + "m" + (t.coasting ? " ·coast" : ""), tc[0] - wpx / 2, tc[1] - hpx / 2 - 3 * dpr);
+      ctx.globalAlpha = 1;
     });
   }
   var radarGeom = null;

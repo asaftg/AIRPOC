@@ -78,11 +78,11 @@ fused → nearer → confidence; MANUAL = tap), and illuminator control (AUTO fi
 beam to the camera FOV at max power; MANUAL from DEV). Serves the console over
 **MJPEG `/stream` + polled `/stats` + `/radar` + `GET /ctl`** — no websockets, no CDN,
 software MJPEG only (no NVENC/NVJPG on this SKU). Adds no load to the sensor capture
-paths. **Radar integration:** the scope runs on a synthetic source (`app/radar_stub.c`)
-today; it will consume the radar daemon per
-[`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md) — a reconciliation
-follow-up. Detail + endpoints: [`app/README.md`](../app/README.md) ·
-[`app/docs/GUI.md`](../app/docs/GUI.md).
+paths. **Radar is wired to the real daemon:** `app/radar_client.c` subscribes to the
+radar daemon's SSE `:8092/stream` and the app serves it verbatim on `/radar` (browser
+single-origin), rendering the daemon's cloud + class-less targets per
+[`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md). Detail + endpoints:
+[`app/README.md`](../app/README.md) · [`app/docs/GUI.md`](../app/docs/GUI.md).
 
 ### Radar (previewer done; on-HW bring-up pending)
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA** — data is the mmw_demo TLV

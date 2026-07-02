@@ -249,9 +249,8 @@ static void handle_stats(int fd)
     int lon, lpw, lpr; double lfov;
     illum_snapshot(&lon, &lpw, &lfov, &lpr);
 
-    radar_frame_t rf;
     char tracks_s[16];
-    if (radar_get_latest(&rf) && rf.connected) snprintf(tracks_s, sizeof tracks_s, "%d", rf.num_targets);
+    if (radar_connected()) snprintf(tracks_s, sizeof tracks_s, "%d", radar_num_targets());
     else snprintf(tracks_s, sizeof tracks_s, "null");
 
     double cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
@@ -280,34 +279,20 @@ static void handle_stats(int fd)
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
 }
 
+/* Serve the latest raw daemon frame verbatim (single-origin passthrough), or a
+ * connected:false shell if the radar daemon isn't up yet. */
 static void handle_radar(int fd)
 {
-    radar_frame_t r;
-    int ok = radar_get_latest(&r);
-    size_t cap = 16384;
+    int cap = 131072;
     char *b = malloc(cap);
     if (!b) { close(fd); return; }
-    int n = snprintf(b, cap,
-        "{\"connected\":%d,\"max_range_m\":%.0f,\"fov_half_deg\":%.0f,"
-        "\"num_points\":%d,\"num_targets\":%d,\"points\":[",
-        ok ? r.connected : 0, ok ? r.max_range_m : 0.0, ok ? r.fov_half_deg : 60.0,
-        ok ? r.num_points : 0, ok ? r.num_targets : 0);
-    if (ok) {
-        for (int i = 0; i < r.num_points && n < (int)cap - 64; i++)
-            n += snprintf(b + n, cap - n, "%s[%.1f,%.1f,%.1f,%.0f]",
-                          i ? "," : "", r.points[i].x, r.points[i].y, r.points[i].v, r.points[i].snr);
-        n += snprintf(b + n, cap - n, "],\"targets\":[");
-        for (int i = 0; i < r.num_targets && n < (int)cap - 96; i++)
-            n += snprintf(b + n, cap - n, "%s[%d,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f]",
-                          i ? "," : "", r.targets[i].tid, r.targets[i].x, r.targets[i].y,
-                          r.targets[i].vx, r.targets[i].vy, r.targets[i].sx, r.targets[i].sy,
-                          r.targets[i].conf);
-        n += snprintf(b + n, cap - n, "]}\n");
-    } else {
-        n += snprintf(b + n, cap - n, "],\"targets\":[]}\n");
-    }
+    int n = radar_get_frame_json(b, cap);
+    if (n <= 0)
+        n = snprintf(b, cap, "{\"connected\":false,\"num_points\":0,\"num_targets\":0,"
+                             "\"points\":[],\"targets\":[]}\n");
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
-                "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, b);
+                "Content-Length: %d\r\nConnection: close\r\n\r\n", n);
+    ssize_t w = write(fd, b, n); (void)w;
     free(b);
 }
 

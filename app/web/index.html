@@ -77,16 +77,16 @@
       <div class="kv muted" id="illum-note">AUTO fits the beam to the EO FOV at max power. Switch ILLUM to MAN to use these.</div>
 
       <div class="sec">RADAR · display filters</div>
-      <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="17" max="40" step="0.5" value="17"><span class="val" id="ro-snr">17.0 dB</span></div>
-      <div class="srow"><label>FOV ±</label><input type="range" id="r-fov" min="5" max="60" step="1" value="60"><span class="val" id="ro-fov">60°</span></div>
+      <div class="srow"><label>FOV ±</label><input type="range" id="r-fov" min="5" max="90" step="1" value="60"><span class="val" id="ro-fov">60°</span></div>
       <div class="srow"><label>SPEED MIN</label><input type="range" id="r-speed" min="0" max="5" step="0.1" value="0.4"><span class="val" id="ro-speed">0.4 m/s</span></div>
       <div class="srow"><label>RANGE MIN</label><input type="range" id="r-rmin" min="0" max="30" step="0.5" value="0"><span class="val" id="ro-rmin">0 m</span></div>
-      <div class="kv muted">Display filter only. Chip cfg (SNR ≥17 dB floor, max FOV) is set by the radar module.</div>
+      <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="17" max="40" step="0.5" value="17" disabled><span class="val" id="ro-snr">n/a</span></div>
+      <div class="kv muted">Display filters (client-side) on the daemon's cloud. SNR is inert — the current firmware omits SNR (Phase-2). Chip cfg (SNR floor, max FOV) is the radar module's job.</div>
 
       <div class="sec">RADAR · cluster cfg <span class="tag" id="cluster-tag">→ radar</span></div>
       <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>
       <div class="srow"><label>MIN PTS</label><input type="range" id="r-minpts" min="2" max="8" step="1" value="2"><span class="val" id="ro-minpts">2</span></div>
-      <div class="kv muted">DBSCAN spacing (ε) and required points — pushed to the radar module's clusterer.</div>
+      <div class="kv muted">DBSCAN spacing (ε) + required points → the radar daemon (needs its <code>/ctl</code> endpoint — pending from the radar agent).</div>
 
       <div class="sec">SYSTEM</div>
       <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>

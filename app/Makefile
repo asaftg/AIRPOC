@@ -22,7 +22,7 @@ else
   EO_OBJ := eo_frame_v4l2.o capture.o ae.o isp.o sensor.o
 endif
 
-OBJ := main.o gui.o view.o radar_stub.o illum.o sg_ir850.o $(EO_OBJ)
+OBJ := main.o gui.o view.o radar_client.o illum.o sg_ir850.o $(EO_OBJ)
 
 app: web_assets.h $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
@@ -36,8 +36,8 @@ main.o: main.c eo_frame.h radar.h gui.h $(EOP)/illum.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ main.c
 view.o: view.c view.h eo_frame.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ view.c
-radar_stub.o: radar_stub.c radar.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ radar_stub.c
+radar_client.o: radar_client.c radar.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ radar_client.c
 eo_frame_stub.o: eo_frame_stub.c eo_frame.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ eo_frame_stub.c
 eo_frame_v4l2.o: eo_frame_v4l2.c eo_frame.h $(EOP)/pipeline.h
