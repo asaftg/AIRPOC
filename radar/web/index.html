@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AIRPOC Radar</title>
+<style>
+  html,body{margin:0;height:100%;background:#0a0e12;font-family:monospace;color:#cde}
+  #hud{position:fixed;top:8px;left:10px;color:#6cf;font-size:13px;z-index:2;
+       text-shadow:0 0 3px #000,0 0 3px #000}
+  #legend{position:fixed;top:8px;right:10px;font-size:11px;color:#9ab;text-align:right;line-height:1.5}
+  #legend b{font-weight:normal}
+  .app{color:#ff5555}.rec{color:#50aaff}.stat{color:#00d4ff}
+  #ppi{display:block;width:100vw;height:100vh}
+</style>
+</head>
+<body>
+  <div id="hud">connecting…</div>
+  <div id="legend">
+    <b class="app">■ approaching</b><br>
+    <b class="rec">■ receding</b><br>
+    <b class="stat">■ static</b><br>
+    solid box = live · dashed = coasting
+  </div>
+  <canvas id="ppi"></canvas>
+  <script src="radar_view.js"></script>
+</body>
+</html>

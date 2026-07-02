@@ -38,7 +38,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
-| Radar | — | ⬜ not started | — |
+| Radar | — | 🟨 previewer + C daemon (untested on HW) | [`radar/`](../radar/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -62,7 +62,16 @@ light the EO scene so exposure can be short enough to freeze a moving target. Th
 open item is **syncing the pulse to the camera exposure window** (see
 [`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail: [`illuminator/`](../illuminator/README.md).
 
-### Radar / Detection / Fusion / Tracking / Gimbal / Guidance (not started)
+### Radar (previewer done; on-HW bring-up pending)
+TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA** — data is the mmw_demo TLV
+point cloud over UART. The C daemon (`radar/src/`) pushes the A/G long-range
+profile, parses the stream drop-free, clusters it into **class-less** target
+boxes (host DBSCAN + Kalman, until on-chip gtrack lands), and serves a PPI
+previewer over SSE on `:8092`. Detects vehicles/drones/humans out to max range
+(human baseline ~100 m). Built but not yet compiled/run on the board. Detail:
+[`radar/`](../radar/README.md).
+
+### Detection / Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
 current state, and a link to its module folder.
 

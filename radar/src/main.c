@@ -1,0 +1,179 @@
+/* AIRPOC radar previewer daemon.
+ *
+ *   ./radar_preview [-C /dev/radar-cli] [-D /dev/radar-data] [-c cfg]
+ *                   [-b 3125000] [-p 8092] [-w web] [-n]
+ *
+ * Pushes the A/G profile over the CLI UART, then reads the data UART and
+ * for every complete frame: parse (drop-free) -> cluster -> publish a
+ * snapshot for the SSE previewer on :8092. The UART->frame pipeline runs
+ * in this thread and never blocks on HTTP clients, so display can lag but
+ * frames are never dropped. Missing ports degrade gracefully (retry).
+ *
+ * All detections are class-less — person/vehicle labelling is fusion's. */
+#define _GNU_SOURCE
+#include "radar.h"
+#include "serial.h"
+#include "cfg_push.h"
+#include "tlv.h"
+#include "cluster.h"
+#include "wire.h"
+#include "http.h"
+#include <getopt.h>
+#include <math.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+#define JSON_CAP (256 * 1024)
+#define AG_MAX_RANGE_M   500.0
+#define AG_FOV_HALF_DEG   30.0
+
+static volatile int g_run = 1;
+static void on_sig(int s) { (void)s; g_run = 0; }
+
+static double now_s(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+typedef struct {
+    RadarClusterer *clust;
+    RadarFrame      frame;
+    char           *json;
+    const char     *profile;
+    double          fps;
+    double          last_t;
+    uint32_t        last_frame_no;
+    int             have_last;
+    unsigned long   drops;
+} Ctx;
+
+/* Called once per complete radar frame by the parser. */
+static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n) {
+    Ctx *c = user;
+    double t = now_s();
+    double dt = c->last_t > 0 ? (t - c->last_t) : 0.05;
+    c->last_t = t;
+
+    /* Drop accounting from frameNumber gaps (chip counts monotonically). */
+    if (c->have_last && frame_no > c->last_frame_no + 1)
+        c->drops += (frame_no - c->last_frame_no - 1);
+    c->last_frame_no = frame_no;
+    c->have_last = 1;
+
+    if (n > RADAR_MAX_POINTS) n = RADAR_MAX_POINTS;
+    memcpy(c->frame.points, pts, (size_t)n * sizeof(RadarPoint));
+    c->frame.n_points = n;
+    c->frame.frame_number = frame_no;
+
+    int nt = cluster_step(c->clust, c->frame.points, n, t, dt,
+                          c->frame.targets, RADAR_MAX_TARGETS);
+    c->frame.n_targets = nt;
+
+    if (dt > 0) {
+        double inst = 1.0 / dt;
+        c->fps = c->fps > 0 ? 0.85 * c->fps + 0.15 * inst : inst;
+    }
+
+    int len = wire_frame_json(c->json, JSON_CAP, &c->frame, t,
+                              AG_MAX_RANGE_M, AG_FOV_HALF_DEG, c->profile);
+    http_publish(c->json, (size_t)len);
+    http_set_stats(c->fps, c->drops, c->frame.n_points, c->frame.n_targets,
+                   1, c->profile, AG_MAX_RANGE_M, AG_FOV_HALF_DEG);
+}
+
+int main(int argc, char **argv) {
+    const char *cli_dev  = "/dev/radar-cli";
+    const char *data_dev = "/dev/radar-data";
+    const char *cfg      = "cfg/awr2944P_ag.cfg";
+    const char *webroot  = "web";
+    int http_port = 8092, data_baud = 3125000, cli_baud = 115200, skip_cfg = 0, opt;
+
+    while ((opt = getopt(argc, argv, "C:D:c:b:p:w:n")) != -1) {
+        switch (opt) {
+            case 'C': cli_dev = optarg; break;
+            case 'D': data_dev = optarg; break;
+            case 'c': cfg = optarg; break;
+            case 'b': data_baud = atoi(optarg); break;
+            case 'p': http_port = atoi(optarg); break;
+            case 'w': webroot = optarg; break;
+            case 'n': skip_cfg = 1; break;
+            default:
+                fprintf(stderr, "usage: %s [-C cli] [-D data] [-c cfg] "
+                        "[-b baud] [-p port] [-w web] [-n]\n", argv[0]);
+                return 2;
+        }
+    }
+
+    signal(SIGINT, on_sig);
+    signal(SIGTERM, on_sig);
+    signal(SIGPIPE, SIG_IGN);      /* dropped SSE clients must not kill us */
+
+    /* Profile label = cfg basename. */
+    const char *base = strrchr(cfg, '/');
+    const char *profile = base ? base + 1 : cfg;
+
+    Ctx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.clust = cluster_new();
+    ctx.json  = malloc(JSON_CAP);
+    ctx.profile = profile;
+    if (!ctx.clust || !ctx.json) { perror("malloc"); return 1; }
+
+    http_start(http_port, webroot);
+    fprintf(stderr, "radar_preview: previewer http://0.0.0.0:%d/  profile=%s\n",
+            http_port, profile);
+
+    /* Push the profile over the CLI UART once (best effort). */
+    if (!skip_cfg) {
+        int cli = serial_open(cli_dev, cli_baud);
+        if (cli >= 0) {
+            if (cfg_push(cli, cfg) < 0)
+                fprintf(stderr, "radar_preview: cfg push had errors — continuing\n");
+            close(cli);
+        } else {
+            fprintf(stderr, "radar_preview: CLI %s unavailable — assuming chip "
+                    "already configured\n", cli_dev);
+        }
+    }
+
+    TLVStream *stream = tlv_stream_new();
+    if (!stream) { perror("tlv_stream_new"); return 1; }
+
+    uint8_t buf[8192];
+    while (g_run) {
+        int fd = serial_open(data_dev, data_baud);
+        if (fd < 0) {
+            http_set_stats(0, ctx.drops, 0, 0, 0, profile, AG_MAX_RANGE_M, AG_FOV_HALF_DEG);
+            sleep(1);
+            continue;
+        }
+        fprintf(stderr, "radar_preview: data %s @ %d baud — streaming\n", data_dev, data_baud);
+        double last_rx = now_s();
+        while (g_run) {
+            ssize_t n = read(fd, buf, sizeof(buf));
+            if (n > 0) {
+                tlv_stream_feed(stream, buf, (size_t)n, on_frame, &ctx);
+                last_rx = now_s();
+            } else if (n < 0) {
+                break;                       /* hard error: reopen */
+            } else if (now_s() - last_rx > 3.0) {
+                fprintf(stderr, "radar_preview: no data 3 s — reopening\n");
+                http_set_stats(0, ctx.drops, 0, 0, 0, profile, AG_MAX_RANGE_M, AG_FOV_HALF_DEG);
+                break;
+            }
+        }
+        close(fd);
+        ctx.have_last = 0;                   /* reset drop tracking across reconnects */
+    }
+
+    fprintf(stderr, "radar_preview: shutting down\n");
+    tlv_stream_free(stream);
+    cluster_free(ctx.clust);
+    free(ctx.json);
+    return 0;
+}
