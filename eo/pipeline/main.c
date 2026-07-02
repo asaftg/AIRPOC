@@ -87,12 +87,13 @@ static void *encoder_thread(void *arg)
 
         mjpeg_set_sharp(isp_sharpness(local, bpl, w, h));          /* focus, native ROI */
 
-        /* Digital zoom = center crop; feed stays native resolution (no downscale). */
+        /* Digital zoom = center crop upscaled back to full frame, so the feed is a
+         * constant w*h at every zoom (z=1 is 1:1 native; z>1 magnifies the center). */
         int z = mjpeg_zoom();                                       /* 1/2/4/8          */
         int cw = w / z, ch = h / z, cx = (w - cw) / 2, cy = (h - ch) / 2;
-        isp_scale_tonemap(local, bpl, cx, cy, cw, ch, out8, cw, ch);
+        isp_scale_tonemap(local, bpl, cx, cy, cw, ch, out8, w, h);
 
-        mjpeg_publish(out8, cw, ch, fps, mean, el, g);
+        mjpeg_publish(out8, w, h, fps, mean, el, g);
         last_pub = t;
     }
     free(local); free(out8);
