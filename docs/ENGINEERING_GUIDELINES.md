@@ -69,3 +69,31 @@ radar/ …         future modules (detection, fusion, tracking, gimbal, guidance
 Each module folder owns its code **and** its docs (a `README.md` chapter, plus a
 `docs/` subfolder for detail). System-wide docs live in top-level `docs/`. On-device
 code is C/C++; bench tools (Python OK) sit in the module's `tools/`.
+
+## 7. Modules are standalone, with explicit inputs and outputs
+
+Every module (`eo`, `illuminator`, `jetson`, `radar`, `detection`, `fusion`,
+`tracking`, `gimbal`, `guidance`, …) is a **node with a defined contract**: it builds,
+launches, and is testable **on its own**, and it exposes its data through **clearly
+documented inputs and outputs** — never by reaching into another module's internals.
+
+- **State the I/O in the module's `README`.** What it consumes (a sensor device,
+  another module's stream, config) and what it produces (a stream / endpoint /
+  message) and in what format. **That contract is the stable part; the internals
+  churn freely** as development continues — so keep the contract small and explicit.
+- **Standalone-runnable.** A module runs as its own process/binary and is useful
+  alone (e.g. `eo_pipeline` captures, previews, and serves with no radar/fusion
+  present). Optional peers **degrade gracefully** — a missing input must never crash
+  the module (cf. the illuminator: absent → controls no-op, EO keeps running).
+- **The GUI is the main app; modules stream to it.** Each module publishes its output
+  over a network/IPC interface the GUI subscribes to and commands — today the EO
+  preview's HTTP `/stream` + `/stats` + `/ctl`. New modules follow the same shape: a
+  documented endpoint the GUI can consume, and a documented control surface.
+- **Couple through the contract, not shared state.** No module hard-codes another's
+  files, globals, ports-by-assumption, or process layout. All cross-module traffic
+  goes through the declared I/O, so any node can be swapped, relocated, or run on
+  separate hardware without touching its peers.
+
+Why: the system is many independently-evolving parts. Clear per-module I/O lets each
+be developed, tested, and replaced on its own, and lets the GUI integrate against a
+stable interface even while a module's internals change.
