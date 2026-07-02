@@ -48,6 +48,30 @@ the Jetson off. The GUI integration contract is in
 Standalone-runnable: with no board present it serves the page and reports
 `connected:false`, retrying the ports — it never crashes on a missing peer.
 
+## Where the compute runs
+
+The **heavy DSP runs on the AWR2944P** — range/Doppler FFT, CFAR detection, and
+angle-of-arrival are all in the mmw_demo firmware. The Jetson never does an FFT;
+it receives the finished point cloud over UART. The host daemon only does
+**drop-free parse + clustering + tracking + serialize**, which is cheap:
+
+| Host work per frame | Cost (Orin est., ~2–3× the x86 measurement) |
+|---|---|
+| Full path, typical ~100-pt frame | ~50 µs |
+| DBSCAN + track, worst case 500 pts | ~1 ms |
+
+That is **~1–2 % of one core at 30 Hz**, <1 MB RAM, and adds **<1 ms** latency —
+the end-to-end latency floor is the chip's frame period, not this code. The only
+superlinear cost is DBSCAN's O(N²); fine at mmw_demo point counts, swap to a
+spatial-grid O(N) if counts ever spike. (Reproduce with the microbench under
+`src/` — not shipped.)
+
+**Migration to fully on-chip:** clustering/tracking is host-side only because
+today's firmware has no Group Tracker. The parser already handles the tracker
+TLVs (308/309), so once Phase-2 firmware links `gtrack`, the chip emits target
+boxes directly and this daemon drops to a pure parse-and-forward — no rewrite.
+See [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
+
 ## Layout
 - `src/` — C daemon (`serial`, `cfg_push`, `tlv`, `cluster`, `wire`, `http`).
 - `cfg/awr2944P_ag.cfg` — the shipped A/G long-range profile (LVDS off).
