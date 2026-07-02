@@ -61,7 +61,8 @@ sh systemd/install.sh
 - **Radar** — wired to the **real `radar/` daemon**: `radar_client.c` subscribes to its
   SSE `:8092/stream`, the app serves frames verbatim on `/radar` (browser stays
   single-origin), and the scope renders the daemon's point cloud + class-less target
-  boxes (coasting = dashed/dim). Filters: FOV/SPEED/RANGE client-side; **SNR inert**
+  boxes (every target is a live this-frame detection; the GUI holds+fades a dropped box
+  ~300 ms — display persistence, not coasting). Filters: FOV/SPEED/RANGE client-side; **SNR inert**
   (firmware omits SNR — Phase 2). Run the daemon in `-s` sim to develop with the board
   off. Contract: [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md).
 - **Tracking** — `TRACK` is AUTO/MANUAL. AUTO engages the most important target

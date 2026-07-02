@@ -47,9 +47,11 @@ scope, locks, overlay chips) stay vivid in both modes.
 The scope consumes the **`radar/` daemon** (radar/docs/INTEGRATION.md). `radar_client.c`
 subscribes to its SSE `:8092/stream`, keeps the latest frame, and the app serves it
 **verbatim on `/radar`** so the browser stays single-origin (never touches `:8092`).
-Frame schema is the daemon's (points `{x,y,z,v,snr,r,az,el,tid}`, class-less targets
-with `coasting`). `tid=255` = unclustered clutter. Develop with the board off via the
-daemon's `-s` sim.
+Frame schema is the daemon's (points `{x,y,z,v,snr,r,az,el,tid}`, class-less targets —
+every target is a live this-frame detection with a stable `tid` + velocity; no coasting
+in the wire). `tid=255` = unclustered clutter. The GUI owns display persistence (hold +
+fade a dropped box ~300 ms so a one-frame miss doesn't blink); real motion-model
+coasting is the future tracking module's job. Develop with the board off via `-s` sim.
 
 ## Radar tuning (DEV) — two distinct groups
 - **Display filters (client-side only):** `FOV ±`, `SPEED MIN`, `RANGE MIN` gate what
@@ -67,7 +69,7 @@ daemon's `-s` sim.
 | `/` · `/app.css` · `/app.js` | the embedded page (served `no-cache` — assets change per build) |
 | `/stream` | MJPEG multipart (the latest small picture, fanned to every screen) |
 | `/stats` | JSON, polled ~6 Hz (below) |
-| `/radar` | the latest radar-daemon frame **verbatim** (polled ~8 Hz): the daemon's schema — `connected, max_range_m, fov_half_deg, points:[{x,y,z,v,snr,r,az,el,tid}], targets:[{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,coasting,class}]`. Proxied from `:8092/stream`. |
+| `/radar` | the latest radar-daemon frame **verbatim** (polled ~8 Hz): the daemon's schema — `connected, max_range_m, fov_half_deg, points:[{x,y,z,v,snr,r,az,el,tid}], targets:[{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}]` (live this-frame detections). Proxied from `:8092/stream`. |
 | `/ctl?…` | one-shot controls (below) |
 
 `/stats` fields: `fps` (encoder), `src_fps` (EO channel), `mbps`, `zoom`, `res_w/h`,
