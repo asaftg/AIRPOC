@@ -83,22 +83,26 @@ void cap_close(Capture *c);
 const uint8_t *cap_dqbuf(Capture *c, int *index);
 void cap_requeue(Capture *c, int index);
 
-/* ---- ISP: Y10 (stride bytesperline) -> 8-bit tone-mapped mono ---- */
-/* Meter: mean of a subsample, 10-bit scale (for AE). */
+/* ---- ISP (Y10 stride = bytesperline) ---- */
+/* AE metric: mean of an 8x8 subsample, 10-bit scale. */
 double isp_mean10(const uint8_t *y10, int bpl, int w, int h);
-/* Tone-map a Y10 frame to an 8-bit grayscale buffer (w*h). */
-void   isp_tonemap(const uint8_t *y10, int bpl, int w, int h, uint8_t *out8);
-/* Digital zoom: nearest-neighbour upscale of a centered 1/zoom crop (zoom 1/2/4/8).
- * zoom==1 is a copy. src and dst are both w*h 8-bit. */
-void   isp_zoom(const uint8_t *src, int w, int h, int zoom, uint8_t *dst);
-/* Focus-assist sharpness (Tenengrad) over a centered ROI; higher = sharper. */
-double isp_sharpness(const uint8_t *img8, int w, int h);
+/* Focus metric: Tenengrad over the native center ROI, on 10-bit values. */
+double isp_sharpness(const uint8_t *y10, int bpl, int w, int h);
+/* Wire feed: crop(cx,cy,cw,ch) -> box-average downscale to ow*oh -> tone map -> 8-bit
+ * (one fused pass; crop = digital zoom). */
+void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
+                         uint8_t *out8, int ow, int oh);
 
-/* ---- MJPEG monitor server (HTML overlay + zoom controls, /stream, /stats, /ctl) ---- */
-int  mjpeg_start(int port);                  /* spawns the HTTP server thread    */
-int  mjpeg_zoom(void);                       /* current digital zoom (1/2/4/8)   */
-void mjpeg_set_sharp(double sharpness);      /* focus metric for /stats          */
-void mjpeg_publish(const uint8_t *gray, int w, int h,   /* latest frame + stats   */
-                   double fps, double mean, int exp_lines, int gain);
+/* ---- Bandwidth presets for the wire feed (display quality only; detection is
+ * always native/full-res). Selected via /ctl?preset=low|med|high. ---- */
+typedef struct { const char *name; int width; int fps; int quality; } EoPreset;
+
+/* ---- MJPEG monitor server (HTML overlay + zoom/preset controls, /stream, /stats, /ctl) ---- */
+int      mjpeg_start(int port);              /* spawns the HTTP server thread    */
+int      mjpeg_zoom(void);                   /* current digital zoom (1/2/4/8)   */
+EoPreset mjpeg_preset(void);                 /* current wire preset (LOW/MED/HIGH) */
+void     mjpeg_set_sharp(double sharpness);  /* focus metric for /stats          */
+void     mjpeg_publish(const uint8_t *gray, int w, int h,   /* encoded feed + stats */
+                       double fps, double mean, int exp_lines, int gain);
 
 #endif /* AIRPOC_EO_PIPELINE_H */

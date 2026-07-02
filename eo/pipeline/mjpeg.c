@@ -22,8 +22,18 @@ static struct { double fps, mean; int exp_lines, gain; } g_stat;
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
 static double          g_sharp = 0;        /* focus-assist sharpness (Tenengrad) */
 
-int  mjpeg_zoom(void)          { return g_zoom; }
-void mjpeg_set_sharp(double s) { g_sharp = s; }
+/* Wire presets: display width, encoder fps cap, JPEG quality → rough WiFi bitrate.
+ * Detection is always native/full-res; only the human view uses these. */
+static const EoPreset PRESETS[3] = {
+    { "LOW",  480, 15, 55 },   /* ~1.5 Mb/s — weak/shared WiFi */
+    { "MED",  640, 20, 72 },   /* ~4 Mb/s   — default          */
+    { "HIGH", 960, 25, 82 },   /* ~10 Mb/s  — good link         */
+};
+static volatile int    g_preset = 1;       /* MED default */
+
+int      mjpeg_zoom(void)      { return g_zoom; }
+EoPreset mjpeg_preset(void)    { return PRESETS[g_preset]; }
+void     mjpeg_set_sharp(double s) { g_sharp = s; }
 
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
@@ -46,10 +56,13 @@ static const char *PAGE =
 "&nbsp;&nbsp;<span id=ls>ILLUM</span> "
 "<button onclick=L(1) id=lon>ON</button><button onclick=L(0) id=loff>OFF</button> "
 "beam <button onclick=P(-32)>pow-</button><button onclick=P(32)>pow+</button> "
-"<button onclick=F(-1)>fov-</button><button onclick=F(1)>fov+</button></div>"
+"<button onclick=F(-1)>fov-</button><button onclick=F(1)>fov+</button>"
+"&nbsp;&nbsp;feed <button onclick=Q('low') id=qLOW>LOW</button>"
+"<button onclick=Q('med') id=qMED>MED</button><button onclick=Q('high') id=qHIGH>HIGH</button></div>"
 "<div id=wrap><img src=/stream><div id=roi></div><div id=ov></div></div><script>"
 "var foc=false,peak=0,lpow=64,lfov=70;"
 "function z(v){fetch('/ctl?zoom='+v)}"
+"function Q(p){fetch('/ctl?preset='+p)}"
 "function L(v){if(v&&!confirm('Fire 850nm IR laser? (invisible, eye hazard)'))return;fetch('/ctl?laser='+v)}"
 "function P(d){lpow=Math.max(0,Math.min(255,lpow+d));fetch('/ctl?power='+lpow)}"
 "function F(dir){var st=lfov>25?5:1;lfov=Math.max(2,Math.min(70,Math.round(lfov+dir*st)));fetch('/ctl?fov='+lfov)}"
@@ -58,7 +71,8 @@ static const char *PAGE =
 "async function t(){try{let d=await(await fetch('/stats')).json();"
 "var s='IMX296 Y10  '+d.fps.toFixed(0)+' fps  mean='+d.mean+'/1023\\n'+"
 "'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480\\n'+"
-"'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x';"
+"'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x\\n'+"
+"'feed '+d.preset+'  '+d.width+'x'+d.height+' @'+d.maxfps+' cap';"
 "if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
 "s+='\\nFOCUS  '+Math.round(d.sharp)+'  peak '+Math.round(peak)+'  '+p+'%  (turn ring to max)';}"
 "if(d.laser)s+='\\n** LASER ON  pow '+d.lpower+'/255  beam '+d.lfov.toFixed(0)+'deg **';"
@@ -68,7 +82,8 @@ static const char *PAGE =
 "var ls=document.getElementById('ls');"
 "if(!d.lpresent){ls.textContent='ILLUM(none)';ls.style.color='#666'}"
 "else{ls.textContent=d.laser?'LASER ON':'ILLUM';ls.style.color=d.laser?'#f00':'#6f6'}"
-"[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'')}catch(e){}}"
+"[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'');"
+"['LOW','MED','HIGH'].forEach(q=>document.getElementById('q'+q).className=q==d.preset?'on':'')}catch(e){}}"
 "setInterval(t,150);t();</script></body></html>";
 
 static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *len)
@@ -82,7 +97,7 @@ static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *l
     c.image_width = w; c.image_height = h;
     c.input_components = 1; c.in_color_space = JCS_GRAYSCALE;
     jpeg_set_defaults(&c);
-    jpeg_set_quality(&c, 85, TRUE);
+    jpeg_set_quality(&c, PRESETS[g_preset].quality, TRUE);
     jpeg_start_compress(&c, TRUE);
     while (c.next_scanline < (JDIMENSION)h) {
         JSAMPROW row = (JSAMPROW)(gray + (size_t)c.next_scanline * w);
@@ -124,13 +139,16 @@ static void *client(void *arg)
         double vf = 2 * atan((EO_HEIGHT * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
         int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
         illum_snapshot(&lon, &lpw, &lfov, &lpr);
-        char body[440];
+        EoPreset p = PRESETS[g_preset];
+        char body[520];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
-            "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
+            "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d,"
+            "\"preset\":\"%s\",\"width\":%d,\"height\":%d,\"maxfps\":%d}\n",
             fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e), g, z, hf, vf, g_sharp,
-            lon, lpw, lfov, lpr);
+            lon, lpw, lfov, lpr,
+            p.name, p.width, p.width * EO_HEIGHT / EO_WIDTH, p.fps);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
         close(fd);
@@ -143,6 +161,11 @@ static void *client(void *arg)
         if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
         if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
         if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
+        if ((q = strstr(req, "preset="))) {                              /* low|med|high */
+            if (!strncmp(q + 7, "low", 3))  g_preset = 0;
+            else if (!strncmp(q + 7, "med", 3))  g_preset = 1;
+            else if (!strncmp(q + 7, "high", 4)) g_preset = 2;
+        }
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }
