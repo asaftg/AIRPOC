@@ -29,11 +29,23 @@ Emits TLVs **{1, 2, 6, 9}** — DetectedPoints (1), range profile (2), stats
 | **Range resolution** | **2.60 m** |
 | **Max range** | **500 m** |
 | Integration gain | 25.8 dB (10·log₁₀ 384) |
-| CFAR floor (range) | 17 dB |
+| CFAR floor (range) | **17 dB — the minimum** (chip floods/collapses below) |
 | MIMO | DDMA, 4TX/4RX |
-| Azimuth FOV | ±30° |
+| Azimuth FOV | **±90°** in cfg (full span; useful AoA ~±60°) |
 | LVDS | **off** (`lvdsStreamCfg -1 0 0 0`) |
 | Frame period | 50 ms → 20 Hz |
+
+**Publish-max, filter-in-GUI.** The cfg is deliberately *permissive* — CFAR at
+its 17 dB floor and FOV at full span — so the chip emits the **most** points it
+safely can. The GUI trims SNR and azimuth **live with sliders** (host-side, no
+cfg re-push). There are two SNRs and two FOVs by design: the **cfg** ones (CFAR
+17 dB, FOV ±90) set what the chip *emits*; the **GUI** ones filter what's
+*shown*. So the GUI needs only one SNR slider and one FOV slider.
+
+> Pitfall: the GUI **SNR slider needs per-point SNR (TLV 7)**, which this
+> firmware build does **not** emit even with `detectedObjects 2`. Until a
+> Phase-2 firmware enables SideInfo, `snr` is `null` and the SNR slider is
+> inert — the FOV slider works today (per-point azimuth is always present).
 
 Human baseline on this profile: a walking person is visible to **~100 m**
 (dynamic returns only). Vehicles/drones reach farther (larger RCS).

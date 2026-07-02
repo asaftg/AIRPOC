@@ -30,7 +30,9 @@
 
 #define JSON_CAP (256 * 1024)
 #define AG_MAX_RANGE_M   500.0
-#define AG_FOV_HALF_DEG   30.0
+/* cfg publishes the full angular span (aoaFovCfg ±90); the GUI slider trims
+ * azimuth live and defaults to the ~±60 useful-AoA region. */
+#define AG_FOV_HALF_DEG   90.0
 
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
