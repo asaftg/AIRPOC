@@ -157,12 +157,14 @@ static void *client(void *arg)
         int dw, dh; mjpeg_res_dims(&dw, &dh);
         char body[620];
         int bl = snprintf(body, sizeof(body),
-            "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,\"sfps\":%.1f,"
+            "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
+            "\"sfps\":%.1f,\"fps_cap\":%.0f,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
-            st.fps, st.mean, st.exp_ms, st.duty_pct, st.gain, st.sfps,
+            st.fps, st.mean, st.exp_ms, st.duty_pct, st.gain,
+            st.sfps, st.sfps,
             z, hf, vf, st.focus,
             st.ae_on, st.gaincap, st.median, st.connected,
             mjpeg_res_name(), dw, dh,

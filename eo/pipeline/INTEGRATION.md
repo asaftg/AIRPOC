@@ -96,9 +96,11 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?zoom=` | 1/2/4/8 | digital zoom |
 | `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
 
-**`/stats`** returns all live values (`fps, sfps, mean, exp_ms, duty_pct, gain, gaincap,
-ae, median, zoom, hfov, vfov, sharp, res, dw, dh, connected, laser, lpower, lfov,
-lpresent`) so the GUI can render the current state of every knob.
+**`/stats`** returns all live values so the GUI renders the current state of every knob:
+`fps` (measured display rate), `sfps` (sensor rate), **`fps_cap`** (the configured
+operating-fps cap = the value set via `?fps=`; the AE never changes fps, so this is the
+set value, not a guess), `mean, exp_ms, duty_pct, gain, gaincap, ae, median, zoom, hfov,
+vfov, sharp, res, dw, dh, connected, laser, lpower, lfov, lpresent`.
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.
