@@ -56,23 +56,27 @@ void sensor_close(Sensor *s)
     s->i2c_fd = -1;
 }
 
-int sensor_apply(Sensor *s, int exp_lines, int gain)
+int sensor_apply(Sensor *s, int exp_lines, int gain, int vmax)
 {
-    if (exp_lines < EO_MIN_EXP_LINES) exp_lines = EO_MIN_EXP_LINES;
-    if (exp_lines > EO_MAX_EXP_LINES) exp_lines = EO_MAX_EXP_LINES;
+    if (vmax < EO_VMAX_MIN) vmax = EO_VMAX_MIN;
+    if (vmax > EO_VMAX_MAX) vmax = EO_VMAX_MAX;
+    if (exp_lines < EO_MIN_EXP_LINES)   exp_lines = EO_MIN_EXP_LINES;
+    if (exp_lines > vmax - EO_SHS1_MIN) exp_lines = vmax - EO_SHS1_MIN;
     if (gain < EO_GAIN_MIN) gain = EO_GAIN_MIN;
     if (gain > EO_GAIN_MAX) gain = EO_GAIN_MAX;
-    int shs1 = EO_VMAX - exp_lines;
+    int shs1 = vmax - exp_lines;
     if (shs1 < EO_SHS1_MIN) shs1 = EO_SHS1_MIN;
-    if (shs1 > EO_SHS1_MAX) shs1 = EO_SHS1_MAX;
 
     uint8_t on = 0x01, off = 0x00;
+    uint8_t vm[3] = { vmax & 0xff, (vmax >> 8) & 0xff, (vmax >> 16) & 0x0f };
     uint8_t sh[3] = { shs1 & 0xff, (shs1 >> 8) & 0xff, (shs1 >> 16) & 0xff };
     uint8_t gn[2] = { gain & 0xff, (gain >> 8) & 0xff };
 
-    /* REGHOLD on -> write SHS1 + GAIN -> REGHOLD off: all latch together at VSYNC,
-     * so a frame never sees a half-written 24-bit SHS1 (the band-shift tear). */
+    /* REGHOLD on -> write VMAX + SHS1 + GAIN -> REGHOLD off: all latch together at
+     * VSYNC, so a frame never sees a half-written 24-bit register (band-shift tear).
+     * VMAX (0x3010) travels with SHS1 so their difference (= integration) stays valid. */
     if (i2c_w(s, 0x3008, &on, 1))            return -1;   /* CTRL08 REGHOLD = 1 */
+    if (i2c_w(s, 0x3010, vm, 3))             return -1;   /* VMAX (24-bit LE)   */
     if (i2c_w(s, 0x308d, sh, 3))             return -1;   /* SHS1 (24-bit LE)   */
     if (i2c_w(s, 0x3204, gn, 2))             return -1;   /* GAIN (16-bit LE)   */
     if (i2c_w(s, 0x3008, &off, 1))           return -1;   /* CTRL08 REGHOLD = 0 */

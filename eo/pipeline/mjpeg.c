@@ -18,12 +18,27 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char  *g_jpeg = NULL;      /* latest encoded frame */
 static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
-static struct { double fps, mean; int exp_lines, gain; } g_stat;
+static struct { double fps, mean; int exp_lines, gain, vmax; } g_stat;
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
 static double          g_sharp = 0;        /* focus-assist sharpness (Tenengrad) */
 
+/* Exposure/gain override (set via /ctl, read by the AE loop). Defaults = auto. */
+static volatile int g_ae_on   = 1;
+static volatile int g_man_gain = 40;
+static volatile int g_man_exp  = EO_MAX_EXP_LINES;   /* ~16.5 ms                 */
+static volatile int g_man_vmax = EO_VMAX_MIN;        /* 60 fps                   */
+static volatile int g_gaincap  = EO_GAIN_CAP;        /* AE gain ceiling          */
+static volatile int g_median   = 1;                  /* 3x3 median on            */
+
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
 int      mjpeg_zoom(void)      { return g_zoom; }
 void     mjpeg_set_sharp(double s) { g_sharp = s; }
+EoManual mjpeg_manual(void)
+{
+    EoManual m = { g_ae_on, g_man_gain, g_man_exp, g_man_vmax, g_gaincap, g_median };
+    return m;
+}
 
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
@@ -36,6 +51,7 @@ static const char *PAGE =
 "#roi{position:absolute;left:30%;top:30%;width:40%;height:40%;border:2px solid #0f0;"
 "box-sizing:border-box;display:none;pointer-events:none}"
 "#bar{position:fixed;top:8px;left:8px;color:#6f6;z-index:2}"
+"#bar2{position:fixed;top:44px;left:8px;color:#6f6;z-index:2}"
 "button{background:#222;color:#0f0;border:1px solid #0a0;padding:5px 9px;cursor:pointer}"
 "button.on{background:#0a0;color:#000}#lon.hot{background:#f00;color:#fff;border-color:#f00}"
 "#ls{margin-left:6px}</style></head><body>"
@@ -47,18 +63,28 @@ static const char *PAGE =
 "<button onclick=L(1) id=lon>ON</button><button onclick=L(0) id=loff>OFF</button> "
 "beam <button onclick=P(-32)>pow-</button><button onclick=P(32)>pow+</button> "
 "<button onclick=F(-1)>fov-</button><button onclick=F(1)>fov+</button></div>"
+"<div id=bar2>exposure <button onclick=A() id=aeb>AUTO</button>"
+"&nbsp;gain <button onclick=G(-30)>g-</button><button onclick=G(30)>g+</button>"
+"&nbsp;exp <button onclick=E(0.77)>exp-</button><button onclick=E(1.3)>exp+</button>"
+"&nbsp;auto-cap <button onclick=C(-20)>cap-</button><button onclick=C(20)>cap+</button>"
+"&nbsp;<button onclick=M() id=mdb>median</button></div>"
 "<div id=wrap><img src=/stream><div id=roi></div><div id=ov></div></div><script>"
-"var foc=false,peak=0,lpow=64,lfov=70;"
+"var foc=false,peak=0,lpow=64,lfov=70,S={};"
 "function z(v){fetch('/ctl?zoom='+v)}"
+"function A(){fetch('/ctl?ae='+(S.ae?0:1))}"
+"function G(d){fetch('/ctl?gain='+Math.max(0,Math.min(480,(S.gain||0)+d)))}"
+"function E(f){fetch('/ctl?expms='+Math.max(0.1,(S.exp_ms||16)*f).toFixed(2))}"
+"function C(d){fetch('/ctl?gaincap='+Math.max(0,Math.min(480,(S.gaincap||120)+d)))}"
+"function M(){fetch('/ctl?median='+(S.median?0:1))}"
 "function L(v){if(v&&!confirm('Fire 850nm IR laser? (invisible, eye hazard)'))return;fetch('/ctl?laser='+v)}"
 "function P(d){lpow=Math.max(0,Math.min(255,lpow+d));fetch('/ctl?power='+lpow)}"
 "function F(dir){var st=lfov>25?5:1;lfov=Math.max(2,Math.min(70,Math.round(lfov+dir*st)));fetch('/ctl?fov='+lfov)}"
 "function f(){foc=!foc;peak=0;document.getElementById('roi').style.display=foc?'block':'none';"
 "document.getElementById('fb').className=foc?'on':''}"
-"async function t(){try{let d=await(await fetch('/stats')).json();"
-"var s='IMX296 Y10  '+d.fps.toFixed(0)+' fps  mean='+d.mean+'/1023\\n'+"
-"'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480\\n'+"
-"'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x';"
+"async function t(){try{let d=await(await fetch('/stats')).json();S=d;"
+"var s='IMX296 Y10  disp '+d.fps.toFixed(0)+'fps  sensor '+d.sfps.toFixed(0)+'fps  mean='+d.mean+'/1023\\n'+"
+"'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480  '+(d.ae?'AUTO(cap '+d.gaincap+')':'MANUAL')+'\\n'+"
+"'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x  median '+(d.median?'ON':'off');"
 "if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
 "s+='\\nFOCUS  '+Math.round(d.sharp)+'  peak '+Math.round(peak)+'  '+p+'%  (turn ring to max)';}"
 "if(d.laser)s+='\\n** LASER ON  pow '+d.lpower+'/255  beam '+d.lfov.toFixed(0)+'deg **';"
@@ -68,7 +94,10 @@ static const char *PAGE =
 "var ls=document.getElementById('ls');"
 "if(!d.lpresent){ls.textContent='ILLUM(none)';ls.style.color='#666'}"
 "else{ls.textContent=d.laser?'LASER ON':'ILLUM';ls.style.color=d.laser?'#f00':'#6f6'}"
-"[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'')}catch(e){}}"
+"[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'');"
+"document.getElementById('aeb').textContent=d.ae?'AUTO':'MANUAL';"
+"document.getElementById('aeb').className=d.ae?'on':'';"
+"document.getElementById('mdb').className=d.median?'on':''}catch(e){}}"
 "setInterval(t,150);t();</script></body></html>";
 
 static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *len)
@@ -95,7 +124,7 @@ static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *l
 }
 
 void mjpeg_publish(const uint8_t *gray, int w, int h,
-                   double fps, double mean, int exp_lines, int gain)
+                   double fps, double mean, int exp_lines, int gain, int vmax)
 {
     unsigned long len = 0;
     unsigned char *j = encode(gray, w, h, &len);
@@ -103,7 +132,8 @@ void mjpeg_publish(const uint8_t *gray, int w, int h,
     pthread_mutex_lock(&g_lock);
     free(g_jpeg);
     g_jpeg = j; g_jpeg_len = len; g_seq++;
-    g_stat.fps = fps; g_stat.mean = mean; g_stat.exp_lines = exp_lines; g_stat.gain = gain;
+    g_stat.fps = fps; g_stat.mean = mean;
+    g_stat.exp_lines = exp_lines; g_stat.gain = gain; g_stat.vmax = vmax;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -117,19 +147,24 @@ static void *client(void *arg)
 
     if (strncmp(req, "GET /stats", 10) == 0) {
         pthread_mutex_lock(&g_lock);
-        double fps = g_stat.fps, mean = g_stat.mean; int e = g_stat.exp_lines, g = g_stat.gain;
+        double fps = g_stat.fps, mean = g_stat.mean;
+        int e = g_stat.exp_lines, g = g_stat.gain, vm = g_stat.vmax;
         pthread_mutex_unlock(&g_lock);
+        if (vm < EO_VMAX_MIN) vm = EO_VMAX_MIN;
         int z = g_zoom;
         double hf = 2 * atan((EO_WIDTH  * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
         double vf = 2 * atan((EO_HEIGHT * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
         int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
         illum_snapshot(&lon, &lpw, &lfov, &lpr);
-        char body[440];
+        char body[560];
         int bl = snprintf(body, sizeof(body),
-            "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
+            "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,\"sfps\":%.1f,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
+            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
-            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e), g, z, hf, vf, g_sharp,
+            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e, vm), g, EO_FPS_OF_VMAX(vm),
+            z, hf, vf, g_sharp,
+            g_ae_on, g_gaincap, g_median,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
@@ -143,6 +178,18 @@ static void *client(void *arg)
         if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
         if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
         if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
+        /* exposure/gain override (manual sweep). Setting a manual value drops to
+         * manual mode; ae=1 returns to auto. Exposure derives the frame length (fps). */
+        if ((q = strstr(req, "ae=")))      g_ae_on = atoi(q + 3) ? 1 : 0;
+        if ((q = strstr(req, "gain=")))  { g_man_gain = clampi(atoi(q + 5), 0, EO_GAIN_MAX); g_ae_on = 0; }
+        if ((q = strstr(req, "expms="))) {
+            int l = (int)(atof(q + 6) * 1000.0 / EO_LINE_US + 0.5);
+            g_man_exp  = clampi(l, EO_MIN_EXP_LINES, EO_VMAX_MAX - EO_SHS1_MIN);
+            g_man_vmax = clampi(g_man_exp + EO_SHS1_MIN, EO_VMAX_MIN, EO_VMAX_MAX);
+            g_ae_on = 0;
+        }
+        if ((q = strstr(req, "gaincap="))) g_gaincap = clampi(atoi(q + 8), 0, EO_GAIN_MAX);
+        if ((q = strstr(req, "median=")))  g_median  = atoi(q + 7) ? 1 : 0;
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }

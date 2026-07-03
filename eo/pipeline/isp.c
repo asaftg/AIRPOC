@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static uint8_t g_lut[256];
 static int     g_lut_ready = 0;
@@ -72,16 +73,63 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
             sm[oy * ow + ox] = (uint16_t)(cnt ? acc / cnt : 0);
         }
     }
+    /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
+     * small blown streetlight; p1 sets a real black. Endpoints are EMA-smoothed across
+     * frames so the mapping doesn't wobble frame-to-frame (the "breathing"), and the
+     * span is floored so a flat/dim scene isn't blown up to full range (6x noise gain).*/
     int hist[1024] = {0};
     for (int i = 0; i < npx; i++) hist[sm[i]]++;
-    int target = (int)(npx * 0.995), a = 0, white = 1023;
-    for (int v = 0; v < 1024; v++) { a += hist[v]; if (a >= target) { white = v; break; } }
-    if (white <= EO_BLACK + 1) white = (int)EO_BLACK + 1;
-    double scale = 255.0 / (white - EO_BLACK);
+    int lo_t = (int)(npx * 0.01), hi_t = (int)(npx * 0.99);
+    int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
+    for (int v = 0; v < 1024; v++) {
+        a += hist[v];
+        if (!got_lo && a >= lo_t) { p_lo = v; got_lo = 1; }
+        if (a >= hi_t) { p_hi = v; break; }
+    }
+    static double s_lo = -1.0, s_hi = -1.0;
+    if (s_lo < 0.0) { s_lo = p_lo; s_hi = p_hi; }      /* seed on first frame */
+    s_lo = 0.85 * s_lo + 0.15 * p_lo;
+    s_hi = 0.85 * s_hi + 0.15 * p_hi;
+    double lo = s_lo, hi = s_hi;
+    if (hi - lo < EO_MIN_SPAN) hi = lo + EO_MIN_SPAN;
+    double scale = 255.0 / (hi - lo);
     for (int i = 0; i < npx; i++) {
-        double s = (sm[i] - EO_BLACK) * scale;
+        double s = (sm[i] - lo) * scale;
         int q = (int)(s < 0 ? 0 : s > 255 ? 255 : s);
         out8[i] = g_lut[q];
     }
     free(sm);
+}
+
+/* 3x3 median (Devillard's optimal 9-element network), edge-preserving grain filter.
+ * Reads a scratch copy so the in-place write can't corrupt a pixel's own neighbours;
+ * the 1px border is left as-is. */
+#define PIX_SWAP(a, b) { uint8_t t_ = (a); (a) = (b); (b) = t_; }
+#define PIX_SORT(a, b) { if ((a) > (b)) PIX_SWAP((a), (b)); }
+void isp_median3(uint8_t *img, int w, int h)
+{
+    if (w < 3 || h < 3) return;
+    uint8_t *src = malloc((size_t)w * h);
+    if (!src) return;
+    memcpy(src, img, (size_t)w * h);
+    for (int y = 1; y < h - 1; y++) {
+        const uint8_t *r0 = src + (size_t)(y - 1) * w;
+        const uint8_t *r1 = src + (size_t)y * w;
+        const uint8_t *r2 = src + (size_t)(y + 1) * w;
+        uint8_t *o = img + (size_t)y * w;
+        for (int x = 1; x < w - 1; x++) {
+            uint8_t p[9] = { r0[x-1], r0[x], r0[x+1],
+                             r1[x-1], r1[x], r1[x+1],
+                             r2[x-1], r2[x], r2[x+1] };
+            PIX_SORT(p[1],p[2]); PIX_SORT(p[4],p[5]); PIX_SORT(p[7],p[8]);
+            PIX_SORT(p[0],p[1]); PIX_SORT(p[3],p[4]); PIX_SORT(p[6],p[7]);
+            PIX_SORT(p[1],p[2]); PIX_SORT(p[4],p[5]); PIX_SORT(p[7],p[8]);
+            PIX_SORT(p[0],p[3]); PIX_SORT(p[5],p[8]); PIX_SORT(p[4],p[7]);
+            PIX_SORT(p[3],p[6]); PIX_SORT(p[1],p[4]); PIX_SORT(p[2],p[5]);
+            PIX_SORT(p[4],p[7]); PIX_SORT(p[4],p[2]); PIX_SORT(p[6],p[4]);
+            PIX_SORT(p[4],p[2]);
+            o[x] = p[4];
+        }
+    }
+    free(src);
 }

@@ -45,7 +45,7 @@ typedef struct {
     int      bpl, w, h;
     unsigned long seq;          /* bumped on each new frame            */
     double   fps, mean;
-    int      exp_lines, gain;
+    int      exp_lines, gain, vmax;
     int      stop;
 } FrameStore;
 
@@ -80,7 +80,8 @@ static void *encoder_thread(void *arg)
         if (last_pub > 0 && (t - last_pub) < min_dt) { seen = fs->seq; pthread_mutex_unlock(&fs->lock); continue; }
 
         int bpl = fs->bpl, w = fs->w, h = fs->h;
-        double fps = fs->fps, mean = fs->mean; int el = fs->exp_lines, g = fs->gain;
+        double fps = fs->fps, mean = fs->mean;
+        int el = fs->exp_lines, g = fs->gain, vm = fs->vmax;
         memcpy(local, fs->raw, (size_t)fs->bpl * fs->h);
         seen = fs->seq;
         pthread_mutex_unlock(&fs->lock);
@@ -92,8 +93,9 @@ static void *encoder_thread(void *arg)
         int z = mjpeg_zoom();                                       /* 1/2/4/8          */
         int cw = w / z, ch = h / z, cx = (w - cw) / 2, cy = (h - ch) / 2;
         isp_scale_tonemap(local, bpl, cx, cy, cw, ch, out8, w, h);
+        if (mjpeg_manual().median) isp_median3(out8, w, h);         /* grain filter     */
 
-        mjpeg_publish(out8, w, h, fps, mean, el, g);
+        mjpeg_publish(out8, w, h, fps, mean, el, g, vm);
         last_pub = t;
     }
     free(local); free(out8);
@@ -123,7 +125,7 @@ int main(int argc, char **argv)
 
     AE ae;
     ae_init(&ae);
-    sensor_apply(&sensor, ae.exp_lines, ae.gain);
+    sensor_apply(&sensor, ae.exp_lines, ae.gain, ae.vmax);
 
     uint8_t *frame = malloc((size_t)cap.sizeimage);   /* cached copy of the DMA buffer */
     FrameStore fs = {0};
@@ -155,8 +157,14 @@ int main(int argc, char **argv)
 
         if (++frame_n % 4 == 0) {                                      /* AE @ ~15 Hz */
             double mean = isp_mean10(frame, cap.bytesperline, cap.width, cap.height);
-            ae_update(&ae, mean);
-            sensor_apply(&sensor, ae.exp_lines, ae.gain);
+            EoManual man = mjpeg_manual();
+            if (man.ae_on) {
+                ae_update(&ae, mean, man.gaincap);
+            } else {                                                   /* manual sweep */
+                ae.exp_lines = man.exp_lines; ae.gain = man.gain;
+                ae.vmax = man.vmax; ae.mean = mean;
+            }
+            sensor_apply(&sensor, ae.exp_lines, ae.gain, ae.vmax);
         }
 
         double t = now_s(), dt = t - t_last; t_last = t;
@@ -169,7 +177,8 @@ int main(int argc, char **argv)
             pthread_mutex_lock(&fs.lock);
             memcpy(fs.raw, frame, (size_t)cap.bytesperline * cap.height);
             fs.seq++;
-            fs.fps = fps; fs.mean = ae.mean; fs.exp_lines = ae.exp_lines; fs.gain = ae.gain;
+            fs.fps = fps; fs.mean = ae.mean;
+            fs.exp_lines = ae.exp_lines; fs.gain = ae.gain; fs.vmax = ae.vmax;
             pthread_cond_signal(&fs.cond);
             pthread_mutex_unlock(&fs.lock);
         }

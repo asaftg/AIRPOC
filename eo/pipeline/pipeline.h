@@ -25,20 +25,33 @@
 #define EO_LINE_US       (EO_HMAX / EO_PIXCLK_HZ * 1e6)   /* 14.815 us/line  */
 #define EO_FRAME_US      (EO_VMAX * EO_LINE_US)           /* 16667 us        */
 #define EO_SHS1_MIN      8
-#define EO_SHS1_MAX      1120     /* min exposure floor; higher = shorter shutter for
-                                   * bright/daylight scenes (avoids blown highlights) */
-#define EO_MAX_EXP_LINES (EO_VMAX - EO_SHS1_MIN)          /* 1117 (~16.5 ms) */
-#define EO_MIN_EXP_LINES (EO_VMAX - EO_SHS1_MAX)          /* 5    (~0.074 ms)*/
+#define EO_MIN_EXP_LINES 5             /* ~0.074 ms integration floor        */
+/* VMAX (frame length) is now a control axis, not a constant: a longer frame =
+ * lower fps = room for a longer exposure. The AE lengthens the frame (drops fps)
+ * to gather light with TIME before it ever reaches for gain — the "expose, don't
+ * gain" policy the seeker IMX568 bench uses. */
+#define EO_VMAX_MIN      EO_VMAX       /* 1125 = 60 fps (shortest frame)     */
+#define EO_VMAX_MAX      5625          /* 12 fps (longest frame; ~83 ms exp) */
+#define EO_MAX_EXP_LINES (EO_VMAX_MIN - EO_SHS1_MIN)      /* 1117 (~16.5ms@60)*/
 #define EO_GAIN_MIN      0
-#define EO_GAIN_MAX      480           /* 0.1 dB / step                      */
+#define EO_GAIN_MAX      480           /* 0.1 dB/step (~48 dB max, = grain)  */
+#define EO_GAIN_CAP      120           /* AE gain ceiling ~12 dB: lengthen the
+                                        * frame first, accept dim, don't gain
+                                        * into 48 dB of noise.               */
+#define EO_FPS_OF_VMAX(v)  (67500.0 / (double)(v))        /* 74.25e6/1100/VMAX*/
+#define EO_VMAX_OF_FPS(f)  ((int)(67500.0 / (double)(f) + 0.5))
 
-/* ---- ISP / AE tuning (matches the bench tool) ---- */
+/* ---- ISP / AE tuning ---- */
 #define EO_AE_TARGET     450.0         /* target mean, 10-bit                */
 #define EO_BLACK         60.0          /* black level (BLKLEVEL 0x3c)        */
 #define EO_GAMMA         0.85
+#define EO_MIN_SPAN      40.0          /* min p1..p99 span (10-bit counts) the
+                                        * tone-map will stretch to full range;
+                                        * below this the scene is flat/dim and
+                                        * stretching just amplifies noise 6x+ */
 
 /* duty = exposure_time / frame_time = exposure_lines / VMAX  (== NIR strobe duty) */
-#define EO_DUTY_PCT(exp_lines)  (100.0 * (exp_lines) / EO_VMAX)
+#define EO_DUTY_PCT(exp_lines, vmax)  (100.0 * (exp_lines) / (double)(vmax))
 #define EO_EXP_US(exp_lines)    ((exp_lines) * EO_LINE_US)
 
 /* ---- lens/sensor geometry for FOV (CommonLands CIL122 f=12mm, IMX296 3.45um) ---- */
@@ -53,20 +66,23 @@ typedef struct {
 
 int  sensor_open(Sensor *s);                 /* finds the *-001a bus, opens it   */
 void sensor_close(Sensor *s);
-/* Atomically latch exposure (in lines) + gain (0..480) via REGHOLD. */
-int  sensor_apply(Sensor *s, int exp_lines, int gain);
+/* Atomically latch VMAX(frame length) + exposure(lines) + gain(0..480) via REGHOLD.
+ * SHS1 = vmax - exp_lines; a larger vmax lengthens the frame (lowers fps). */
+int  sensor_apply(Sensor *s, int exp_lines, int gain, int vmax);
 
 /* ---- auto-exposure state + step (pure function of the metered mean) ---- */
 typedef struct {
     int    exp_lines;   /* current integration, lines    */
     int    gain;        /* current gain, 0..480          */
+    int    vmax;        /* current frame length (fps)    */
     double mean_ema;    /* filtered metric               */
     double mean;        /* last raw metric               */
 } AE;
 
 void ae_init(AE *ae);
-/* Feed the metered 10-bit mean; updates exp_lines/gain (flicker-free law). */
-void ae_update(AE *ae, double mean10);
+/* Feed the metered 10-bit mean; updates exp_lines/vmax/gain (expose-then-lengthen-
+ * frame-then-gain, gain capped at gaincap so it accepts a dim frame over noise). */
+void ae_update(AE *ae, double mean10, int gaincap);
 
 /* ---- V4L2 mmap capture ---- */
 typedef struct {
@@ -89,9 +105,13 @@ double isp_mean10(const uint8_t *y10, int bpl, int w, int h);
 /* Focus metric: Tenengrad over the native center ROI, on 10-bit values. */
 double isp_sharpness(const uint8_t *y10, int bpl, int w, int h);
 /* Wire feed: crop(cx,cy,cw,ch) of the Y10 frame -> tone map -> 8-bit, native pixels
- * (crop = digital zoom; ow=cw/oh=ch keeps full resolution, no downscale). */
+ * (crop = digital zoom; ow=cw/oh=ch keeps full resolution, no downscale). The tone
+ * map is a temporally-smoothed p1/p99 stretch on the raw 10-bit (kills the blown-
+ * highlight + frame-to-frame breathing the per-frame 99.5%-white version caused). */
 void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
                          uint8_t *out8, int ow, int oh);
+/* In-place edge-preserving 3x3 median on an 8-bit plane — cheap low-light grain filter. */
+void   isp_median3(uint8_t *img, int w, int h);
 
 /* ---- Wire feed tuning. Full native resolution; kept light on WiFi/CPU by capping
  * the encode rate (capture + detection still run at the sensor rate) and the JPEG
@@ -99,11 +119,24 @@ void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, in
 #define EO_FEED_FPS      25            /* encoder rate cap; capture stays ~60 fps */
 #define EO_FEED_QUALITY  85            /* MJPEG quality (libjpeg-turbo)           */
 
-/* ---- MJPEG monitor server (HTML overlay + zoom control, /stream, /stats, /ctl) ---- */
+/* ---- Manual exposure/gain override (set via /ctl; read by the AE loop). Lets us
+ * sweep gain vs exposure live to see whether the grain is fixable in software
+ * (low-gain long-exposure -> smooth-but-dim) or a sensor limit (still grainy). ---- */
+typedef struct {
+    int ae_on;      /* 1 = auto exposure; 0 = use the manual values below */
+    int gain;       /* manual gain 0..480 (0.1 dB/step)                   */
+    int exp_lines;  /* manual integration, lines                          */
+    int vmax;       /* manual frame length (fps = 67500/vmax)             */
+    int gaincap;    /* AE gain ceiling in auto mode                       */
+    int median;     /* 1 = 3x3 median on the display frame                */
+} EoManual;
+
+/* ---- MJPEG monitor server (HTML overlay + controls, /stream, /stats, /ctl) ---- */
 int      mjpeg_start(int port);              /* spawns the HTTP server thread    */
 int      mjpeg_zoom(void);                   /* current digital zoom (1/2/4/8)   */
+EoManual mjpeg_manual(void);                 /* current manual/AE override state */
 void     mjpeg_set_sharp(double sharpness);  /* focus metric for /stats          */
 void     mjpeg_publish(const uint8_t *gray, int w, int h,   /* encoded feed + stats */
-                       double fps, double mean, int exp_lines, int gain);
+                       double fps, double mean, int exp_lines, int gain, int vmax);
 
 #endif /* AIRPOC_EO_PIPELINE_H */
