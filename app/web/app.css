@@ -64,14 +64,17 @@ body.day{
 /* right column: target list (top) + radar (bottom, larger) */
 #right{flex:0 0 30%;max-width:30%;min-width:300px;display:flex;flex-direction:column;
   background:var(--bg);border-left:1px solid var(--bd)}
-#targets{flex:0 0 auto;display:flex;flex-direction:column;background:var(--panel);
-  border-bottom:1px solid var(--bd);max-height:38%;min-height:96px}
-#radar{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
+/* target list grows to fill the column; radar sits at the bottom as a 2:1 panel so the
+ * forward half-circle PPI fills it (a half-circle wants width = 2 x height) instead of
+ * cramming into the bottom of a tall box */
+#targets{flex:1 1 auto;min-height:96px;display:flex;flex-direction:column;background:var(--panel);
+  border-bottom:1px solid var(--bd)}
+#radar{flex:0 0 auto;display:flex;flex-direction:column;background:var(--panel)}
 .panel-head{display:flex;align-items:center;gap:8px;padding:6px 10px;
   background:var(--head);border-bottom:1px solid var(--bd)}
 .panel-title{font-size:11px;letter-spacing:1.2px;color:var(--amber);font-weight:600}
 .hz{font-size:11px;color:var(--muted);margin-left:auto}
-.rwrap{position:relative;flex:1;min-height:0;background:var(--canvas)}
+.rwrap{position:relative;width:100%;aspect-ratio:2/1;background:var(--canvas)}
 #radar-cv{position:absolute;inset:0;width:100%;height:100%}
 
 /* ── target list ── */
@@ -92,6 +95,7 @@ body.day{
   border:1px solid var(--bd2);border-radius:3px;color:var(--cyan);cursor:pointer}
 .exp svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #stage.rbig #radar{position:absolute;inset:0;width:auto;max-width:none;z-index:3;border-left:0}
+#stage.rbig .rwrap{aspect-ratio:auto;flex:1 1 auto;min-height:0}   /* fill the stage when expanded */
 #stage.rbig #eo,#stage.rbig #targets{visibility:hidden}
 
 /* ── bottom cluster: pinned to the bottom-centre of the EO panel ── */

@@ -13,7 +13,7 @@
   var zoom = 1;
   var trackMode = "auto", engagedTid = null, sentEngage = null;
   var illumMode = "auto";
-  var rp = { snr: 16, speed: 0.4, rmin: 0, fov: 60 };   /* GUI display filters only */
+  var rp = { snr: 16, speed: 0, rmin: 0, fov: 60 };   /* GUI display filters only (speed 0 = show static clutter too, like the daemon) */
   var lastStats = {}, lastRadar = null;
 
   /* ── theme / dev / swap ── */
@@ -363,6 +363,11 @@
       renderTargetList(d); drawRadar(d); drawEO();
     }).catch(function () {});
   }
+
+  /* Push the default stream res to the feed on load so what it streams matches the UI's
+   * active RES button (the EO /stats no longer echoes res). Smaller-than-native frames
+   * also keep the browser from buffering a backlog that delays a zoom taking effect. */
+  (function () { var a = document.querySelector("#res-btns .on"); if (a) ctl("res=" + a.dataset.res); })();
 
   setTrack("auto"); setIllum("auto"); applyTheme();
   setInterval(poll, 160); poll();
