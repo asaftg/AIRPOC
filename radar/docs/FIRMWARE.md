@@ -6,15 +6,30 @@ Custom **`mmw_demoDDM`** build (TI mmWave mcuplus SDK 4.7.2.1) for the
 AWR2944P. On-chip range/Doppler FFT + CFAR + AoA; emits the mmw_demo TLV
 point cloud over the data UART.
 
-Emits TLVs **{1, 2, 6, 9}** — DetectedPoints (1), range profile (2), stats
-(6), temperature (9).
+Emits TLVs **{1, 7, 2, 6, 9}** — DetectedPoints (1), **SideInfo / per-point SNR
+(7)**, range profile (2), stats (6), temperature (9).
 
-> Pitfall: this build does **not** emit **TLV 7 (SideInfo / per-point SNR)**
-> even with `guiMonitor ... detectedObjects 2`, and does **not** link TI's
-> Group Tracker (no TLV 308/309). So per-point SNR is unknown (parser sets it
-> `null`) and target boxes come from the host clusterer, not the chip. Both
-> are Phase-2 firmware items (see plan) — the parser already recognises TLV 7
-> and 308/309 so a future firmware drops straight in.
+**Per-point SNR is live** (verified on-board 2026-07-02: ~16–50 dB, floored at
+the CFAR threshold). The DDM chain computes it (signal peak − CFAR noise, in
+0.1 dB) and the firmware transmits **TLV 7** — the control is one `guiMonitor`
+flag:
+
+> `guiMonitor` field 2 = `detectedObjects`: **`1` = points WITH SideInfo/SNR**,
+> `2` = points WITHOUT. The shipped `ag.cfg` uses **`1`**. (We shipped `2`
+> initially and mislabelled it "firmware doesn't support SNR" — wrong; `2` is
+> the value that *suppresses* it. No rebuild/reflash was needed.)
+
+> Pitfall: this build does **not** link TI's Group Tracker (no TLV 308/309), so
+> target boxes come from the host clusterer, not the chip. On-chip gtrack is the
+> one remaining firmware item — the parser already recognises 308/309 so a
+> future firmware drops straight in.
+
+> Pitfall (from our own repo history): this firmware only accepts **one full cfg
+> per power-cycle** — re-pushing after `sensorStop` gets "Reconfig not
+> supported" and some lines are rejected. In production (boot → push once)
+> that's clean; on a daemon restart without a radar power-cycle the sensor keeps
+> streaming the loaded cfg and the re-push's unchanged lines are rejected
+> harmlessly.
 
 ## Profile — `cfg/awr2944P_ag.cfg` (A/G long-range, DCA-free)
 
@@ -40,12 +55,8 @@ its 17 dB floor and FOV at full span — so the chip emits the **most** points i
 safely can. The GUI trims SNR and azimuth **live with sliders** (host-side, no
 cfg re-push). There are two SNRs and two FOVs by design: the **cfg** ones (CFAR
 17 dB, FOV ±90) set what the chip *emits*; the **GUI** ones filter what's
-*shown*. So the GUI needs only one SNR slider and one FOV slider.
-
-> Pitfall: the GUI **SNR slider needs per-point SNR (TLV 7)**, which this
-> firmware build does **not** emit even with `detectedObjects 2`. Until a
-> Phase-2 firmware enables SideInfo, `snr` is `null` and the SNR slider is
-> inert — the FOV slider works today (per-point azimuth is always present).
+*shown*. So the GUI needs only one SNR slider and one FOV slider — and **both
+work today** (every point carries `snr` in dB and `az`).
 
 Human baseline on this profile: a walking person is visible to **~100 m**
 (dynamic returns only). Vehicles/drones reach farther (larger RCS).

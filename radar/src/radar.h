@@ -17,12 +17,13 @@
 #define RADAR_MAX_POINTS   1024   /* generous; mmw_demo gives a few hundred */
 #define RADAR_MAX_TARGETS   64
 
-/* One detected point, sensor frame. snr/noise are NaN when the firmware
- * omits the SideInfo TLV (current mmw_demoDDM build — see docs/FIRMWARE.md). */
+/* One detected point, sensor frame. snr/noise carry per-point SNR in dB (live
+ * via TLV 7 SideInfo); NaN only if a firmware without SideInfo is flashed. */
 typedef struct {
     float x, y, z;        /* metres */
     float doppler;        /* m/s, +approaching per TI convention sign of x-corr */
-    float snr, noise;     /* dB (NaN if absent) */
+    float snr, noise;     /* dB — per-point SNR (live via TLV 7); NaN if a
+                             firmware without SideInfo is ever flashed */
     float range;          /* m */
     float az, el;         /* degrees */
     int   tid;            /* assigned cluster/track id, 255 = unassigned */

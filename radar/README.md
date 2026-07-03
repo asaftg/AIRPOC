@@ -28,7 +28,8 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
   targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
 ```
 Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres. `snr` is
-`null` when the firmware omits SideInfo. `class` is always `radar_detection`.
+the per-point SNR in dB (live; `null` only if a firmware without SideInfo is
+flashed). `class` is always `radar_detection`.
 `targets` are **per-frame detections only** — a box is emitted only for a
 cluster seen this frame (**no coasting**); `tid` is stable across frames via
 association. Display persistence and motion-model coasting are the GUI's and

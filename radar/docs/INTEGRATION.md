@@ -37,7 +37,7 @@ stops clustering disappears immediately (no coasting).
 { "connected": true, "frame_id": 60, "timestamp": 1248.807,
   "profile": "awr2944P_ag.cfg", "max_range_m": 500.0, "fov_half_deg": 90.0,
   "num_points": 18, "num_targets": 2,
-  "points":  [{"x":-11.9,"y":30.5,"z":0.1,"v":0.45,"snr":null,"r":32.7,"az":-21.4,"el":0.2,"tid":1}],
+  "points":  [{"x":-11.9,"y":30.5,"z":0.1,"v":0.45,"snr":42.0,"r":32.7,"az":-21.4,"el":0.2,"tid":1}],
   "targets": [{"tid":1,"x":-11.6,"y":30.2,"z":0.1,"vx":1.34,"vy":0.25,"vz":0.04,
                "sx":0.95,"sy":0.99,"sz":0.25,"conf":1.0,"np":61,
                "class":"radar_detection"}] }
@@ -46,14 +46,16 @@ stops clustering disappears immediately (no coasting).
 - **Frame:** sensor frame, metres. `+x` right, `+y` forward (boresight), `+z`
   up. `az = atan2(x,y)` deg, `el = atan2(z, hypot(x,y))` deg.
 - **points[]:** raw cloud. `v` = radial Doppler m/s (**+approaching**). `snr`
-  is **`null`** on the current firmware (no SideInfo TLV). `tid` = owning
-  track, or `255` if unclustered (static clutter, gated out at 0.4 m/s).
+  is the **per-point SNR in dB** (live — typically ~16–50 dB, floored at the
+  CFAR threshold). It can be `null` only if a firmware without SideInfo is ever
+  flashed; the shipped A/G cfg emits it. `tid` = owning track, or `255` if
+  unclustered (static clutter, gated out at 0.4 m/s).
 - **`fov_half_deg`:** the cfg's full azimuth span (±90) — the chip publishes the
-  whole span so the GUI can trim it live. **The GUI owns two filters:** an
-  azimuth slider (works today — every point has `az`) and an SNR slider
-  (**inert until Phase-2 firmware**, since `snr` is `null` now). Default the
-  azimuth slider to ~±60 (useful AoA) and grey out the SNR slider while every
-  `snr` is `null`.
+  whole span so the GUI can trim it live. **The GUI owns two filters, both
+  live:** an azimuth slider (every point has `az`) and an **SNR slider** (every
+  point has `snr` in dB — filter on it directly). Default the azimuth slider to
+  ~±60 (useful AoA) and the SNR slider to the ~16 dB floor (raise to hide weak
+  returns).
 - **targets[]:** **class-less per-frame detections** — a box is emitted **only
   for a cluster detected this frame**. There is **no coasting**: a target the
   sensor doesn't see this frame simply isn't in the list (it does not linger or
