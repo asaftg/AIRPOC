@@ -13,6 +13,14 @@
  * cluster. The eps_pos slider is the NEAR-field base; effective eps =
  * eps_pos + EPS_RANGE_SLOPE * range. At 0.06: +1.8 m @ 30 m, +6 m @ 100 m. */
 #define EPS_RANGE_SLOPE  0.06f
+/* Range-adaptive min-samples: near returns are dense (a real target gives many
+ * dots; sparse near-clutter/multipath gives few), far returns are legitimately
+ * sparse. So require MORE points to seed a cluster up close, tapering down to a
+ * floor far away. The min_pts slider is the NEAR base; effective =
+ * max(floor, base - MINPTS_RANGE_SLOPE*range). At 0.04, base 5: 4 @ 30 m,
+ * floor @ ~75 m. Floor is min(base, 2) so slider=1 still means 1. */
+#define MINPTS_RANGE_SLOPE  0.04f
+#define MINPTS_FLOOR        2
 /* Dynamic-only + SNR gates are runtime fields (live via /ctl), seeded from
  * CLUSTER_DEFAULT_SPEED / _SNR: points too slow (static clutter) or too weak
  * never seed or join a cluster. See pt_ok(). */
@@ -156,6 +164,13 @@ static inline float eps2_pair(float eps_base, float ri, float rj) {
     return e * e;
 }
 
+/* Range-adaptive min-samples for a seed at range r (see MINPTS_RANGE_SLOPE). */
+static inline int minpts_at(int base, float range) {
+    int floor = base < MINPTS_FLOOR ? base : MINPTS_FLOOR;
+    int m = (int)lroundf((float)base - MINPTS_RANGE_SLOPE * range);
+    return m < floor ? floor : m;
+}
+
 /* A point is eligible to seed/join a cluster if it's dynamic enough AND (when
  * an SNR gate is set and SNR is known) strong enough. Static clutter and weak
  * returns are excluded. Unknown SNR (NaN, no SideInfo) is never gated out. */
@@ -191,7 +206,7 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
                      fabsf(pts[i].doppler - pts[j].doppler) <= EPS_DOP_MPS;
             nbr[j] = ok; cnt += ok;
         }
-        if (cnt < min_samples) continue;
+        if (cnt < minpts_at(min_samples, pts[i].range)) continue;
         labels[i] = next;
         int qn = 0;
         for (int j = 0; j < n; j++) if (nbr[j]) { if (labels[j] == -1) labels[j] = next; if (qn < QCAP) queue[qn++] = j; }
@@ -209,7 +224,7 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
                          fabsf(pts[jj].doppler - pts[k].doppler) <= EPS_DOP_MPS;
                 nbr2[k] = ok; cnt2 += ok;
             }
-            if (cnt2 >= min_samples) {
+            if (cnt2 >= minpts_at(min_samples, pts[jj].range)) {
                 for (int k = 0; k < n; k++)
                     if (nbr2[k] && labels[k] == -1) { labels[k] = next; if (qn < QCAP) queue[qn++] = k; }
             } else if (labels[jj] == -1) {

@@ -23,7 +23,8 @@ chip CFAR → point cloud (+per-point SNR) → point gates → DBSCAN
 |---|---|---|---|---|
 | **cluster ε** (near base) | 8 m | live | inherited (ground bench `eps_pos`) | "how close = same object" at the sensor. ↑ merges more, ↓ splits. |
 | **ε range slope** | 0.06 | fixed (`EPS_RANGE_SLOPE`) | **my estimate** (~target angular spread ≈ 3.4°) | ε grows `+slope·range` (dots spread with range). **Unverified** — walk a person at 30/60/100 m, measure real cluster spread, set to match. |
-| **min pts** | 2 | live | inherited | eligible neighbours needed to seed a cluster. ↑ = fewer/cleaner boxes, drops sparse far targets. |
+| **min pts @near** | 2 | live | new, **range-adaptive** | points needed to seed a cluster **at the sensor**; auto-tapers with range down to a floor of 2 (`MINPTS_RANGE_SLOPE` 0.04). ↑ to reject sparse near clutter/multipath (a real close target is dense) **without** losing faint far targets (which are legitimately sparse). |
+| min pts range slope | 0.04 | fixed (`MINPTS_RANGE_SLOPE`) | new estimate | how fast the near `min pts` decays to the floor with range (reaches floor ~75 m at near=5). Tune with real data. |
 | **min speed** | 0.4 m/s | live | inherited (`speed_min`) | dynamic-only gate; slower dots = static clutter, excluded. Walking humans are 0.5–2 m/s. |
 | **min SNR** | 0 dB (off) | live | **new** | per-dot confidence gate *on top of* the chip's ~17 dB CFAR floor. 0 = trust CFAR only. ↑ to reject weak/noise, ↓ to reach for faint far dots. Unknown-SNR dots always pass. |
 | **doppler gate** | 3 m/s | fixed (`EPS_DOP_MPS`) | inherited | two dots only join if radial speeds within this. Too small → one target (limbs / rigid-body spread) fragments; too large → different-speed objects merge. |
