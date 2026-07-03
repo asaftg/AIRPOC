@@ -19,14 +19,16 @@ static char           g_webroot[512] = "web";
 /* Live DBSCAN controls, set via /ctl and echoed in /stats so GUI sliders can
  * initialise. The actual clustering values live in the RadarClusterer; the
  * registered callback pushes changes there. */
-static void (*g_ctl_cb)(double, int, double, double, void *) = NULL;
+static void (*g_ctl_cb)(double, int, double, double, double, double, void *) = NULL;
 static void  *g_ctl_user = NULL;
 static double g_eps    = CLUSTER_DEFAULT_EPS_M;
 static int    g_minpts = CLUSTER_DEFAULT_MIN_PTS;
 static double g_speed  = CLUSTER_DEFAULT_SPEED;
 static double g_snrmin = CLUSTER_DEFAULT_SNR;
+static double g_fov    = CLUSTER_DEFAULT_FOV;
+static double g_dop    = CLUSTER_DEFAULT_DOP;
 
-void http_set_ctl_cb(void (*cb)(double, int, double, double, void *), void *user) {
+void http_set_ctl_cb(void (*cb)(double, int, double, double, double, double, void *), void *user) {
     g_ctl_cb = cb; g_ctl_user = user;
 }
 
@@ -100,16 +102,17 @@ static void *client(void *arg) {
 
     if (!strncmp(req, "GET /stats", 10)) {
         pthread_mutex_lock(&g_lock);
-        char body[448];
+        char body[512];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"drops\":%lu,\"num_points\":%d,\"num_targets\":%d,"
             "\"connected\":%s,\"profile\":\"%s\",\"max_range_m\":%.1f,"
-            "\"fov_half_deg\":%.1f,\"cluster_eps_m\":%.2f,\"cluster_min_pts\":%d,"
-            "\"speed_min_mps\":%.2f,\"snr_min_db\":%.1f}\n",
+            "\"cluster_eps_m\":%.2f,\"cluster_min_pts\":%d,"
+            "\"speed_min_mps\":%.2f,\"snr_min_db\":%.1f,"
+            "\"fov_half_deg\":%.1f,\"doppler_gate_mps\":%.2f}\n",
             g_stat.fps, g_stat.drops, g_stat.n_points, g_stat.n_targets,
             g_stat.connected ? "true" : "false", g_stat.profile,
-            g_stat.max_range_m, g_stat.fov_half_deg, g_eps, g_minpts,
-            g_speed, g_snrmin);
+            g_stat.max_range_m, g_eps, g_minpts,
+            g_speed, g_snrmin, g_fov, g_dop);
         pthread_mutex_unlock(&g_lock);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
@@ -121,11 +124,13 @@ static void *client(void *arg) {
     if (!strncmp(req, "GET /ctl", 8)) {
         char *q;
         double eps = g_eps; int mp = g_minpts;
-        double spd = g_speed, snr = g_snrmin;
-        if ((q = strstr(req, "eps=")))    eps = atof(q + 4);
-        if ((q = strstr(req, "minpts="))) mp  = atoi(q + 7);
-        if ((q = strstr(req, "speed=")))  spd = atof(q + 6);
-        if ((q = strstr(req, "snrmin="))) snr = atof(q + 7);
+        double spd = g_speed, snr = g_snrmin, fov = g_fov, dop = g_dop;
+        if ((q = strstr(req, "eps=")))     eps = atof(q + 4);
+        if ((q = strstr(req, "minpts=")))  mp  = atoi(q + 7);
+        if ((q = strstr(req, "speed=")))   spd = atof(q + 6);
+        if ((q = strstr(req, "snrmin=")))  snr = atof(q + 7);
+        if ((q = strstr(req, "fov=")))     fov = atof(q + 4);
+        if ((q = strstr(req, "doppler="))) dop = atof(q + 8);
         /* Clamp to the same bounds the clusterer uses, so /stats echoes the
          * value actually applied (not a raw out-of-range request). */
         if (eps < CLUSTER_EPS_MIN_M) eps = CLUSTER_EPS_MIN_M;
@@ -136,10 +141,14 @@ static void *client(void *arg) {
         if (spd > CLUSTER_SPEED_MAX) spd = CLUSTER_SPEED_MAX;
         if (snr < CLUSTER_SNR_MIN) snr = CLUSTER_SNR_MIN;
         if (snr > CLUSTER_SNR_MAX) snr = CLUSTER_SNR_MAX;
+        if (fov < CLUSTER_FOV_MIN) fov = CLUSTER_FOV_MIN;
+        if (fov > CLUSTER_FOV_MAX) fov = CLUSTER_FOV_MAX;
+        if (dop < CLUSTER_DOP_MIN) dop = CLUSTER_DOP_MIN;
+        if (dop > CLUSTER_DOP_MAX) dop = CLUSTER_DOP_MAX;
         pthread_mutex_lock(&g_lock);
-        g_eps = eps; g_minpts = mp; g_speed = spd; g_snrmin = snr;
+        g_eps = eps; g_minpts = mp; g_speed = spd; g_snrmin = snr; g_fov = fov; g_dop = dop;
         pthread_mutex_unlock(&g_lock);
-        if (g_ctl_cb) g_ctl_cb(eps, mp, spd, snr, g_ctl_user);
+        if (g_ctl_cb) g_ctl_cb(eps, mp, spd, snr, fov, dop, g_ctl_user);
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n"
                          "Content-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t w = write(fd, ok, strlen(ok)); (void)w;

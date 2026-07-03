@@ -38,9 +38,10 @@ static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
 /* /ctl handler — pushes live clustering changes to the clusterer. */
-static void on_ctl(double eps_m, int min_pts, double speed_min, double snr_min, void *user) {
+static void on_ctl(double eps_m, int min_pts, double speed_min, double snr_min,
+                   double fov_half, double doppler, void *user) {
     cluster_set_dbscan((RadarClusterer *)user, eps_m, min_pts);
-    cluster_set_gates((RadarClusterer *)user, speed_min, snr_min);
+    cluster_set_gates((RadarClusterer *)user, speed_min, snr_min, fov_half, doppler);
 }
 
 static double now_s(void) {
@@ -88,11 +89,12 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
         c->fps = c->fps > 0 ? 0.85 * c->fps + 0.15 * inst : inst;
     }
 
+    double fov = cluster_fov(c->clust);   /* live azimuth gate → wedge */
     int len = wire_frame_json(c->json, JSON_CAP, &c->frame, t,
-                              AG_MAX_RANGE_M, AG_FOV_HALF_DEG, c->profile);
+                              AG_MAX_RANGE_M, fov, c->profile);
     http_publish(c->json, (size_t)len);
     http_set_stats(c->fps, c->drops, c->frame.n_points, c->frame.n_targets,
-                   1, c->profile, AG_MAX_RANGE_M, AG_FOV_HALF_DEG);
+                   1, c->profile, AG_MAX_RANGE_M, fov);
 }
 
 int main(int argc, char **argv) {

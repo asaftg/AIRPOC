@@ -23,9 +23,10 @@ void http_set_stats(double fps, unsigned long drops, int n_points,
                     int n_targets, int connected, const char *profile,
                     double max_range_m, double fov_half_deg);
 
-/* Register the handler for GET /ctl?eps=&minpts=&speed=&snrmin=. Called with
- * the parsed (clamped) values on each /ctl hit; `user` is passed back verbatim. */
+/* Register the handler for GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=.
+ * Called with the parsed values on each /ctl hit; `user` passed back verbatim. */
 void http_set_ctl_cb(void (*cb)(double eps_m, int min_pts, double speed_min,
-                                double snr_min, void *user), void *user);
+                                double snr_min, double fov_half, double doppler,
+                                void *user), void *user);
 
 #endif /* AIRPOC_HTTP_H */

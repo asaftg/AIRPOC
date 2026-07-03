@@ -4,9 +4,9 @@
 #include <string.h>
 
 /* ── Tunables (match radar/clustering.py:ClusterParams) ── */
-/* eps spacing and min-samples are runtime fields on RadarClusterer (live via
- * /ctl, seeded from CLUSTER_DEFAULT_*); the rest are compile-time. */
-#define EPS_DOP_MPS      3.0f
+/* eps, min-samples, speed, snr, fov, and the doppler gate are runtime fields on
+ * RadarClusterer (live via /ctl, seeded from CLUSTER_DEFAULT_*); the rest below
+ * are compile-time. */
 /* Range-adaptive spacing: a target's returns spread out with distance (the
  * radar's cross-range footprint = range x angular spread), so the "how close
  * counts as one object" distance must grow with range or far targets fail to
@@ -60,6 +60,8 @@ struct RadarClusterer {
     int    min_samples;      /* DBSCAN min-samples (live via /ctl) */
     float  speed_min;        /* dynamic-only gate, m/s (live via /ctl) */
     float  snr_min;          /* min per-point SNR, dB; 0 = off (live via /ctl) */
+    float  fov_half;         /* azimuth half-angle gate, deg (live via /ctl) */
+    float  dop_gate;         /* doppler-similarity gate, m/s (live via /ctl) */
 };
 
 RadarClusterer *cluster_new(void) {
@@ -69,10 +71,14 @@ RadarClusterer *cluster_new(void) {
         c->min_samples = CLUSTER_DEFAULT_MIN_PTS;
         c->speed_min = (float)CLUSTER_DEFAULT_SPEED;
         c->snr_min = (float)CLUSTER_DEFAULT_SNR;
+        c->fov_half = (float)CLUSTER_DEFAULT_FOV;
+        c->dop_gate = (float)CLUSTER_DEFAULT_DOP;
     }
     return c;
 }
 void cluster_free(RadarClusterer *c) { free(c); }
+
+double cluster_fov(const RadarClusterer *c) { return c ? c->fov_half : CLUSTER_DEFAULT_FOV; }
 
 void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts) {
     if (!c) return;
@@ -84,14 +90,21 @@ void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts) {
     c->min_samples = min_pts;
 }
 
-void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db) {
+void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
+                       double fov_half_deg, double doppler_gate_mps) {
     if (!c) return;
     if (speed_min_mps < CLUSTER_SPEED_MIN) speed_min_mps = CLUSTER_SPEED_MIN;
     if (speed_min_mps > CLUSTER_SPEED_MAX) speed_min_mps = CLUSTER_SPEED_MAX;
     if (snr_min_db < CLUSTER_SNR_MIN) snr_min_db = CLUSTER_SNR_MIN;
     if (snr_min_db > CLUSTER_SNR_MAX) snr_min_db = CLUSTER_SNR_MAX;
+    if (fov_half_deg < CLUSTER_FOV_MIN) fov_half_deg = CLUSTER_FOV_MIN;
+    if (fov_half_deg > CLUSTER_FOV_MAX) fov_half_deg = CLUSTER_FOV_MAX;
+    if (doppler_gate_mps < CLUSTER_DOP_MIN) doppler_gate_mps = CLUSTER_DOP_MIN;
+    if (doppler_gate_mps > CLUSTER_DOP_MAX) doppler_gate_mps = CLUSTER_DOP_MAX;
     c->speed_min = (float)speed_min_mps;
     c->snr_min = (float)snr_min_db;
+    c->fov_half = (float)fov_half_deg;
+    c->dop_gate = (float)doppler_gate_mps;
 }
 
 /* ── per-axis Kalman ── */
@@ -174,15 +187,17 @@ static inline int minpts_at(int base, float range) {
 /* A point is eligible to seed/join a cluster if it's dynamic enough AND (when
  * an SNR gate is set and SNR is known) strong enough. Static clutter and weak
  * returns are excluded. Unknown SNR (NaN, no SideInfo) is never gated out. */
-static inline int pt_ok(const RadarPoint *p, float speed_min, float snr_min) {
+static inline int pt_ok(const RadarPoint *p, float speed_min, float snr_min, float fov_half) {
     if (fabsf(p->doppler) < speed_min) return 0;
     if (snr_min > 0.0f && !isnan(p->snr) && p->snr < snr_min) return 0;
+    if (fabsf(p->az) > fov_half) return 0;
     return 1;
 }
 
 /* ── DBSCAN (hand-rolled, O(N^2), N is a few hundred) ── */
 static int dbscan(const RadarPoint *pts, int n, int *labels,
-                  float eps_pos, int min_samples, float speed_min, float snr_min) {
+                  float eps_pos, int min_samples, float speed_min, float snr_min,
+                  float fov_half, float dop_gate) {
     static uint8_t nbr[RADAR_MAX_POINTS];   /* scratch neighbour row */
     uint8_t *visited = calloc(n, 1);
     if (!visited) return 0;
@@ -196,14 +211,14 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
     for (int i = 0; i < n; i++) {
         if (visited[i]) continue;
         visited[i] = 1;
-        if (!pt_ok(&pts[i], speed_min, snr_min)) continue;   /* ineligible: never seeds */
+        if (!pt_ok(&pts[i], speed_min, snr_min, fov_half)) continue;   /* ineligible: never seeds */
         /* count neighbours of i (ineligible points can't be neighbours) */
         int cnt = 0;
         for (int j = 0; j < n; j++) {
             float dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, dz = pts[i].z - pts[j].z;
-            int ok = pt_ok(&pts[j], speed_min, snr_min) &&
+            int ok = pt_ok(&pts[j], speed_min, snr_min, fov_half) &&
                      (dx*dx + dy*dy + dz*dz) <= eps2_pair(eps_pos, pts[i].range, pts[j].range) &&
-                     fabsf(pts[i].doppler - pts[j].doppler) <= EPS_DOP_MPS;
+                     fabsf(pts[i].doppler - pts[j].doppler) <= dop_gate;
             nbr[j] = ok; cnt += ok;
         }
         if (cnt < minpts_at(min_samples, pts[i].range)) continue;
@@ -219,9 +234,9 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
             static uint8_t nbr2[RADAR_MAX_POINTS];
             for (int k = 0; k < n; k++) {
                 float dx = pts[jj].x - pts[k].x, dy = pts[jj].y - pts[k].y, dz = pts[jj].z - pts[k].z;
-                int ok = pt_ok(&pts[k], speed_min, snr_min) &&
+                int ok = pt_ok(&pts[k], speed_min, snr_min, fov_half) &&
                          (dx*dx + dy*dy + dz*dz) <= eps2_pair(eps_pos, pts[jj].range, pts[k].range) &&
-                         fabsf(pts[jj].doppler - pts[k].doppler) <= EPS_DOP_MPS;
+                         fabsf(pts[jj].doppler - pts[k].doppler) <= dop_gate;
                 nbr2[k] = ok; cnt2 += ok;
             }
             if (cnt2 >= minpts_at(min_samples, pts[jj].range)) {
@@ -314,7 +329,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
 
     static int labels[RADAR_MAX_POINTS];
     int nlab = dbscan(pts, n, labels, R->eps_pos, R->min_samples,
-                      R->speed_min, R->snr_min);
+                      R->speed_min, R->snr_min, R->fov_half, R->dop_gate);
 
     /* per-cluster stats */
     static Cl cls[RADAR_MAX_TARGETS];

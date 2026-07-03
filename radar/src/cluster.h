@@ -23,8 +23,10 @@ typedef struct RadarClusterer RadarClusterer;
  * daemon's /ctl endpoint (CLUSTER eps + MIN PTS sliders in the GUI). */
 #define CLUSTER_DEFAULT_EPS_M    8.0
 #define CLUSTER_DEFAULT_MIN_PTS  2
-#define CLUSTER_DEFAULT_SPEED    0.4    /* m/s — dynamic-only gate */
-#define CLUSTER_DEFAULT_SNR      0.0    /* dB  — 0 = no SNR gate (publish-max) */
+#define CLUSTER_DEFAULT_SPEED    0.4    /* m/s  — dynamic-only gate */
+#define CLUSTER_DEFAULT_SNR      0.0    /* dB   — 0 = no SNR gate (publish-max) */
+#define CLUSTER_DEFAULT_FOV      90.0   /* deg  — azimuth half-angle gate (90 = full) */
+#define CLUSTER_DEFAULT_DOP      3.0    /* m/s  — doppler-similarity gate */
 #define CLUSTER_EPS_MIN_M        0.5
 #define CLUSTER_EPS_MAX_M        50.0
 #define CLUSTER_MIN_PTS_MIN      1
@@ -33,6 +35,10 @@ typedef struct RadarClusterer RadarClusterer;
 #define CLUSTER_SPEED_MAX        5.0
 #define CLUSTER_SNR_MIN          0.0
 #define CLUSTER_SNR_MAX          60.0
+#define CLUSTER_FOV_MIN          5.0
+#define CLUSTER_FOV_MAX          90.0
+#define CLUSTER_DOP_MIN          0.5
+#define CLUSTER_DOP_MAX          20.0
 
 RadarClusterer *cluster_new(void);
 void            cluster_free(RadarClusterer *c);
@@ -43,9 +49,14 @@ void            cluster_free(RadarClusterer *c);
  * just-changed value). */
 void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
 
-/* Set the point-eligibility gates live: min |radial speed| (m/s, dynamic-only)
- * and min per-point SNR (dB; 0 = off). Clamped. Same thread-safety note. */
-void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db);
+/* Set the four live gates: min |radial speed| (m/s, dynamic-only), min
+ * per-point SNR (dB; 0=off), azimuth half-angle (deg; |az|>fov excluded),
+ * and the doppler-similarity gate (m/s). Clamped. Same thread-safety note. */
+void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
+                       double fov_half_deg, double doppler_gate_mps);
+
+/* Current azimuth-gate half-angle (deg) — published on the wire for the wedge. */
+double cluster_fov(const RadarClusterer *c);
 
 /* Cluster+track one frame. `pts`/`n` are updated in place (each point's
  * .tid is set to its cluster/track id, or 255). `now_s` is a monotonic

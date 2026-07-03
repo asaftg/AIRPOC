@@ -27,8 +27,9 @@ chip CFAR → point cloud (+per-point SNR) → point gates → DBSCAN
 | min pts range slope | 0.04 | fixed (`MINPTS_RANGE_SLOPE`) | new estimate | how fast the near `min pts` decays to the floor with range (reaches floor ~75 m at near=5). Tune with real data. |
 | **min speed** | 0.4 m/s | live | inherited (`speed_min`) | dynamic-only gate; slower dots = static clutter, excluded. Walking humans are 0.5–2 m/s. |
 | **min SNR** | 0 dB (off) | live | **new** | per-dot confidence gate *on top of* the chip's ~17 dB CFAR floor. 0 = trust CFAR only. ↑ to reject weak/noise, ↓ to reach for faint far dots. Unknown-SNR dots always pass. |
-| **doppler gate** | 3 m/s | fixed (`EPS_DOP_MPS`) | inherited | two dots only join if radial speeds within this. Too small → one target (limbs / rigid-body spread) fragments; too large → different-speed objects merge. |
-| **CFAR floor** | 17 dB (range) | cfg | inherited/proven | the chip's detection threshold = hardware sensitivity floor. Lowering (toward the ~16 dB min before flooding) reaches farther but adds clutter — pair with a host `min SNR`. |
+| **FOV** | 90° (full) | live | **new** | azimuth half-angle gate: dots with `|az| > fov` don't cluster (no boxes off-axis); the wedge follows it. Narrow toward the ~±60° useful-AoA to drop unreliable wide-angle detections. |
+| **doppler gate** | 3 m/s | **live** | inherited value | two dots only join if radial speeds within this. Too small → one target (limbs / rigid-body spread) fragments; too large → different-speed objects merge. **Raise it to hold a passing vehicle together.** |
+| **CFAR floor** | 17 dB (range) | cfg | inherited, **UNVERIFIED** | the chip's detection threshold = hardware sensitivity floor. The "17 = floor, chip floods below" claim is a ground-bench comment we have **not tested on this board**. Step it down (17→15→13…) with a power-cycle each and watch stability / point-count / achieved range. Pair a lower CFAR with a host `min SNR`. See ROADMAP #4. |
 | size clamp | 0.25–3.0 m | fixed | inherited | box half-extent limits. |
 | assoc gate | 5 m (+growth) | fixed | inherited | NN association radius for stable ids. |
 | M-of-N confirm | 2 of 3 | fixed | inherited | a new track must hit 2 of 3 frames before it's published (kills 1-frame noise boxes). |

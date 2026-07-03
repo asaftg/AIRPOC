@@ -146,15 +146,18 @@ connect();
 
 // ── tuning sliders → /ctl (live), synced back from /stats ──
 const CTL = [
-  { id: "eps",    key: "cluster_eps_m",  fmt: (v) => v.toFixed(1) },
-  { id: "minpts", key: "cluster_min_pts", fmt: (v) => String(v) },
-  { id: "speed",  key: "speed_min_mps",  fmt: (v) => v.toFixed(1) },
-  { id: "snrmin", key: "snr_min_db",     fmt: (v) => v.toFixed(0) },
+  { id: "eps",     key: "cluster_eps_m",   fmt: (v) => v.toFixed(1) },
+  { id: "minpts",  key: "cluster_min_pts", fmt: (v) => String(v) },
+  { id: "speed",   key: "speed_min_mps",   fmt: (v) => v.toFixed(1) },
+  { id: "snrmin",  key: "snr_min_db",      fmt: (v) => v.toFixed(0) },
+  { id: "fov",     key: "fov_half_deg",    fmt: (v) => v.toFixed(0) },
+  { id: "doppler", key: "doppler_gate_mps", fmt: (v) => v.toFixed(1) },
 ];
 let lastTouch = 0, sendTimer = null;
 function pushCtl() {
   const q = `eps=${el("eps").value}&minpts=${el("minpts").value}` +
-            `&speed=${el("speed").value}&snrmin=${el("snrmin").value}`;
+            `&speed=${el("speed").value}&snrmin=${el("snrmin").value}` +
+            `&fov=${el("fov").value}&doppler=${el("doppler").value}`;
   fetch("/ctl?" + q).catch(() => {});
 }
 function el(id) { return document.getElementById(id); }

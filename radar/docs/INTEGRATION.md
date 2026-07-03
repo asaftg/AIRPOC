@@ -10,31 +10,29 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 | GET | `/` | the standalone PPI previewer (works on its own) |
 | GET | `/radar_view.js` | the previewer script (reference renderer) |
 | GET | `/stream` | **SSE** — one `data: <frame-json>\n\n` per radar frame |
-| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, fov_half_deg, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db}` |
-| GET | `/ctl?eps=&minpts=&speed=&snrmin=` | set the host clustering live → `200 ok` |
+| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db, fov_half_deg, doppler_gate_mps}` |
+| GET | `/ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` | set the host clustering live → `200 ok` |
 
-## Live controls — `/ctl` (CLUSTER ε + MIN PTS sliders)
+## Live controls — `/ctl` (the 6 tuning knobs)
 
-`GET /ctl?eps=<metres>&minpts=<int>` sets the host-side DBSCAN **live** (no
-restart, applies on the next frame) and returns `200 ok`. Both params are
-optional — an absent one keeps its current value.
+`GET /ctl?...` sets the host-side clustering **live** (no restart, applies on
+the next frame) and returns `200 ok`. Every param is optional — an absent one
+keeps its current value. All are clamped server-side.
 
-- `eps` — cluster spacing in metres, clamped to **0.5 – 50** (default 8). This
-  is the **near-field base**; the daemon grows it automatically with range (a
-  far target's returns are more spread out), so one slider value works across
-  the whole scene.
-- `minpts` — DBSCAN min-samples, clamped to **1 – 20** (default 2).
-- `speed` — min |radial speed| in m/s (dynamic-only gate), clamped **0 – 5**
-  (default 0.4). Points slower than this are static clutter and don't cluster.
-- `snrmin` — min per-point SNR in dB, clamped **0 – 60** (default 0 = off).
-  Points weaker than this don't cluster — raise it to reject noise/clutter,
-  lower it to reach for faint far targets. (Points with unknown SNR pass.)
+| key | units | min | max | default | what it does |
+|---|---|---|---|---|---|
+| `eps` | m | 0.5 | 50 | 8 | cluster spacing (near-field base; grows with range internally) |
+| `minpts` | count | 1 | 20 | 2 | points to seed a cluster **at the sensor** (tapers to 2 far internally) |
+| `speed` | m/s | 0 | 5 | 0.4 | dynamic-only gate (below = static clutter, excluded) |
+| `snrmin` | dB | 0 | 60 | 0 | per-point SNR gate (0 = off; above CFAR's ~17 dB floor) |
+| `fov` | deg | 5 | 90 | 90 | azimuth half-angle gate — points with `|az| > fov` don't cluster (and the wedge follows it) |
+| `doppler` | m/s | 0.5 | 20 | 3 | doppler-similarity gate — two dots join only if their speeds are within this (raise to hold a fragmenting vehicle together) |
 
-`/stats` echoes the currently-applied `cluster_eps_m` and `cluster_min_pts`
-(post-clamp), so initialise the sliders from `/stats` on load rather than
-assuming defaults. Tighter `eps` / higher `minpts` = fewer, tighter boxes;
-looser = more merging. Changes take effect on the **next frame** — a box that
-stops clustering disappears immediately (no coasting).
+`/stats` echoes all six **post-clamp** under: `cluster_eps_m`,
+`cluster_min_pts`, `speed_min_mps`, `snr_min_db`, `fov_half_deg`,
+`doppler_gate_mps` — initialise the sliders from `/stats` on load, don't assume
+defaults. Changes take effect on the **next frame** — a box that stops
+clustering disappears immediately (no coasting).
 
 ## Frame JSON (the `/stream` payload)
 
