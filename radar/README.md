@@ -82,8 +82,17 @@ module regardless; the radar only ever emits per-frame detections.) See
 [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 
 ## Layout
-- `src/` — C daemon (`serial`, `cfg_push`, `tlv`, `cluster`, `wire`, `http`).
-- `cfg/awr2944P_ag.cfg` — the shipped A/G long-range profile (LVDS off).
-- `web/` — PPI previewer (`index.html`, `radar_view.js`).
+- `src/` — C daemon (`serial`, `cfg_push`, `tlv`, `cluster`, `wire`, `http`,
+  `sim`). `-s` = simulation (no board); read-first startup (won't re-push to a
+  live chip).
+- `cfg/awr2944P_ag.cfg` — the shipped A/G long-range profile (LVDS off,
+  per-point SNR on).
+- `web/` — PPI previewer (`index.html`, `radar_view.js`) with a live tuning panel.
 - `tools/radar_tlv_probe.py` — bench TLV dumper (diagnostic only).
-- `docs/` — hardware, firmware, previewer detail.
+- `docs/` —
+  [`HARDWARE`](docs/HARDWARE.md) ·
+  [`FIRMWARE`](docs/FIRMWARE.md) ·
+  [`PREVIEW`](docs/PREVIEW.md) ·
+  [`INTEGRATION`](docs/INTEGRATION.md) (GUI/fusion contract) ·
+  [`TUNING`](docs/TUNING.md) (parameters + how to tune) ·
+  [`ROADMAP`](docs/ROADMAP.md) (status + future work).
