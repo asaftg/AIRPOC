@@ -64,31 +64,33 @@ body.day{
 /* right column: target list (top) + radar (bottom, larger) */
 #right{flex:0 0 30%;max-width:30%;min-width:300px;display:flex;flex-direction:column;
   background:var(--bg);border-left:1px solid var(--bd)}
-/* target list grows to fill the column; radar sits at the bottom as a 2:1 panel so the
- * forward half-circle PPI fills it (a half-circle wants width = 2 x height) instead of
- * cramming into the bottom of a tall box */
-#targets{flex:1 1 auto;min-height:96px;display:flex;flex-direction:column;background:var(--panel);
+/* target list is a fixed-size panel at the top (always 5 slots, never resizes); radar is
+ * pinned to the bottom as a 2:1 panel (JS sets its height) so the forward half-circle PPI
+ * fills it like the daemon instead of cramming into a tall box. */
+#targets{flex:0 0 auto;display:flex;flex-direction:column;background:var(--panel);
   border-bottom:1px solid var(--bd)}
-#radar{flex:0 0 auto;display:flex;flex-direction:column;background:var(--panel)}
+#radar{flex:0 0 auto;margin-top:auto;display:flex;flex-direction:column;background:var(--panel);
+  border-top:1px solid var(--bd)}
 .panel-head{display:flex;align-items:center;gap:8px;padding:6px 10px;
   background:var(--head);border-bottom:1px solid var(--bd)}
 .panel-title{font-size:11px;letter-spacing:1.2px;color:var(--amber);font-weight:600}
 .hz{font-size:11px;color:var(--muted);margin-left:auto}
-.rwrap{position:relative;width:100%;aspect-ratio:2/1;background:var(--canvas)}
+.rwrap{position:relative;width:100%;background:var(--canvas)}   /* height set by JS (2:1) */
 #radar-cv{position:absolute;inset:0;width:100%;height:100%}
 
 /* ── target list ── */
-#tgt-list{list-style:none;margin:0;padding:4px;overflow-y:auto;flex:1}
-.tgt-row{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:8px;
-  padding:6px 8px;margin:2px 0;border:1px solid var(--bd);border-left:3px solid var(--dim);
+#tgt-list{list-style:none;margin:0;padding:5px;flex:0 0 auto}
+.tgt-row{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:8px;height:34px;
+  padding:0 8px;margin:4px 0;border:1px solid var(--bd);border-left:3px solid var(--dim);
   border-radius:3px;background:var(--sub);cursor:pointer}
 .tgt-row:hover{border-color:var(--amber)}
 .tgt-row.eng{border-color:var(--on);border-left-color:var(--on);background:#13251a}
 .tgt-row.held{opacity:.5}
+.tgt-row.empty{background:transparent;border-style:dashed;border-left-color:var(--bd2);cursor:default}
+.tgt-row.empty .tid{color:var(--dim)}
 .tgt-row .tid{font-weight:600;font-size:12px}
 .tgt-row .meta{font-size:11px;color:var(--muted);letter-spacing:.3px}
 .tgt-row .rng{font-size:13px;color:var(--fg);font-weight:600;text-align:right}
-.tgt-empty{padding:12px 10px;color:var(--dim);font-size:12px;text-align:center;list-style:none}
 
 /* radar expand: overlay the whole stage; controls (over EO) stay on top */
 .exp{width:26px;height:26px;padding:5px;background:rgba(0,0,0,.4);

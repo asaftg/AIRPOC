@@ -50,7 +50,7 @@
     <aside id="right">
       <section id="targets">
         <div class="panel-head"><span class="panel-title">TARGETS</span><span class="hz" id="v-tgtcount">0</span></div>
-        <ul id="tgt-list"><li class="tgt-empty">no targets</li></ul>
+        <ul id="tgt-list"></ul>
       </section>
 
       <section id="radar">
@@ -68,13 +68,14 @@
     <aside id="dev">
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
-      <div class="sec">STREAM <span class="tag">→ EO feed</span></div>
-      <div class="srow"><label>RES</label><div class="btns" id="res-btns">
-        <button data-res="low">640</button><button data-res="med" class="on">960</button><button data-res="high">1280</button><button data-res="native">1440</button>
-      </div></div>
-      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
-      <div class="est" id="v-est">EST — Mb/s · — fps</div>
-      <div class="kv muted">Display size + rate → the EO feed (it owns the encoder). All four sizes are 4:3, so the video box never reshapes; the detector always runs full-native. Live.</div>
+      <div class="sec">EO SENSOR <span class="tag" id="ae-tag">AUTO</span></div>
+      <div class="srow"><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
+      <div class="srow"><label>EXP ms</label><input type="range" id="s-exp" min="0.1" max="33" step="0.1" value="16"><span class="val" id="o-exp">—</span></div>
+      <div class="srow"><label>GAIN</label><input type="range" id="s-gain" min="0" max="480" step="2" value="0"><span class="val" id="o-gain">—</span></div>
+      <div class="srow"><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
+      <div class="srow"><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
+      <div class="est" id="v-est">SENSOR — fps · DISP — fps</div>
+      <div class="kv muted">Full EO ISP — mirrors the preview. AUTO fills EXP up to the sensor fps cap, then GAIN (ceiling = AUTO-CAP). Moving EXP or GAIN drops to MANUAL. Sensor fps is fixed at launch (~60) — the feed exposes no runtime fps/res control (ask the EO agent for <code>/ctl?fps=</code> if a GUI cap is wanted).</div>
 
       <div class="sec">ILLUMINATOR <span class="tag" id="illum-tag">AUTO</span></div>
       <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>

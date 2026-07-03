@@ -82,15 +82,22 @@
   $("s-pow").oninput = function () { $("o-pow").textContent = this.value + "%"; ctl("power=" + Math.round(this.value * 255 / 100)); };
   $("s-fov").oninput = function () { $("o-fov").textContent = this.value + "°"; ctl("fov=" + this.value); };
 
-  /* ── stream: forwarded to the EO feed's /ctl. Two bandwidth levers the EO module owns:
-   * res (low/med/high/native, all 4:3) + fps (12–60). Detector stays full-native. ── */
-  $("s-fps").oninput = function () { $("o-fps").textContent = this.value; ctl("fps=" + this.value); };
-  document.querySelectorAll("#res-btns [data-res]").forEach(function (b) {
-    b.onclick = function () {
-      document.querySelectorAll("#res-btns [data-res]").forEach(function (x) { x.classList.remove("on"); });
-      b.classList.add("on"); ctl("res=" + b.dataset.res);
-    };
+  /* ── EO ISP — the full preview control set, forwarded to the EO feed's /ctl:
+   * ae (auto/manual exposure), expms, gain, gaincap, median. The feed owns the sensor;
+   * these are the same knobs the eo_pipeline preview exposes. ── */
+  document.querySelectorAll("#ae-btns [data-ae]").forEach(function (b) {
+    b.onclick = function () { setSeg("ae-btns", b); ctl("ae=" + b.dataset.ae); };
   });
+  document.querySelectorAll("#md-btns [data-md]").forEach(function (b) {
+    b.onclick = function () { setSeg("md-btns", b); ctl("median=" + b.dataset.md); };
+  });
+  function setSeg(id, on) { document.querySelectorAll("#" + id + " button").forEach(function (x) { x.classList.remove("on"); }); on.classList.add("on"); }
+  /* moving EXP or GAIN drops the feed to MANUAL — reflect that optimistically */
+  $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(1); manualAE(); ctl("expms=" + this.value); };
+  $("s-gain").oninput = function () { $("o-gain").textContent = this.value; manualAE(); ctl("gain=" + this.value); };
+  $("s-gcap").oninput = function () { $("o-gcap").textContent = this.value; ctl("gaincap=" + this.value); };
+  function manualAE() { var m = document.querySelector('#ae-btns [data-ae="0"]'); if (m) setSeg("ae-btns", m); $("ae-tag").textContent = "MANUAL"; $("ae-tag").classList.add("man"); ispTouch = Date.now(); }
+  var ispTouch = 0;
 
   /* ── radar display filters (client-side only — chip cfg is the radar module's job) ── */
   function bindR(id, key, fmt) {
@@ -134,16 +141,21 @@
     rows.sort(function (a, b) { return importance(b.t) - importance(a.t); });
     rows = rows.slice(0, 5);
     $("v-tgtcount").textContent = rows.length;
-    var ul = $("tgt-list");
-    if (!rows.length) { ul.innerHTML = '<li class="tgt-empty">no targets</li>'; return; }
-    ul.innerHTML = rows.map(function (r) {
-      var t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
-      var eng = (t.tid === engagedTid), cls = "tgt-row" + (eng ? " eng" : "") + (r.held ? " held" : "");
-      return '<li class="' + cls + '" data-tid="' + t.tid + '" style="border-left-color:' + (eng ? "var(--on)" : col) + '">'
-        + '<span class="tid" style="color:' + (eng ? "var(--on)" : col) + '">R#' + t.tid + '</span>'
-        + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
-        + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>';
-    }).join("");
+    /* Always render 5 fixed slots so the panel never resizes as targets come and go. */
+    var out = [];
+    for (var i = 0; i < 5; i++) {
+      if (i < rows.length) {
+        var r = rows[i], t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
+        var eng = (t.tid === engagedTid), cls = "tgt-row" + (eng ? " eng" : "") + (r.held ? " held" : "");
+        out.push('<li class="' + cls + '" data-tid="' + t.tid + '" style="border-left-color:' + (eng ? "var(--on)" : col) + '">'
+          + '<span class="tid" style="color:' + (eng ? "var(--on)" : col) + '">R#' + t.tid + '</span>'
+          + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
+          + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>');
+      } else {
+        out.push('<li class="tgt-row empty"><span class="tid">—</span><span class="meta"></span><span class="rng"></span></li>');
+      }
+    }
+    $("tgt-list").innerHTML = out.join("");
   }
   /* Display persistence (GUI-owned): hold a dropped target's box at its last spot and
    * fade over HOLD_MS so a one-frame miss doesn't blink. Not motion prediction — that
@@ -223,6 +235,12 @@
 
   var radarGeom = null;
   function drawRadar(radar) {
+    /* Force the scope panel to 2:1 (a forward half-circle wants width = 2 x height) so it
+     * fills like the daemon's previewer instead of cramming into a tall box. When expanded
+     * (rbig), clear the override and let it fill the stage. */
+    var rw = $("radar-cv").parentElement;
+    if ($("stage").classList.contains("rbig")) rw.style.height = "";
+    else rw.style.height = Math.round(rw.clientWidth / 2) + "px";
     var f = fit($("radar-cv")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
     ctx.clearRect(0, 0, w, h);
     var cx = w / 2, cy = h - 10 * dpr, maxR = Math.max(20, Math.min(h - 16 * dpr, w / 2 - 6 * dpr));
@@ -330,9 +348,10 @@
       $("eo-tl").textContent = "EO · FOV " + num(hfov, 1, "°") + " · " + (eo.zoom ? eo.zoom.toFixed(1) : "1.0") + "×";
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
       $("v-tracks").textContent = (d.tracks === null || d.tracks === undefined) ? "—" : d.tracks + " TRK";
-      $("v-est").textContent = "EST " + num(d.mbps, 1) + " Mb/s · " + num(eo.fps, 0) + " fps";
+      $("v-est").textContent = "SENSOR " + num(eo.sfps, 0) + " fps · DISP " + num(eo.fps, 0) + " fps";
       $("v-srcfps").textContent = num(eo.sfps, 0); $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
       if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0 && Date.now() - zoomTouch > 1200) { zoom = eo.zoom; setZoomLabel(); }
+      updateISP(eo);
       var light = $("light");
       if (Date.now() - lightTouch > 1200) { light.classList.toggle("firing", !!eo.laser); $("light-s").textContent = eo.laser ? "ON" : "OFF"; }
       light.style.opacity = eo.lpresent ? "1" : ".5";
@@ -364,10 +383,19 @@
     }).catch(function () {});
   }
 
-  /* Push the default stream res to the feed on load so what it streams matches the UI's
-   * active RES button (the EO /stats no longer echoes res). Smaller-than-native frames
-   * also keep the browser from buffering a backlog that delays a zoom taking effect. */
-  (function () { var a = document.querySelector("#res-btns .on"); if (a) ctl("res=" + a.dataset.res); })();
+  /* Reflect the EO feed's ISP state into the DEV panel (guarded so a poll never fights a
+   * control the operator is actively touching). */
+  function updateISP(eo) {
+    var settled = Date.now() - ispTouch > 1500;
+    if (typeof eo.ae === "number" && settled) {
+      var b = document.querySelector('#ae-btns [data-ae="' + (eo.ae ? 1 : 0) + '"]'); if (b) setSeg("ae-btns", b);
+      $("ae-tag").textContent = eo.ae ? "AUTO" : "MANUAL"; $("ae-tag").classList.toggle("man", !eo.ae);
+    }
+    if (typeof eo.exp_ms === "number" && idle($("s-exp")) && settled) { $("s-exp").value = eo.exp_ms; $("o-exp").textContent = eo.exp_ms.toFixed(1); }
+    if (typeof eo.gain === "number" && idle($("s-gain")) && settled) { $("s-gain").value = eo.gain; $("o-gain").textContent = eo.gain; }
+    if (typeof eo.gaincap === "number" && idle($("s-gcap"))) { $("s-gcap").value = eo.gaincap; $("o-gcap").textContent = eo.gaincap; }
+    if (typeof eo.median === "number") { var m = document.querySelector('#md-btns [data-md="' + (eo.median ? 1 : 0) + '"]'); if (m) setSeg("md-btns", m); }
+  }
 
   setTrack("auto"); setIllum("auto"); applyTheme();
   setInterval(poll, 160); poll();
