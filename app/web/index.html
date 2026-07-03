@@ -79,7 +79,7 @@
 
       <div class="sec">EO SENSOR</div>
       <div class="srow"><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
-      <div class="srow"><label>EXP ms</label><input type="range" id="s-exp" min="0.1" max="33" step="0.1" value="16"><span class="val" id="o-exp">—</span></div>
+      <div class="srow"><label>EXP ms</label><input type="range" id="s-exp" min="0.02" max="33" step="0.02" value="16"><span class="val" id="o-exp">—</span></div>
       <div class="srow"><label>GAIN</label><input type="range" id="s-gain" min="0" max="480" step="2" value="0"><span class="val" id="o-gain">—</span></div>
       <div class="srow"><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
       <div class="srow"><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
@@ -88,15 +88,13 @@
       <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
       <div class="srow"><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
 
-      <div class="sec">RADAR FILTERS</div>
-      <div class="srow"><label>FOV ±</label><input type="range" id="r-fov" min="5" max="90" step="1" value="60"><span class="val" id="ro-fov">60°</span></div>
-      <div class="srow"><label>SPEED MIN</label><input type="range" id="r-speed" min="0" max="5" step="0.1" value="0"><span class="val" id="ro-speed">0 m/s</span></div>
-      <div class="srow"><label>RANGE MIN</label><input type="range" id="r-rmin" min="0" max="30" step="0.5" value="0"><span class="val" id="ro-rmin">0 m</span></div>
-      <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="0" max="50" step="1" value="16"><span class="val" id="ro-snr">16 dB</span></div>
-
-      <div class="sec">RADAR CLUSTER</div>
-      <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>
-      <div class="srow"><label>MIN PTS</label><input type="range" id="r-minpts" min="2" max="8" step="1" value="2"><span class="val" id="ro-minpts">2</span></div>
+      <div class="sec">RADAR</div>
+      <div class="srow"><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="90"><span class="val" id="rv-fov">90°</span></div>
+      <div class="srow"><label>MIN SNR</label><input type="range" id="rd-snrmin" min="0" max="60" step="1" value="0"><span class="val" id="rv-snrmin">0 dB</span></div>
+      <div class="srow"><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.4"><span class="val" id="rv-speed">0.4 m/s</span></div>
+      <div class="srow"><label>DOPPLER</label><input type="range" id="rd-doppler" min="0.5" max="20" step="0.5" value="3"><span class="val" id="rv-doppler">3.0 m/s</span></div>
+      <div class="srow"><label>CLUSTER ε</label><input type="range" id="rd-eps" min="0.5" max="50" step="0.5" value="8"><span class="val" id="rv-eps">8.0 m</span></div>
+      <div class="srow"><label>MIN PTS</label><input type="range" id="rd-minpts" min="1" max="20" step="1" value="2"><span class="val" id="rv-minpts">2</span></div>
 
       <div class="sec">SYSTEM</div>
       <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>

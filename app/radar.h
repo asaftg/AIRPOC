@@ -16,12 +16,13 @@ int  radar_get_frame_json(char *buf, int cap);
 int  radar_connected(void);      /* 1 if the daemon reports a connected radar */
 int  radar_num_targets(void);    /* target count in the latest frame (for /stats)  */
 
-/* Forward host-side DBSCAN cluster cfg to the daemon (best-effort GET /ctl). Needs a
- * daemon control endpoint — see the request in radar/docs/INTEGRATION.md follow-up;
- * a no-op if the daemon doesn't implement it yet. */
-void radar_set_tune(double cluster_eps_m, int min_points);
-/* The daemon's APPLIED (clamped) cluster cfg, for the slider to reflect reality.
- * Each is -1 until known. */
-void radar_applied_tune(double *eps, int *minpts);
+/* Forward a raw control query to the daemon's /ctl (e.g. "eps=8&fov=60"). The daemon
+ * owns all six live controls (eps/minpts/speed/snrmin/fov/doppler) and clamps them
+ * server-side, so the GUI just forwards and reads back. Best-effort GET /ctl. */
+void radar_ctl(const char *daemon_query);
+
+/* Copy the daemon's latest /stats JSON (fps, drops, counts, and the current value of
+ * all six controls) into buf for slider init + readback. Returns length or 0. */
+int  radar_get_stats(char *buf, int cap);
 
 #endif /* AIRPOC_RADAR_H */

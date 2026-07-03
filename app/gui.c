@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_run = 1;
@@ -29,8 +30,7 @@ static int       g_listen_fd = -1;
 /* console state (not owned by a feed) */
 static volatile int g_track_man = 0;      /* tracking select: 0 auto / 1 manual */
 static volatile int g_engage    = -1;     /* engaged target tid, -1 = none       */
-static double       g_r_eps      = 8.0;   /* last radar cluster cfg sent          */
-static int          g_r_minpts   = 2;
+static volatile unsigned long long g_stream_bytes = 0;  /* total video bytes relayed → true Mb/s meter */
 
 static double read_temp_c(const char *path)
 {
@@ -42,11 +42,17 @@ static double read_temp_c(const char *path)
     return milli < 0 ? -1.0 : milli / 1000.0;
 }
 
-/* rough fps from the EO feed's /stats JSON, for a link-rate estimate */
-static double eo_fps_from(const char *stats)
+/* True link throughput: bytes actually relayed since the last /stats call over the elapsed
+ * time. Honest (accounts for res/fps/zoom/JPEG), unlike frame-size x fps guessing. */
+static double stream_mbps(void)
 {
-    const char *p = strstr(stats, "\"fps\":");
-    return p ? atof(p + 6) : 0.0;
+    static unsigned long long prev = 0; static double prevt = 0;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    unsigned long long cur = g_stream_bytes;
+    double mbps = (prevt > 0 && now > prevt) ? (double)(cur - prev) * 8.0 / ((now - prevt) * 1e6) : 0.0;
+    prev = cur; prevt = now;
+    return mbps;
 }
 
 /* ---------------------------------------------------------------- http -------- */
@@ -69,16 +75,11 @@ static void handle_stats(int fd)
 {
     char eostats[512]; int en = eo_get_stats(eostats, sizeof eostats);
     int eoc = eo_connected();
-    double mbps = eoc ? eo_last_len() * eo_fps_from(eostats) * 8.0 / 1e6 : 0.0;
+    double mbps = stream_mbps();
 
     char tracks_s[16];
     if (radar_connected()) snprintf(tracks_s, sizeof tracks_s, "%d", radar_num_targets());
     else snprintf(tracks_s, sizeof tracks_s, "null");
-
-    double reps; int rmp; radar_applied_tune(&reps, &rmp);
-    char reps_s[16], rmp_s[16];
-    if (reps >= 0) snprintf(reps_s, sizeof reps_s, "%.1f", reps); else snprintf(reps_s, sizeof reps_s, "null");
-    if (rmp  >= 0) snprintf(rmp_s,  sizeof rmp_s,  "%d",  rmp);  else snprintf(rmp_s,  sizeof rmp_s,  "null");
 
     double cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
     char cpu_s[16]; if (cpu < 0) snprintf(cpu_s, sizeof cpu_s, "null"); else snprintf(cpu_s, sizeof cpu_s, "%.0f", cpu);
@@ -86,10 +87,10 @@ static void handle_stats(int fd)
     char body[900];
     int bl = snprintf(body, sizeof body,
         "{\"eo_connected\":%d,\"mbps\":%.2f,\"track\":\"%s\",\"engage\":%d,"
-        "\"tracks\":%s,\"radar_eps\":%s,\"radar_minpts\":%s,\"cpu_c\":%s,"
+        "\"tracks\":%s,\"cpu_c\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
         eoc, mbps, g_track_man ? "man" : "auto", g_engage,
-        tracks_s, reps_s, rmp_s, cpu_s,
+        tracks_s, cpu_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
@@ -110,8 +111,19 @@ static void handle_radar(int fd)
     free(b);
 }
 
+/* the daemon's /stats (its 6 control values + fps/drops), for slider init + readback */
+static void handle_rstats(int fd)
+{
+    char s[512]; int n = radar_get_stats(s, sizeof s);
+    if (n <= 0) { n = snprintf(s, sizeof s, "{}"); }
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
+}
+
 static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "gain=",
                                  "expms=", "gaincap=", "median=", "fps=", "res=" };
+/* the daemon's six live controls; the GUI sends them namespaced as radar_<key>= */
+static const char *RADAR_KEYS[] = { "eps", "minpts", "speed", "snrmin", "fov", "doppler" };
 
 static void handle_ctl(const char *req)
 {
@@ -123,10 +135,22 @@ static void handle_ctl(const char *req)
     query[i] = 0;
 
     char *p;
-    if ((p = strstr(query, "track=")))  g_track_man = (strncmp(p + 6, "man", 3) == 0);
-    if ((p = strstr(query, "engage="))) g_engage = atoi(p + 7);
-    if ((p = strstr(query, "radar_eps=")))    { g_r_eps = atof(p + 10); radar_set_tune(g_r_eps, g_r_minpts); }
-    if ((p = strstr(query, "radar_minpts="))) { g_r_minpts = atoi(p + 13); radar_set_tune(g_r_eps, g_r_minpts); }
+    if ((p = strstr(query, "track=")))  { g_track_man = (strncmp(p + 6, "man", 3) == 0); return; }
+    if ((p = strstr(query, "engage="))) { g_engage = atoi(p + 7); return; }
+
+    /* radar controls: strip the radar_ namespace and forward to the daemon's /ctl */
+    char dq[256]; int dn = 0;
+    for (unsigned k = 0; k < sizeof(RADAR_KEYS) / sizeof(RADAR_KEYS[0]); k++) {
+        char pref[24]; int pl = snprintf(pref, sizeof pref, "radar_%s=", RADAR_KEYS[k]);
+        char *rp = strstr(query, pref);
+        if (!rp) continue;
+        rp += pl;
+        char val[24]; int vi = 0;
+        while (rp[vi] && rp[vi] != '&' && vi < (int)sizeof(val) - 1) { val[vi] = rp[vi]; vi++; }
+        val[vi] = 0;
+        dn += snprintf(dq + dn, sizeof(dq) - (size_t)dn, "%s%s=%s", dn ? "&" : "", RADAR_KEYS[k], val);
+    }
+    if (dn > 0) { radar_ctl(dq); return; }
 
     for (unsigned k = 0; k < sizeof(EO_KEYS) / sizeof(EO_KEYS[0]); k++)
         if (strstr(query, EO_KEYS[k])) { eo_ctl(query); break; }   /* forward EO controls */
@@ -150,6 +174,7 @@ static void stream_mjpeg(int fd)
         int pl = snprintf(part, sizeof part,
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", n);
         if (write(fd, part, pl) < 0 || write(fd, buf, n) < 0 || write(fd, "\r\n", 2) < 0) break;
+        g_stream_bytes += (unsigned long long)(pl + n + 2);   /* true throughput meter */
     }
     free(buf);
 }
@@ -162,7 +187,8 @@ static void *client(void *arg)
     if (n <= 0) { close(fd); return NULL; }
     req[n] = 0;
 
-    if (has(req, "/stats"))          handle_stats(fd);
+    if (has(req, "/rstats"))         handle_rstats(fd);
+    else if (has(req, "/stats"))     handle_stats(fd);
     else if (has(req, "/radar"))     handle_radar(fd);
     else if (has(req, "/ctl")) {
         handle_ctl(req);

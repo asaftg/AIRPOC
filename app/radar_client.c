@@ -17,14 +17,15 @@
 #define ACC_CAP (128 * 1024)
 
 static pthread_t       th;
+static pthread_t       stats_th;
+static int             stats_th_ok = 0;
 static volatile int    run_flag = 0;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
 static char           *g_json = NULL;      /* latest frame JSON (grown as needed) */
 static int             g_len = 0, g_cap = 0;
 static volatile int    g_connected = 0;    /* daemon reports a radar connected     */
 static volatile int    g_ntargets = 0;
-static volatile double g_ap_eps = -1;      /* daemon-applied cluster cfg (clamped) */
-static volatile int    g_ap_minpts = -1;
+static char            g_rstats[512] = ""; /* daemon /stats JSON (controls + counts) */
 static char            g_host[96] = "127.0.0.1";
 static int             g_port = 8092;
 
@@ -54,9 +55,9 @@ static void store_frame(const char *json, int len)
     pthread_mutex_unlock(&lk);
 }
 
-/* One-shot GET /stats to read the daemon's APPLIED (clamped) cluster cfg, so the GUI
- * slider reflects reality rather than the requested value. */
-static void refresh_applied_tune(void)
+/* GET /stats and cache the daemon's raw JSON (fps/drops/counts + the current value of
+ * all six controls), so the GUI can init + read back every slider against reality. */
+static void refresh_stats(void)
 {
     int fd = connect_daemon();
     if (fd < 0) return;
@@ -66,9 +67,8 @@ static void refresh_applied_tune(void)
     while (len < (int)sizeof(buf) - 1 && (n = read(fd, buf + len, sizeof(buf) - 1 - len)) > 0) len += (int)n;
     close(fd);
     buf[len < 0 ? 0 : len] = 0;
-    char *p;
-    if ((p = strstr(buf, "\"cluster_eps_m\":")))   g_ap_eps = atof(p + 16);
-    if ((p = strstr(buf, "\"cluster_min_pts\":"))) g_ap_minpts = atoi(p + 18);
+    char *body = strstr(buf, "\r\n\r\n");
+    if (body) { body += 4; pthread_mutex_lock(&lk); snprintf(g_rstats, sizeof g_rstats, "%s", body); pthread_mutex_unlock(&lk); }
 }
 
 /* Read one SSE session: send GET /stream, skip headers, extract `data: <json>` lines
@@ -114,12 +114,21 @@ static void *reader(void *a)
     while (run_flag) {
         int fd = connect_daemon();
         if (fd < 0) { pthread_mutex_lock(&lk); g_connected = 0; pthread_mutex_unlock(&lk); nap(1000); continue; }
-        refresh_applied_tune();          /* sync applied cluster cfg on (re)connect */
+        refresh_stats();                 /* sync control values on (re)connect */
         run_session(fd);
         close(fd);
         pthread_mutex_lock(&lk); g_connected = 0; g_ntargets = 0; pthread_mutex_unlock(&lk);
         if (run_flag) nap(500);
     }
+    return NULL;
+}
+
+/* Poll the daemon's /stats a few times a second so the sliders reflect live (clamped)
+ * values — the SSE frame thread blocks on /stream and can't also poll /stats. */
+static void *stats_poller(void *a)
+{
+    (void)a;
+    while (run_flag) { if (g_connected) refresh_stats(); nap(300); }
     return NULL;
 }
 
@@ -133,13 +142,14 @@ int radar_start(const char *host_port)
     }
     run_flag = 1;
     if (pthread_create(&th, NULL, reader, NULL) != 0) { run_flag = 0; return -1; }
+    stats_th_ok = (pthread_create(&stats_th, NULL, stats_poller, NULL) == 0);
     fprintf(stderr, "radar: consuming daemon SSE at %s:%d/stream\n", g_host, g_port);
     return 0;
 }
 
 void radar_stop(void)
 {
-    if (run_flag) { run_flag = 0; pthread_join(th, NULL); }
+    if (run_flag) { run_flag = 0; pthread_join(th, NULL); if (stats_th_ok) pthread_join(stats_th, NULL); }
     free(g_json); g_json = NULL; g_cap = g_len = 0;
 }
 
@@ -155,22 +165,23 @@ int radar_get_frame_json(char *buf, int cap)
 int radar_connected(void)   { return g_connected; }
 int radar_num_targets(void) { return g_ntargets; }
 
-/* Best-effort forward of cluster cfg to the daemon's control endpoint (if present). */
-void radar_set_tune(double cluster_eps_m, int min_points)
+/* Forward a raw control query (e.g. "eps=8&fov=60") to the daemon's /ctl, then re-read
+ * /stats so the readback reflects the clamped result. Best-effort. */
+void radar_ctl(const char *daemon_query)
 {
     int fd = connect_daemon();
     if (fd < 0) return;
-    char req[160];
-    int n = snprintf(req, sizeof req,
-        "GET /ctl?eps=%.2f&minpts=%d HTTP/1.0\r\nHost: radar\r\n\r\n",
-        cluster_eps_m, min_points);
+    char req[256];
+    int n = snprintf(req, sizeof req, "GET /ctl?%s HTTP/1.0\r\nHost: radar\r\n\r\n", daemon_query);
     ssize_t w = write(fd, req, n); (void)w;
     close(fd);
-    refresh_applied_tune();              /* read back the applied (clamped) value */
+    refresh_stats();
 }
 
-void radar_applied_tune(double *eps, int *minpts)
+int radar_get_stats(char *buf, int cap)
 {
-    if (eps)    *eps = g_ap_eps;
-    if (minpts) *minpts = g_ap_minpts;
+    pthread_mutex_lock(&lk);
+    int n = snprintf(buf, cap, "%s", g_rstats[0] ? g_rstats : "{}");
+    pthread_mutex_unlock(&lk);
+    return n;
 }

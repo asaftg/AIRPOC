@@ -13,7 +13,6 @@
   var zoom = 1;
   var trackMode = "auto", engagedTid = null, sentEngage = null;
   var illumMode = "auto";
-  var rp = { snr: 16, speed: 0, rmin: 0, fov: 60 };   /* GUI display filters only (speed 0 = show static clutter too, like the daemon) */
   var lastStats = {}, lastRadar = null;
   var rHz = 0, rLastFid = null, rLastTs = 0;   /* radar frame-rate (Hz) from frame_id/timestamp deltas */
 
@@ -89,17 +88,20 @@
    * ae (auto/manual exposure), expms, gain, gaincap, median. The feed owns the sensor;
    * these are the same knobs the eo_pipeline preview exposes. ── */
   document.querySelectorAll("#ae-btns [data-ae]").forEach(function (b) {
-    b.onclick = function () { setSeg("ae-btns", b); ctl("ae=" + b.dataset.ae); };
+    b.onclick = function () { setSeg("ae-btns", b); var auto = b.dataset.ae === "1"; setExpMode(auto); ispTouch = Date.now(); ctl("ae=" + b.dataset.ae); };
   });
   document.querySelectorAll("#md-btns [data-md]").forEach(function (b) {
     b.onclick = function () { setSeg("md-btns", b); ctl("median=" + b.dataset.md); };
   });
   function setSeg(id, on) { document.querySelectorAll("#" + id + " button").forEach(function (x) { x.classList.remove("on"); }); on.classList.add("on"); }
+  /* AUTO exposure freezes the manual knobs (EXP/GAIN) like the illuminator's AUTO; only
+   * AUTO-CAP (the AE ceiling) is live in AUTO. MANUAL unfreezes EXP/GAIN. */
+  function setExpMode(auto) { $("s-exp").disabled = auto; $("s-gain").disabled = auto; $("s-gcap").disabled = !auto; }
   /* moving EXP or GAIN drops the feed to MANUAL — reflect that optimistically */
-  $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(1); manualAE(); ctl("expms=" + this.value); };
+  $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(2); manualAE(); ctl("expms=" + this.value); };
   $("s-gain").oninput = function () { $("o-gain").textContent = this.value; manualAE(); ctl("gain=" + this.value); };
   $("s-gcap").oninput = function () { $("o-gcap").textContent = this.value; ctl("gaincap=" + this.value); };
-  function manualAE() { var m = document.querySelector('#ae-btns [data-ae="0"]'); if (m) setSeg("ae-btns", m); ispTouch = Date.now(); }
+  function manualAE() { var m = document.querySelector('#ae-btns [data-ae="0"]'); if (m) setSeg("ae-btns", m); setExpMode(false); ispTouch = Date.now(); }
   var ispTouch = 0, fpsTouch = 0;
 
   /* stream bandwidth levers — res (display size) + fps cap, both live on the EO feed */
@@ -108,18 +110,30 @@
   });
   $("s-fps").oninput = function () { $("o-fps").textContent = this.value; fpsTouch = Date.now(); ctl("fps=" + this.value); };
 
-  /* ── radar display filters (client-side only — chip cfg is the radar module's job) ── */
-  function bindR(id, key, fmt) {
-    $(id).oninput = function () { rp[key] = parseFloat(this.value); $("ro-" + key).textContent = fmt(rp[key]); drawRadar(lastRadar); drawEO(); };
+  /* ── radar controls — the daemon's six live knobs (radar/docs/INTEGRATION.md). Sent
+   * namespaced as radar_<key>= (the app strips the prefix → daemon /ctl); clamps are
+   * server-side. Init + readback come from /rstats (the daemon's own /stats). ── */
+  var RADARC = [
+    { key: "fov",     stat: "fov_half_deg",     fmt: function (v) { return v.toFixed(0) + "°"; } },
+    { key: "snrmin",  stat: "snr_min_db",       fmt: function (v) { return v.toFixed(0) + " dB"; } },
+    { key: "speed",   stat: "speed_min_mps",    fmt: function (v) { return v.toFixed(1) + " m/s"; } },
+    { key: "doppler", stat: "doppler_gate_mps", fmt: function (v) { return v.toFixed(1) + " m/s"; } },
+    { key: "eps",     stat: "cluster_eps_m",    fmt: function (v) { return v.toFixed(1) + " m"; } },
+    { key: "minpts",  stat: "cluster_min_pts",  fmt: function (v) { return String(v | 0); } }
+  ];
+  var rcTouch = 0;
+  RADARC.forEach(function (c) {
+    $("rd-" + c.key).oninput = function () { $("rv-" + c.key).textContent = c.fmt(parseFloat(this.value)); rcTouch = Date.now(); ctl("radar_" + c.key + "=" + this.value); };
+  });
+  function pollRstats() {
+    fetch("/rstats").then(function (r) { return r.json(); }).then(function (d) {
+      if (Date.now() - rcTouch < 1500) return;   /* don't fight an active drag */
+      RADARC.forEach(function (c) {
+        var v = d[c.stat];
+        if (typeof v === "number" && document.activeElement !== $("rd-" + c.key)) { $("rd-" + c.key).value = v; $("rv-" + c.key).textContent = c.fmt(v); }
+      });
+    }).catch(function () {});
   }
-  bindR("r-snr", "snr", function (v) { return v.toFixed(1) + " dB"; });
-  bindR("r-fov", "fov", function (v) { return v.toFixed(0) + "°"; });
-  bindR("r-speed", "speed", function (v) { return v.toFixed(1) + " m/s"; });
-  bindR("r-rmin", "rmin", function (v) { return v.toFixed(0) + " m"; });
-
-  /* cluster cfg — pushed to the radar module's DBSCAN (not a display filter) */
-  $("r-eps").oninput = function () { $("ro-eps").textContent = parseFloat(this.value).toFixed(1) + " m"; ctl("radar_eps=" + this.value); };
-  $("r-minpts").oninput = function () { $("ro-minpts").textContent = this.value; ctl("radar_minpts=" + this.value); };
 
   /* ── reserved ── */
   $("rec").onclick = function () { $("rec").classList.toggle("active"); };
@@ -132,7 +146,7 @@
     return radar.targets.map(function (t) {
       return { tid: t.tid, x: t.x, y: t.y, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, conf: t.conf,
                rng: Math.hypot(t.x, t.y), az: Math.atan2(t.x, t.y) * 180 / Math.PI };
-    }).filter(function (t) { return t.rng >= rp.rmin && Math.abs(t.az) <= rp.fov; });
+    });   /* no client filtering — the daemon gates points/clusters server-side now */
   }
   /* AUTO priority: fused (EO+radar) first [pending detector], then nearer, then conf. */
   function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
@@ -265,8 +279,9 @@
       ctx.fillStyle = ref ? "rgba(255,190,90,0.9)" : "rgba(180,220,240,0.55)";
       ctx.fillText(ringM.toFixed(0) + " m", cx + 5 * dpr, cy - maxR * i / 4 + 13 * dpr);
     }
-    /* FOV wedge (uses the display FOV filter) + boresight */
-    var fr = rp.fov * Math.PI / 180;
+    /* FOV wedge from the daemon's live fov_half_deg (tracks the FOV knob) + boresight */
+    var fovDeg = (radar && typeof radar.fov_half_deg === "number") ? radar.fov_half_deg : 90;
+    var fr = fovDeg * Math.PI / 180;
     ctx.fillStyle = "rgba(0,212,255,0.07)"; ctx.beginPath(); ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, maxR, -Math.PI / 2 - fr, -Math.PI / 2 + fr, false); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = "rgba(0,212,255,0.22)"; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
@@ -278,12 +293,8 @@
     if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
     radarGeom = { cx: cx, cy: cy, scale: scale, dpr: dpr };
 
-    /* raw returns — gated by the display filters (fov/range/speed/snr). v = +approaching */
+    /* raw returns — already gated server-side by the daemon (snr/speed/fov). v = +approaching */
     (radar.points || []).forEach(function (p) {
-      var az = Math.abs(p.az != null ? p.az : Math.atan2(p.x, p.y) * 180 / Math.PI);
-      var rng = (p.r != null) ? p.r : Math.hypot(p.x, p.y);
-      if (rng < rp.rmin || az > rp.fov || Math.abs(p.v) < rp.speed) return;
-      if (p.snr != null && p.snr < rp.snr) return;
       var pc = W2C(p.x, p.y);
       ctx.fillStyle = pointStyle(p.v, p.snr);
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
@@ -354,8 +365,10 @@
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       $("v-link").textContent = num(d.mbps, 1); $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
-      /* live EO telemetry on the EO display itself (FOV/zoom + fps/exposure/gain) */
-      $("eo-tl").textContent = "EO · FOV " + num(hfov, 1, "°") + " · " + (eo.zoom ? eo.zoom.toFixed(1) : "1.0") + "×\n"
+      /* live EO telemetry on the EO display itself: resolution (actual pixels) + zoom +
+       * FOV on line 1; sensor fps/exposure/gain on line 2 */
+      var resStr = (eo.dw && eo.dh) ? (eo.dw + "×" + eo.dh) : "—";
+      $("eo-tl").textContent = "EO · " + resStr + " · " + (eo.zoom ? eo.zoom.toFixed(1) : "1.0") + "× · FOV " + num(hfov, 1, "°") + "\n"
         + num(eo.fps, 0, " fps") + " · exp " + num(eo.exp_ms, 1, " ms") + " · gain " + num(eo.gain, 0) + (eo.ae ? " · AUTO" : " · MAN");
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
       $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
@@ -372,9 +385,6 @@
         $("o-pow").textContent = "MAX";
         if (eo.lpresent && hfov && (Math.abs((eo.lfov || 0) - hfov) > 1 || (eo.lpower || 0) < 255)) { ctl("fov=" + hfov.toFixed(0)); ctl("power=255"); }
       }
-      /* cluster cfg: reflect the daemon's APPLIED (clamped) value, not the request */
-      if (typeof d.radar_eps === "number" && idle($("r-eps"))) { $("r-eps").value = d.radar_eps; $("ro-eps").textContent = d.radar_eps.toFixed(1) + " m"; }
-      if (typeof d.radar_minpts === "number" && idle($("r-minpts"))) { $("r-minpts").value = d.radar_minpts; $("ro-minpts").textContent = d.radar_minpts; }
     }).catch(function () { $("v-link").textContent = "—"; $("p-link").classList.remove("on"); });
   }
 
@@ -409,14 +419,16 @@
     if (typeof eo.fps_cap === "number" && idle($("s-fps")) && Date.now() - fpsTouch > 1500) { $("s-fps").value = eo.fps_cap; $("o-fps").textContent = eo.fps_cap; }
     if (typeof eo.ae === "number" && settled) {
       var b = document.querySelector('#ae-btns [data-ae="' + (eo.ae ? 1 : 0) + '"]'); if (b) setSeg("ae-btns", b);
+      setExpMode(!!eo.ae);
     }
-    if (typeof eo.exp_ms === "number" && idle($("s-exp")) && settled) { $("s-exp").value = eo.exp_ms; $("o-exp").textContent = eo.exp_ms.toFixed(1); }
+    if (typeof eo.exp_ms === "number" && idle($("s-exp")) && settled) { $("s-exp").value = eo.exp_ms; $("o-exp").textContent = eo.exp_ms.toFixed(2); }
     if (typeof eo.gain === "number" && idle($("s-gain")) && settled) { $("s-gain").value = eo.gain; $("o-gain").textContent = eo.gain; }
     if (typeof eo.gaincap === "number" && idle($("s-gcap"))) { $("s-gcap").value = eo.gaincap; $("o-gcap").textContent = eo.gaincap; }
     if (typeof eo.median === "number") { var m = document.querySelector('#md-btns [data-md="' + (eo.median ? 1 : 0) + '"]'); if (m) setSeg("md-btns", m); }
   }
 
-  setTrack("auto"); setIllum("auto"); applyTheme();
+  setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); pollRadar();
+  setInterval(pollRstats, 400); pollRstats();
 })();
