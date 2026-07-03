@@ -24,11 +24,13 @@ maintains target state; the gimbal points the head at the track; guidance steers
 an effector. The NIR illuminator is a sensing aid for the EO camera, not a
 detection source.
 
-The **operator console (`app/`) is the system's main process**: it starts the
-sensors, streams the EO video + radar scope to the operator's laptop over WiFi, and
-relays operator commands back (target select for tracking, illuminator, zoom, and —
-later — gimbal). It reads each sensor's latest frame read-only and never sits in the
-control loop.
+The **operator console (`app/`) is the system's main process** and a **thin proxy**:
+it consumes each sensor module's served feed (EO video, radar frames), forwards
+operator commands to the module that owns them (zoom/AE/illuminator → EO; cluster cfg
+→ radar; target-select for tracking; later, gimbal), and serves one integrated picture
+to the operator's laptop over WiFi/USB/HM30. It does **no** capture/ISP/AE/encode — the
+modules own their domains — and never sits in the control loop. A feed that is down
+shows **NOT CONNECTED**; there is no synthetic data.
 
 ## Compute platform
 
@@ -44,7 +46,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
-| Operator console (`app/`) | — | 🟡 field GUI + main process: real V4L2 EO view, digital zoom, tracking auto/manual, illuminator auto/manual, radar scope, stream presets, bright day/night — on-device runtime pending Jetson power | [`app/`](../app/README.md) |
+| Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
 | Radar | — | 🟨 previewer + C daemon (builds clean, sim-verified; HW bring-up pending) | [`radar/`](../radar/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
@@ -70,18 +72,24 @@ moving target. The open item is **syncing the pulse to the camera exposure windo
 (see [`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail:
 [`illuminator/`](../illuminator/README.md).
 
-### Operator console (`app/`) — main process (in progress)
-The field GUI and the system's main process. Owns the EO capture→AE→ISP→shrink→MJPEG
-path (real V4L2 via `eo/pipeline`, default; a synthetic thermal source for no-camera
-dev), the radar polar scope, tracking target-selection (AUTO = most important:
-fused → nearer → confidence; MANUAL = tap), and illuminator control (AUTO fits the
-beam to the camera FOV at max power; MANUAL from DEV). Serves the console over
-**MJPEG `/stream` + polled `/stats` + `/radar` + `GET /ctl`** — no websockets, no CDN,
-software MJPEG only (no NVENC/NVJPG on this SKU). Adds no load to the sensor capture
-paths. **Radar is wired to the real daemon:** `app/radar_client.c` subscribes to the
-radar daemon's SSE `:8092/stream` and the app serves it verbatim on `/radar` (browser
-single-origin), rendering the daemon's cloud + class-less targets per
-[`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md). Detail + endpoints:
+### Operator console (`app/`) — main process, a proxy (in progress)
+The field GUI and the system's main process — a **thin proxy** that consumes the sensor
+modules' feeds and adds the integrated picture. It does **no capture/ISP/AE/encode/
+illuminator-serial**; each module owns its domain and the app couples to its served
+contract only (so an EO/radar refactor doesn't break it).
+
+- **EO:** `app/eo_client.c` consumes the EO module's MJPEG feed (`eo/pipeline`, `:8091`),
+  relays the video on `/stream`, mirrors its `/stats`, and forwards zoom/AE/gain/exposure/
+  illuminator to its `/ctl`. The EO module owns the camera, ISP, AE, and the illuminator.
+- **Radar:** `app/radar_client.c` consumes the radar daemon's SSE (`:8092`), serves the
+  frame verbatim on `/radar` (browser single-origin) per
+  [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md), and forwards cluster cfg.
+- **Console-only:** the radar scope render, EO overlays, tracking target-selection
+  (AUTO = most important: fused → nearer → confidence; MANUAL = tap) with GUI display-
+  persistence, and styling/day-night.
+
+Serves over polled `/stats` + `/stream` + `/radar` + `GET /ctl` — no websockets, no CDN.
+A feed that is down shows **NOT CONNECTED** (no synthetic data). Detail + endpoints:
 [`app/README.md`](../app/README.md) · [`app/docs/GUI.md`](../app/docs/GUI.md).
 
 ### Radar (previewer done; on-HW bring-up pending)

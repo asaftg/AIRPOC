@@ -1,114 +1,79 @@
-# Operator GUI — layout, controls, endpoints, compute budget
+# Operator console — layout, controls, endpoints
 
-The console is one self-contained web page (embedded in the binary) over the same
-lightweight pattern as the EO bench monitor: **MJPEG `/stream` + polled `/stats` +
-`/radar` + `GET /ctl`**. No websockets, no framework, no CDN (the operator laptop is
-on the drone AP with no internet — text labels + inline SVG + canvas only).
+The console is one self-contained web page (embedded in the binary) served by a **thin
+proxy**. The app consumes the EO module's video feed and the radar daemon's frames,
+forwards operator controls to each, and adds the integrated picture. **No websockets,
+no framework, no CDN** (the operator laptop is on the drone link with no internet —
+text labels + inline SVG + canvas only). **No capture / ISP / AE / encode / illuminator
+serial in the app** — each module owns its domain.
 
 ## Layout
 Full-viewport, no scroll. EO fills almost the whole screen; radar is a promotable
 **PIP + swap** (limited-azimuth **sector**, not a 360° PPI). Minimal text, large touch
-targets (14″ laptop → tablet). Visual language matches the Seeker ground bench:
-amber `#ffb454` on near-black, dense monospace/tabular, cyan radar.
+targets (14″ laptop → tablet). Visual language matches the Seeker ground bench: amber
+`#ffb454` on near-black, cyan radar; **day** is a bright white/high-contrast theme.
 
-- **Top bar:** `FAZE-1`, link Mb/s, BATT·ALT (reserved), ZULU (client UTC), theme
-  toggle, DEV. No SCAN/TRACK.
-- **EO hero:** amber reticle, FOV/zoom (live), BRG/RNG (reserved), detection box
-  (reserved), and the engaged-target **LOCK** (green — a projected box when the target
-  is inside the EO FOV, else an edge arrow pointing to it).
-- **Radar scope:** range rings, amber 250 m reference, cyan FOV wedge, doppler-coloured
-  returns (red inbound / blue outbound / cyan static), clustered target boxes with
-  velocity + trails; engaged target shown as a green LOCK.
-- **Bottom cluster (big buttons):** `LIGHT` (laser on/off), `ILLUM` (auto/man),
-  `TRACK` (auto/man), `REC` (reserved); zoom ± bottom-left.
-- **DEV panel:** stream presets + fps/quality + est-Mb/s; illuminator PWR/BEAM (manual
-  only); radar display filters + cluster cfg; system temp + EO source fps.
+- **Top bar:** `FAZE-1`, link Mb/s, BATT·ALT (reserved), ZULU (client UTC), theme, DEV.
+- **EO hero:** the proxied video, amber reticle, FOV/zoom (from the EO feed), BRG/RNG
+  (reserved), and the engaged-target **LOCK** (green — a projected box inside the EO
+  FOV, else an edge arrow). **EO · NOT CONNECTED** scrim when the feed is down.
+- **Radar scope:** rings, amber 250 m reference, cyan FOV wedge, doppler returns
+  (red inbound / blue outbound / cyan static), class-less target boxes with velocity;
+  engaged target as a green LOCK. **NOT CONNECTED** when the daemon is down.
+- **Bottom cluster:** `LIGHT` (fire) · `ILLUM` (auto/man) · `TRACK` (auto/man) · `REC`
+  (reserved); zoom ± bottom-left.
+- **DEV:** stream fps/quality (forwarded to the EO feed), illuminator PWR/BEAM, radar
+  display filters + cluster cfg, system temp.
 
-## Theme
-Dark **night** default + **day** toggle (persisted in `localStorage`). Day is a bright
-white/high-contrast theme for direct sun; the video and on-glass symbology (reticle,
-scope, locks, overlay chips) stay vivid in both modes.
+## Where each thing lives (the app owns none of the sensor work)
+- **EO video + zoom + AE/exposure/gain + illuminator** → the **EO module** (`:8091`).
+  The console forwards those controls to its `/ctl` and shows its `/stats`.
+- **Radar cloud + clustering + tracking** → the **radar daemon** (`:8092`). The console
+  proxies its frames and forwards cluster cfg.
+- **Console-only:** the radar scope render, EO overlays (reticle/lock), **tracking
+  target-selection** (AUTO/MANUAL) + **display persistence** (hold+fade a dropped box
+  ~300 ms — not coasting), day/night, layout.
 
 ## Tracking — AUTO / MANUAL (cluster `TRACK`)
-- **AUTO:** engages the most important target automatically — priority **fused
-  (EO+radar) → nearer range → higher confidence**. (Fused pending the detector; on
-  radar-only it is nearest, tie-broken by confidence.)
-- **MANUAL:** engages the target you **tap** — on the EO (mapped to azimuth via the
-  camera FOV) or directly on the radar scope. A hint banner shows until one is picked.
-- The engaged tid flows to the server (`/ctl?engage=`) for the gimbal/effector later.
+- **AUTO:** engages the most important target — **fused (EO+radar) → nearer → higher
+  confidence** (fused pending the detector; radar-only = nearest, tie-broken by conf).
+- **MANUAL:** engages the target you **tap** (on the EO, mapped via the EO feed's FOV,
+  or on the radar scope). The engaged tid flows to `/ctl`/`/stats` for the gimbal later.
 
 ## Illuminator — AUTO / MANUAL (cluster `ILLUM`)
-- **AUTO:** fits the beam FOV to the **camera FOV** at **max power**, re-applied on zoom
-  (server-side). DEV PWR/BEAM sliders are disabled.
-- **MANUAL:** PWR/BEAM come from the DEV sliders.
-- `LIGHT` is the separate on/off fire control (confirm on ON; bright firing state).
+The **EO module owns the illuminator**; the console forwards commands to its `/ctl`.
+- **AUTO:** fit the beam to the camera FOV at max power — the console forwards
+  `fov=<hfov>` + `power=255` when the FOV changes.
+- **MANUAL:** PWR/BEAM from the DEV sliders → forwarded. `LIGHT` fires (`laser=0|1`).
 
-## Radar source
-The scope consumes the **`radar/` daemon** (radar/docs/INTEGRATION.md). `radar_client.c`
-subscribes to its SSE `:8092/stream`, keeps the latest frame, and the app serves it
-**verbatim on `/radar`** so the browser stays single-origin (never touches `:8092`).
-Frame schema is the daemon's (points `{x,y,z,v,snr,r,az,el,tid}`, class-less targets —
-every target is a live this-frame detection with a stable `tid` + velocity; no coasting
-in the wire). `tid=255` = unclustered clutter. The GUI owns display persistence (hold +
-fade a dropped box ~300 ms so a one-frame miss doesn't blink); real motion-model
-coasting is the future tracking module's job. Develop with the board off via `-s` sim.
+## Radar tuning (DEV)
+- **Display filters (client-side):** `FOV ±`, `SPEED MIN`, `RANGE MIN`. `SNR` is inert
+  (firmware omits SNR).
+- **Cluster cfg (→ daemon):** `CLUSTER ε` + `MIN PTS` via `/ctl` → the daemon; the
+  slider reflects the **applied (clamped)** value.
+- Chip cfg (SNR floor ≥17 dB, max FOV) is the radar module's job.
 
-## Radar tuning (DEV) — two distinct groups
-- **Display filters (client-side only):** `FOV ±`, `SPEED MIN`, `RANGE MIN` gate what
-  the scope draws from the daemon's cloud. **`SNR` is inert** — the current firmware
-  omits SNR (`snr:null`); the slider is disabled until Phase-2 fw.
-- **Cluster cfg (→ radar daemon):** `CLUSTER ε` (DBSCAN spacing) + `MIN PTS`, sent via
-  `/ctl` → `radar_set_tune()` → the daemon. **Needs a daemon `/ctl` endpoint** (request
-  pending with the radar agent); a no-op until it lands.
-- **Chip cfg is the radar module's job, not the GUI:** SNR floor **≥17 dB** and **max
-  FOV**. The daemon publishes the full ±90 span; the GUI trims azimuth for display.
-
-## HTTP endpoints
+## HTTP endpoints (the app)
 | Path | Purpose |
 |---|---|
-| `/` · `/app.css` · `/app.js` | the embedded page (served `no-cache` — assets change per build) |
-| `/stream` | MJPEG multipart (the latest small picture, fanned to every screen) |
-| `/stats` | JSON, polled ~6 Hz (below) |
-| `/radar` | the latest radar-daemon frame **verbatim** (polled ~8 Hz): the daemon's schema — `connected, max_range_m, fov_half_deg, points:[{x,y,z,v,snr,r,az,el,tid}], targets:[{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}]` (live this-frame detections). Proxied from `:8092/stream`. |
-| `/ctl?…` | one-shot controls (below) |
+| `/` · `/app.css` · `/app.js` | the embedded page (served `no-cache`) |
+| `/stream` | the EO module's JPEG frames **relayed** as MJPEG multipart, fanned to every screen |
+| `/radar` | the radar daemon's latest frame **verbatim** |
+| `/stats` | console state + the EO feed's `/stats` nested under `"eo"` + radar tracks |
+| `/ctl?…` | routed: `track`/`engage` → local; `radar_eps`/`radar_minpts` → daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/quality`) → the EO feed |
 
-`/stats` fields: `fps` (encoder), `src_fps` (EO channel), `mbps`, `zoom`, `res_w/h`,
-`fps_cap`, `q`, `preset`, `hfov`, `vfov`, `track` (auto/man), `illum_mode` (auto/man),
-`engage` (tid or -1), `cpu_c`, `laser`, `lpower`, `lfov`, `lpresent`, `tracks`.
-Reserved `null`: `cam_c`, `batt`, `alt`, `brg`, `rng`.
+`/stats` top-level: `eo_connected`, `mbps`, `track` (auto/man), `engage`, `tracks`,
+`radar_eps`, `radar_minpts`, `cpu_c`; reserved `null`: `batt`, `alt`, `brg`, `rng`;
+plus **`eo`** — the EO feed's `/stats` object (`fps`, `sfps`, `hfov`, `vfov`, `zoom`,
+`laser`, `lpower`, `lfov`, `lpresent`, `gain`, `exp_ms`, `median`, `ae`, `gaincap`) or
+`null` when the feed is down.
 
-`/ctl` params: `zoom=1|2|4|8`, `preset=LEAN|SMOOTH|BALANCED|CLEAR`, `fps=1..60`,
-`q=10..95`, `res=<width>`, `track=auto|man`, `engage=<tid|-1>`, `illum=auto|man`,
-`laser=0|1`, `power=0..255` (manual), `fov=<deg>` (manual),
-`radar_eps=<m>`, `radar_minpts=<n>`.
+## Notes
+- **No synthetic data.** A feed that isn't up shows **NOT CONNECTED**. Never run the
+  radar daemon with `-s` in front of an operator.
+- **Bitrate is the EO module's.** DEV forwards plain `fps`/`quality` numbers to the EO
+  feed's `/ctl` — inert until the EO module implements them (requested).
+- **Format:** the EO module encodes (software MJPEG — the Orin Nano has no NVENC/NVJPG);
+  the app only relays bytes. Latency = the EO feed's + one proxy hop + WiFi + decode.
 
-## Stream presets (fps-priority)
-Native MJPEG saturates weak WiFi, so 60 fps is bought with small, lower-quality
-frames. Detection stays native/full-res; only the display loses quality.
-
-| Preset | Width | FPS | q | ≈ link |
-|---|---|---|---|---|
-| LEAN | 400 | 60 | 40 | ~1.5–3 Mb/s |
-| SMOOTH (default) | 512 | 60 | 45 | ~5–8 Mb/s |
-| BALANCED | 800 | 30 | 60 | ~4–6 Mb/s |
-| CLEAR | 1152 | 25 | 75 | ~8–12 Mb/s |
-
-Output height follows the source aspect. `est Mb/s` in DEV = jpeg_bytes × enc_fps × 8.
-
-## Compute budget (edge device)
-- **The GUI adds no load to the EO channel.** It only reads the latest frame
-  (`eo_get_latest`, borrowed pointer + seq). No shrink/compress runs on the capture path.
-- **One shrink+compress worker**, rate-capped, off the capture path: one pass
-  (zoom-crop + box-downscale straight to a small buffer) then one libjpeg-turbo encode.
-  It skips ticks when the source seq hasn't advanced.
-- **Compress once, serve many.** A slow screen only skips to the newest picture; it
-  can't back-pressure the worker or the camera.
-- **Format:** software MJPEG only — the Orin Nano has no NVENC and no NVJPG *encode*
-  (both fused off). At 60 fps this is ~one CPU core; pin it away from the EO channel and
-  detector.
-
-> Pitfall: no internet on the drone AP — the page must stay self-contained (no CDN
-> fonts/icons). Text labels + inline SVG + canvas only.
-
-> Pitfall: `LIGHT` is live-fire (invisible 850 nm, eye hazard). The ON path confirms
-> and the button shows a bright firing state.
+> Pitfall: `LIGHT` is live-fire (invisible 850 nm, eye hazard). The ON path confirms.
