@@ -97,7 +97,13 @@
   $("s-gain").oninput = function () { $("o-gain").textContent = this.value; manualAE(); ctl("gain=" + this.value); };
   $("s-gcap").oninput = function () { $("o-gcap").textContent = this.value; ctl("gaincap=" + this.value); };
   function manualAE() { var m = document.querySelector('#ae-btns [data-ae="0"]'); if (m) setSeg("ae-btns", m); $("ae-tag").textContent = "MANUAL"; $("ae-tag").classList.add("man"); ispTouch = Date.now(); }
-  var ispTouch = 0;
+  var ispTouch = 0, fpsTouch = 0;
+
+  /* stream bandwidth levers — res (display size) + fps cap, both live on the EO feed */
+  document.querySelectorAll("#res-btns [data-res]").forEach(function (b) {
+    b.onclick = function () { setSeg("res-btns", b); ctl("res=" + b.dataset.res); };
+  });
+  $("s-fps").oninput = function () { $("o-fps").textContent = this.value; fpsTouch = Date.now(); ctl("fps=" + this.value); };
 
   /* ── radar display filters (client-side only — chip cfg is the radar module's job) ── */
   function bindR(id, key, fmt) {
@@ -387,6 +393,8 @@
    * control the operator is actively touching). */
   function updateISP(eo) {
     var settled = Date.now() - ispTouch > 1500;
+    if (typeof eo.res === "string") { var rb = document.querySelector('#res-btns [data-res="' + eo.res + '"]'); if (rb) setSeg("res-btns", rb); }
+    if (typeof eo.fps_cap === "number" && idle($("s-fps")) && Date.now() - fpsTouch > 1500) { $("s-fps").value = eo.fps_cap; $("o-fps").textContent = eo.fps_cap; }
     if (typeof eo.ae === "number" && settled) {
       var b = document.querySelector('#ae-btns [data-ae="' + (eo.ae ? 1 : 0) + '"]'); if (b) setSeg("ae-btns", b);
       $("ae-tag").textContent = eo.ae ? "AUTO" : "MANUAL"; $("ae-tag").classList.toggle("man", !eo.ae);

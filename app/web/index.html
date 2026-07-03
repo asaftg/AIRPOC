@@ -68,6 +68,13 @@
     <aside id="dev">
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
+      <div class="sec">STREAM <span class="tag">→ EO feed</span></div>
+      <div class="srow"><label>RES</label><div class="btns" id="res-btns">
+        <button data-res="low">640</button><button data-res="med" class="on">960</button><button data-res="high">1280</button><button data-res="native">1440</button>
+      </div></div>
+      <div class="srow"><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
+      <div class="kv muted">RES = display/stream size (live; shared with the EO preview). FPS caps the operating rate — lower it to buy exposure headroom in the dark (AE opens EXP before adding gain).</div>
+
       <div class="sec">EO SENSOR <span class="tag" id="ae-tag">AUTO</span></div>
       <div class="srow"><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
       <div class="srow"><label>EXP ms</label><input type="range" id="s-exp" min="0.1" max="33" step="0.1" value="16"><span class="val" id="o-exp">—</span></div>
