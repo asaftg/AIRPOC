@@ -45,9 +45,44 @@ static void read_until_ack(int fd, char *out, size_t outsz) {
     }
 }
 
+/* Wait until the mmw_demo CLI is up (it echoes a "mmwDemo:/>" prompt). After a
+ * power-cycle the chip needs a few seconds to boot; pushing the cfg before the
+ * console is ready loses the early lines (silently — no "Error", just no ack) so
+ * sensorStart runs on a half-applied config and the sensor produces no frames.
+ * Returns 1 if the prompt appeared within timeout_s. */
+static int wait_cli_ready(int fd, double timeout_s) {
+    double deadline = now_ms() + timeout_s * 1000.0;
+    char buf[512];
+    while (now_ms() < deadline) {
+        drain(fd);
+        ssize_t w = write(fd, "\n", 1); (void)w;   /* nudge → demo prints its prompt */
+        double d2 = now_ms() + 700;
+        size_t len = 0; buf[0] = 0;
+        while (now_ms() < d2) {
+            ssize_t n = read(fd, buf + len, sizeof(buf) - 1 - len);
+            if (n > 0) {
+                len += (size_t)n; buf[len] = 0;
+                if (strstr(buf, "mmwDemo") || strstr(buf, "mmw_pro") || strstr(buf, ":/>"))
+                    return 1;
+                if (len > sizeof(buf) - 8) { buf[0] = 0; len = 0; }
+            } else {
+                struct timespec s = {0, 5 * 1000 * 1000}; nanosleep(&s, NULL);
+            }
+        }
+    }
+    return 0;
+}
+
 int cfg_push(int cli_fd, const char *cfg_path) {
     FILE *f = fopen(cfg_path, "r");
     if (!f) { perror("radar: open cfg"); return -1; }
+
+    /* Don't push until the CLI console answers — avoids losing early lines to a
+     * still-booting chip. */
+    if (wait_cli_ready(cli_fd, 15.0))
+        fprintf(stderr, "radar: CLI ready — pushing cfg\n");
+    else
+        fprintf(stderr, "radar: CLI not confirmed after 15 s — pushing anyway\n");
 
     drain(cli_fd);
     char line[512];

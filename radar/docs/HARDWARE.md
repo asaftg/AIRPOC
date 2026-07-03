@@ -22,6 +22,22 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="bef3", \
 > the mapping — the numbers above are the expected XDS110 layout, not verified
 > on this unit. The daemon takes `-C`/`-D` overrides meanwhile.
 
+## ModemManager MUST be off (verified 2026-07-03)
+
+Linux **ModemManager auto-probes every new CDC-ACM device** as if it were a
+cellular modem. When the XDS110 ports re-enumerate on a radar power-cycle, it
+grabs `/dev/ttyACM0/1` and injects AT commands **right during the daemon's cfg
+push** — early cfg lines are lost, `sensorStart` runs half-applied, and the
+sensor produces **no frames** (and you see `Device or resource busy`). Disable
+it on the Jetson:
+```
+sudo systemctl stop ModemManager && sudo systemctl mask ModemManager
+```
+(Belt-and-suspenders: a udev `ENV{ID_MM_DEVICE_IGNORE}="1"` rule for vendor
+`0451` also works, but masking is simplest on a dedicated seeker.) The daemon
+also now **waits for the CLI prompt** before pushing (`cfg_push.c`), so it never
+pushes into a still-booting chip.
+
 ## Custom baud
 
 3,125,000 is not a POSIX `Bxxx` constant, so `src/serial.c` sets it via
