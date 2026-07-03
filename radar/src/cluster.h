@@ -23,10 +23,16 @@ typedef struct RadarClusterer RadarClusterer;
  * daemon's /ctl endpoint (CLUSTER eps + MIN PTS sliders in the GUI). */
 #define CLUSTER_DEFAULT_EPS_M    8.0
 #define CLUSTER_DEFAULT_MIN_PTS  2
+#define CLUSTER_DEFAULT_SPEED    0.4    /* m/s — dynamic-only gate */
+#define CLUSTER_DEFAULT_SNR      0.0    /* dB  — 0 = no SNR gate (publish-max) */
 #define CLUSTER_EPS_MIN_M        0.5
 #define CLUSTER_EPS_MAX_M        50.0
 #define CLUSTER_MIN_PTS_MIN      1
 #define CLUSTER_MIN_PTS_MAX      20
+#define CLUSTER_SPEED_MIN        0.0
+#define CLUSTER_SPEED_MAX        5.0
+#define CLUSTER_SNR_MIN          0.0
+#define CLUSTER_SNR_MAX          60.0
 
 RadarClusterer *cluster_new(void);
 void            cluster_free(RadarClusterer *c);
@@ -36,6 +42,10 @@ void            cluster_free(RadarClusterer *c);
  * thread while the radar thread clusters (worst case: one frame uses a
  * just-changed value). */
 void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
+
+/* Set the point-eligibility gates live: min |radial speed| (m/s, dynamic-only)
+ * and min per-point SNR (dB; 0 = off). Clamped. Same thread-safety note. */
+void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db);
 
 /* Cluster+track one frame. `pts`/`n` are updated in place (each point's
  * .tid is set to its cluster/track id, or 255). `now_s` is a monotonic

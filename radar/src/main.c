@@ -37,9 +37,10 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
-/* /ctl?eps=&minpts= handler — pushes live DBSCAN changes to the clusterer. */
-static void on_ctl(double eps_m, int min_pts, void *user) {
+/* /ctl handler — pushes live clustering changes to the clusterer. */
+static void on_ctl(double eps_m, int min_pts, double speed_min, double snr_min, void *user) {
     cluster_set_dbscan((RadarClusterer *)user, eps_m, min_pts);
+    cluster_set_gates((RadarClusterer *)user, speed_min, snr_min);
 }
 
 static double now_s(void) {

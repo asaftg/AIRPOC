@@ -144,12 +144,44 @@ function connect() {
 }
 connect();
 
+// ── tuning sliders → /ctl (live), synced back from /stats ──
+const CTL = [
+  { id: "eps",    key: "cluster_eps_m",  fmt: (v) => v.toFixed(1) },
+  { id: "minpts", key: "cluster_min_pts", fmt: (v) => String(v) },
+  { id: "speed",  key: "speed_min_mps",  fmt: (v) => v.toFixed(1) },
+  { id: "snrmin", key: "snr_min_db",     fmt: (v) => v.toFixed(0) },
+];
+let lastTouch = 0, sendTimer = null;
+function pushCtl() {
+  const q = `eps=${el("eps").value}&minpts=${el("minpts").value}` +
+            `&speed=${el("speed").value}&snrmin=${el("snrmin").value}`;
+  fetch("/ctl?" + q).catch(() => {});
+}
+function el(id) { return document.getElementById(id); }
+for (const c of CTL) {
+  const s = el(c.id);
+  s.addEventListener("input", () => {
+    lastTouch = performance.now();
+    el(c.id + "_v").textContent = c.fmt(parseFloat(s.value));
+    clearTimeout(sendTimer);
+    sendTimer = setTimeout(pushCtl, 80);   // debounce drags
+  });
+}
+
 async function poll() {
   try {
     const d = await (await fetch("/stats")).json();
     document.getElementById("hud").textContent =
       `${d.profile}  ${d.fps.toFixed(1)} Hz  pts ${d.num_points}  tgts ${d.num_targets}  ` +
       `drops ${d.drops}  Rmax ${d.max_range_m.toFixed(0)} m  ${d.connected ? "" : "— DISCONNECTED"}`;
+    // Sync sliders from the daemon (post-clamp) unless the user is mid-drag.
+    if (performance.now() - lastTouch > 1500) {
+      for (const c of CTL) {
+        if (d[c.key] == null) continue;
+        el(c.id).value = d[c.key];
+        el(c.id + "_v").textContent = c.fmt(d[c.key]);
+      }
+    }
   } catch (_) {}
 }
 setInterval(poll, 250); poll();

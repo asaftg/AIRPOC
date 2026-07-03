@@ -10,8 +10,8 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 | GET | `/` | the standalone PPI previewer (works on its own) |
 | GET | `/radar_view.js` | the previewer script (reference renderer) |
 | GET | `/stream` | **SSE** — one `data: <frame-json>\n\n` per radar frame |
-| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, fov_half_deg, cluster_eps_m, cluster_min_pts}` |
-| GET | `/ctl?eps=<m>&minpts=<int>` | set the host DBSCAN live → `200 ok` |
+| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, fov_half_deg, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db}` |
+| GET | `/ctl?eps=&minpts=&speed=&snrmin=` | set the host clustering live → `200 ok` |
 
 ## Live controls — `/ctl` (CLUSTER ε + MIN PTS sliders)
 
@@ -24,6 +24,11 @@ optional — an absent one keeps its current value.
   far target's returns are more spread out), so one slider value works across
   the whole scene.
 - `minpts` — DBSCAN min-samples, clamped to **1 – 20** (default 2).
+- `speed` — min |radial speed| in m/s (dynamic-only gate), clamped **0 – 5**
+  (default 0.4). Points slower than this are static clutter and don't cluster.
+- `snrmin` — min per-point SNR in dB, clamped **0 – 60** (default 0 = off).
+  Points weaker than this don't cluster — raise it to reject noise/clutter,
+  lower it to reach for faint far targets. (Points with unknown SNR pass.)
 
 `/stats` echoes the currently-applied `cluster_eps_m` and `cluster_min_pts`
 (post-clamp), so initialise the sliders from `/stats` on load rather than
