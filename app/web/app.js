@@ -20,8 +20,10 @@
   var theme = localStorage.getItem("airpoc-theme") || "night";
   function applyTheme() { document.body.className = theme + (trackMode === "man" ? " manual" : ""); $("theme").textContent = theme.toUpperCase(); redrawAll(); }
   $("theme").onclick = function () { theme = theme === "day" ? "night" : "day"; localStorage.setItem("airpoc-theme", theme); applyTheme(); };
-  $("devbtn").onclick = function () { $("dev").classList.toggle("open"); };
-  $("devclose").onclick = function () { $("dev").classList.remove("open"); };
+  /* DEV squeezes the layout (it's in-flow, not an overlay) — refit the canvases after the
+   * width transition so the EO overlay + radar scope match their new sizes. */
+  $("devbtn").onclick = function () { $("dev").classList.toggle("open"); setTimeout(redrawAll, 180); };
+  $("devclose").onclick = function () { $("dev").classList.remove("open"); setTimeout(redrawAll, 180); };
   document.querySelectorAll("[data-exp]").forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); $("stage").classList.toggle("rbig"); setTimeout(redrawAll, 20); }; });
 
   /* ── zoom ── the EO feed owns digital zoom; we forward zoom=N and drive the readout

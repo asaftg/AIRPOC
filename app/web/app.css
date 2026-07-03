@@ -133,12 +133,13 @@ body.day{
 #v-zval{width:46px;height:26px;display:flex;align-items:center;justify-content:center;
   color:var(--amber);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd);font-size:12px;font-weight:600}
 
-/* ── DEV panel ── slides in from the LEFT (over the EO area) so it never covers the
- * radar + target list on the right, which the operator watches while tuning. */
-#dev{position:absolute;top:0;left:0;bottom:0;width:min(42%,420px);background:var(--panel);
-  border-right:1px solid var(--bd);padding:12px 14px;transform:translateX(-103%);transition:transform .16s;
-  z-index:8;overflow-y:auto}
-#dev.open{transform:translateX(0)}
+/* ── DEV panel ── an in-flow column on the RIGHT that expands to push (squeeze) the EO +
+ * radar/targets to the left instead of overlaying them. The inner body is fixed-width so
+ * the content doesn't reflow while the panel animates open/closed. */
+#dev{flex:0 0 auto;width:0;overflow:hidden;transition:width .16s;align-self:stretch}
+#dev.open{width:400px}
+#dev-body{width:400px;height:100%;padding:12px 14px;overflow-y:auto;
+  background:var(--panel);border-left:1px solid var(--bd)}
 .dev-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bd);padding-bottom:8px}
 .dev-head b{color:var(--amber);letter-spacing:1.5px}
 #devclose{background:transparent;border:0;color:var(--muted);font-size:16px;cursor:pointer}
