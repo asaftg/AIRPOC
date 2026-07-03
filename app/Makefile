@@ -14,7 +14,7 @@ EOP      := ../eo/pipeline
 CPPFLAGS += -I$(ILLUM) -I$(EOP)
 LDLIBS   += -ljpeg -lm
 
-OBJ := main.o gui.o view.o radar_client.o illum.o sg_ir850.o \
+OBJ := main.o gui.o radar_client.o illum.o sg_ir850.o \
        eo_frame_v4l2.o capture.o ae.o isp.o sensor.o
 
 app: web_assets.h $(OBJ)
@@ -23,12 +23,10 @@ app: web_assets.h $(OBJ)
 web_assets.h: web/index.html web/app.css web/app.js gen_assets.sh
 	sh gen_assets.sh
 
-gui.o: gui.c gui.h eo_frame.h radar.h view.h $(EOP)/illum.h web_assets.h
+gui.o: gui.c gui.h eo_frame.h radar.h $(EOP)/pipeline.h $(EOP)/illum.h web_assets.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ gui.c
 main.o: main.c eo_frame.h radar.h gui.h $(EOP)/illum.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ main.c
-view.o: view.c view.h eo_frame.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ view.c
 radar_client.o: radar_client.c radar.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ radar_client.c
 eo_frame_v4l2.o: eo_frame_v4l2.c eo_frame.h $(EOP)/pipeline.h

@@ -38,8 +38,10 @@ static double now_s(void)
     return t.tv_sec + t.tv_nsec / 1e9;
 }
 
-/* Capture loop — the EO channel's own thread. Copies out of the uncached V4L2 DMA
- * buffer once, requeues immediately, runs AE at ~15 Hz, tone-maps, publishes. */
+/* Capture loop — minimal, so it holds the sensor's 60 fps. ONE streaming copy out of
+ * the uncached V4L2 DMA buffer, requeue immediately, AE metering at ~15 Hz, publish
+ * the RAW Y10 frame. No tone-map/scale here — that is display work and runs on the
+ * GUI's rate-capped encoder thread (isp_scale_tonemap), decoupled from capture. */
 static void *capture_thread(void *a)
 {
     (void)a;
@@ -47,34 +49,25 @@ static void *capture_thread(void *a)
     ae_init(&ae);
     sensor_apply(&sensor, ae.exp_lines, ae.gain);
 
-    uint8_t *frame = malloc((size_t)cap.sizeimage);
-    if (!frame) { run_flag = 0; return NULL; }
-
     unsigned long n = 0;
     while (run_flag) {
         int idx;
         const uint8_t *raw = cap_dqbuf(&cap, &idx);
         if (!raw) break;
-        memcpy(frame, raw, cap.sizeimage);
+        int nb = (latest + 1) % NBUF;            /* only this thread writes `latest` */
+        memcpy(out[nb], raw, cap.sizeimage);     /* the one mandatory copy */
         cap_requeue(&cap, idx);
 
-        if (++n % 4 == 0) {                      /* AE @ ~15 Hz, off the display path */
-            double mean = isp_mean10(frame, cap.bytesperline, cap.width, cap.height);
+        if (++n % 4 == 0) {                       /* AE @ ~15 Hz (subsampled, cheap) */
+            double mean = isp_mean10(out[nb], cap.bytesperline, cap.width, cap.height);
             ae_update(&ae, mean);
             sensor_apply(&sensor, ae.exp_lines, ae.gain);
         }
-
-        int nb = (latest + 1) % NBUF;            /* only this thread writes `latest` */
-        /* full-frame tone map to GRAY8 (no crop/scale here; the GUI's view.c does the
-         * transport shrink). eo/pipeline's fused crop+scale+tonemap API. */
-        isp_scale_tonemap(frame, cap.bytesperline, 0, 0, cap.width, cap.height,
-                          out[nb], cap.width, cap.height);
 
         pthread_mutex_lock(&lk);
         latest = nb; seqv++; t_cap = now_s();
         pthread_mutex_unlock(&lk);
     }
-    free(frame);
     return NULL;
 }
 
@@ -91,10 +84,10 @@ int eo_start(const char *dev)
         return -1;
     }
     W = cap.width; H = cap.height;
-    for (int i = 0; i < NBUF; i++) {
-        out[i] = malloc((size_t)W * H);
+    for (int i = 0; i < NBUF; i++) {          /* raw Y10 frames (sizeimage each) */
+        out[i] = malloc((size_t)cap.sizeimage);
         if (!out[i]) return -1;
-        memset(out[i], 0, (size_t)W * H);
+        memset(out[i], 0, (size_t)cap.sizeimage);
     }
     run_flag = 1;
     if (pthread_create(&th, NULL, capture_thread, NULL) != 0) { run_flag = 0; return -1; }
@@ -123,7 +116,7 @@ int eo_get_latest(eo_frame_t *o)
     pthread_mutex_unlock(&lk);
     if (idx < 0) return 0;
     o->data = out[idx]; o->seq = s; o->width = W; o->height = H;
-    o->stride = W; o->fmt = EO_FMT_GRAY8; o->t_capture = tc;
+    o->stride = cap.bytesperline; o->fmt = EO_FMT_Y10; o->t_capture = tc;
     return 1;
 }
 

@@ -8,7 +8,7 @@
 #include "gui.h"
 #include "eo_frame.h"
 #include "radar.h"
-#include "view.h"
+#include "pipeline.h"      /* eo/pipeline: isp_scale_tonemap (crop+scale+tonemap) */
 #include "illum.h"
 #include "web_assets.h"
 #include <arpa/inet.h>
@@ -142,8 +142,11 @@ static void *encoder(void *arg)
             last_seq = f.seq;
             g_srcw = f.width; g_srch = f.height;
 
-            int dw = g_dw; if (dw < 64) dw = 64; if (dw > f.width) dw = f.width;
-            int dh = (int)((int64_t)dw * f.height / f.width); if (dh < 1) dh = 1;
+            int z = g_zoom < 1 ? 1 : g_zoom;              /* digital zoom = centered crop */
+            int cw = f.width / z, ch = f.height / z;
+            int cx = (f.width - cw) / 2, cy = (f.height - ch) / 2;
+            int dw = g_dw; if (dw < 64) dw = 64; if (dw > cw) dw = cw;
+            int dh = (int)((int64_t)dw * ch / cw); if (dh < 1) dh = 1;
 
             size_t need = (size_t)dw * dh;
             if (need > smcap) {
@@ -151,7 +154,8 @@ static void *encoder(void *arg)
                 if (!tmp) { free(sm); sm = NULL; smcap = 0; continue; }
                 sm = tmp; smcap = need;
             }
-            view_shrink(&f, g_zoom, sm, dw, dh);
+            /* one pass on the encoder thread: crop(zoom) + downscale + tone-map (Y10->8) */
+            isp_scale_tonemap(f.data, f.stride, cx, cy, cw, ch, sm, dw, dh);
 
             unsigned long jl = 0;
             unsigned char *j = encode_gray(sm, dw, dh, g_q, &jl);
