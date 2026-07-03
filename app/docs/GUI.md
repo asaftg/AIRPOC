@@ -8,20 +8,30 @@ text labels + inline SVG + canvas only). **No capture / ISP / AE / encode / illu
 serial in the app** — each module owns its domain.
 
 ## Layout
-Full-viewport, no scroll. EO fills almost the whole screen; radar is a promotable
-**PIP + swap** (limited-azimuth **sector**, not a 360° PPI). Minimal text, large touch
-targets (14″ laptop → tablet). Visual language matches the Seeker ground bench: amber
-`#ffb454` on near-black, cyan radar; **day** is a bright white/high-contrast theme.
+Full-viewport, no scroll. Two columns: **EO fills the left ~70%**; the right column
+stacks a **target list** over the **radar scope** (limited-azimuth **sector**, not a
+360° PPI). Controls live *inside* the EO panel so they never cover the radar origin.
+Minimal text, large touch targets (14″ laptop → tablet). Visual language matches the
+Seeker ground bench: amber `#ffb454` on near-black, cyan radar; **day** is a bright
+white/high-contrast theme.
 
 - **Top bar:** `FAZE-1`, link Mb/s, BATT·ALT (reserved), ZULU (client UTC), theme, DEV.
-- **EO hero:** the proxied video, amber reticle, FOV/zoom (from the EO feed), BRG/RNG
-  (reserved), and the engaged-target **LOCK** (green — a projected box inside the EO
-  FOV, else an edge arrow). **EO · NOT CONNECTED** scrim when the feed is down.
-- **Radar scope:** rings, amber 250 m reference, cyan FOV wedge, doppler returns
-  (red inbound / blue outbound / cyan static), class-less target boxes with velocity;
-  engaged target as a green LOCK. **NOT CONNECTED** when the daemon is down.
-- **Bottom cluster:** `LIGHT` (fire) · `ILLUM` (auto/man) · `TRACK` (auto/man) · `REC`
-  (reserved); zoom ± bottom-left.
+- **EO (left):** the proxied video, amber reticle, FOV/zoom (from the EO feed), BRG/RNG
+  (reserved), the engaged-target **LOCK** (green — a projected box inside the EO FOV,
+  else an edge arrow), and — overlaid on it — the zoom ± (bottom-left) and the control
+  cluster (bottom-centre). **EO · NOT CONNECTED** scrim when the feed is down.
+- **Target list (right, top):** top 5 by importance (**fused → higher confidence →
+  nearer**; fusion pending, so radar-only today). Rows persist ~2 s so they don't
+  flicker on a one-frame drop; the engaged target is green. Tap a row → select it
+  (switches TRACK to MANUAL).
+- **Radar scope (right, bottom):** matches the radar daemon's own renderer (2 px dots,
+  SNR-scaled alpha, half-circle rings, doppler colours: red inbound / blue outbound /
+  cyan static) plus GUI-owned hold+fade persistence and the green LOCK. **View range
+  auto-scales: 100 m default → 250 m once a target passes 100 m → 500 m past 250 m**
+  (grows instantly, shrinks after a few quiet frames). Expand button fills the stage.
+  **NOT CONNECTED** when the daemon is down.
+- **Control cluster (over EO):** `LIGHT` (fire, no confirm) · `ILLUM` (auto/man) ·
+  `TRACK` (auto/man) · `REC` (reserved).
 - **DEV:** stream res/fps (forwarded to the EO feed), illuminator PWR/BEAM, radar
   display filters + cluster cfg, system temp.
 

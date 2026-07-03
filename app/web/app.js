@@ -14,7 +14,7 @@
   var trackMode = "auto", engagedTid = null, sentEngage = null;
   var illumMode = "auto";
   var rp = { snr: 16, speed: 0.4, rmin: 0, fov: 60 };   /* GUI display filters only */
-  var lastStats = {}, lastRadar = null, trails = {};
+  var lastStats = {}, lastRadar = null;
 
   /* ── theme / dev / swap ── */
   var theme = localStorage.getItem("airpoc-theme") || "night";
@@ -22,14 +22,18 @@
   $("theme").onclick = function () { theme = theme === "day" ? "night" : "day"; localStorage.setItem("airpoc-theme", theme); applyTheme(); };
   $("devbtn").onclick = function () { $("dev").classList.toggle("open"); };
   $("devclose").onclick = function () { $("dev").classList.remove("open"); };
-  document.querySelectorAll("[data-swap]").forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); $("stage").classList.toggle("swap"); setTimeout(redrawAll, 20); }; });
+  document.querySelectorAll("[data-exp]").forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); $("stage").classList.toggle("rbig"); setTimeout(redrawAll, 20); }; });
 
-  /* ── zoom ── */
+  /* ── zoom ── the EO feed owns digital zoom; we forward zoom=N and drive the readout
+   * optimistically. poll() reconciles from eo.zoom but is guarded for ~1.2s after a tap
+   * so a slightly-stale /stats can't snap the label back mid-interaction. ── */
+  var zoomTouch = 0;
+  function setZoomLabel() { $("v-zval").textContent = zoom.toFixed(1) + "×"; }
   document.querySelectorAll("[data-zoom]").forEach(function (b) {
     b.onclick = function () {
       var i = ZOOMS.indexOf(zoom) + parseInt(b.dataset.zoom, 10);
       if (i < 0 || i >= ZOOMS.length) return;
-      zoom = ZOOMS[i]; ctl("zoom=" + zoom); $("v-zval").textContent = zoom.toFixed(1) + "×";
+      zoom = ZOOMS[i]; zoomTouch = Date.now(); ctl("zoom=" + zoom); setZoomLabel();
     };
   });
 
@@ -53,14 +57,27 @@
     b.classList.toggle("auto", m === "auto"); b.classList.toggle("man", m === "man");
     var tag = $("illum-tag"); tag.textContent = m.toUpperCase(); tag.classList.toggle("man", m === "man");
     $("s-pow").disabled = (m === "auto"); $("s-fov").disabled = (m === "auto");
-    /* AUTO/MAN is a console concept; the EO feed owns the illuminator, so auto just
-     * forwards fov=<camera FOV> + power=max to the feed (done in poll()). */
+    /* On entering MANUAL, seed the sliders ONCE from the feed's current illuminator
+     * state. After that the sliders are the source of truth — poll() must NOT write them
+     * back, or adjusting one would snap the other to a (slightly stale) /stats value. */
+    if (m === "man") {
+      var eo = lastStats.eo || {};
+      if (typeof eo.lpower === "number") { var pc = Math.round(eo.lpower * 100 / 255); $("s-pow").value = pc; $("o-pow").textContent = pc + "%"; }
+      if (typeof eo.lfov === "number") { $("s-fov").value = Math.round(eo.lfov); $("o-fov").textContent = Math.round(eo.lfov) + "°"; }
+    }
   }
   $("illum").onclick = function () { setIllum(illumMode === "auto" ? "man" : "auto"); };
+
+  /* LIGHT: fire the 850 nm IR illuminator. No confirm dialog. Optimistic toggle off the
+   * button's own shown state so it responds instantly and reverses reliably; poll()
+   * reconciles from eo.laser but is guarded for ~1.2s so the round-trip can't fight it. */
+  var lightTouch = 0;
   $("light").onclick = function () {
-    var on = $("light").classList.contains("firing");
-    if (!on && !confirm("Fire 850nm IR laser? (invisible, eye hazard)")) return;
-    ctl("laser=" + (on ? 0 : 1));
+    var want = !$("light").classList.contains("firing");
+    lightTouch = Date.now();
+    ctl("laser=" + (want ? 1 : 0));
+    $("light").classList.toggle("firing", want);
+    $("light-s").textContent = want ? "ON" : "OFF";
   };
   $("s-pow").oninput = function () { $("o-pow").textContent = this.value + "%"; ctl("power=" + Math.round(this.value * 255 / 100)); };
   $("s-fov").oninput = function () { $("o-fov").textContent = this.value + "°"; ctl("fov=" + this.value); };
@@ -103,6 +120,31 @@
   }
   /* AUTO priority: fused (EO+radar) first [pending detector], then nearer, then conf. */
   function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
+
+  /* Target list (top 5 by importance): fused > higher confidence > nearer. Fusion isn't
+   * wired yet, so today this is radar-only (conf then range). Its own persistence
+   * (~2 s) keeps rows from flickering when a target drops for a frame or two. */
+  var listHold = {}, LIST_HOLD_MS = 2000;
+  function importance(t) { return (t.fused ? 2e6 : 0) + (t.conf || 0) * 1e3 - t.rng; }
+  function renderTargetList(radar) {
+    var now = Date.now();
+    targets(radar).forEach(function (t) { listHold[t.tid] = { t: t, ts: now }; });
+    Object.keys(listHold).forEach(function (tid) { if (now - listHold[tid].ts > LIST_HOLD_MS) delete listHold[tid]; });
+    var rows = Object.keys(listHold).map(function (tid) { return { t: listHold[tid].t, held: (now - listHold[tid].ts > 200) }; });
+    rows.sort(function (a, b) { return importance(b.t) - importance(a.t); });
+    rows = rows.slice(0, 5);
+    $("v-tgtcount").textContent = rows.length;
+    var ul = $("tgt-list");
+    if (!rows.length) { ul.innerHTML = '<li class="tgt-empty">no targets</li>'; return; }
+    ul.innerHTML = rows.map(function (r) {
+      var t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
+      var eng = (t.tid === engagedTid), cls = "tgt-row" + (eng ? " eng" : "") + (r.held ? " held" : "");
+      return '<li class="' + cls + '" data-tid="' + t.tid + '" style="border-left-color:' + (eng ? "var(--on)" : col) + '">'
+        + '<span class="tid" style="color:' + (eng ? "var(--on)" : col) + '">R#' + t.tid + '</span>'
+        + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
+        + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>';
+    }).join("");
+  }
   /* Display persistence (GUI-owned): hold a dropped target's box at its last spot and
    * fade over HOLD_MS so a one-frame miss doesn't blink. Not motion prediction — that
    * (real coasting) belongs to the tracking module, not the display. */
@@ -154,81 +196,91 @@
     }
   }
 
-  var REF_M = 250;
-  var TARGET_COLORS = ["#ff4d6d", "#40c4ff", "#ffd54f", "#81c784", "#ba68c8", "#ff8a65"];
+  /* Radar scope — matches the radar daemon's own PPI renderer (radar/web/radar_view.js):
+   * same 8 target colours, 2 px dots, SNR-scaled alpha, half-circle rings, amber 100 m
+   * reference. We add the GUI's jobs the daemon leaves to us: display persistence
+   * (hold+fade a dropped box ~300 ms) and the engaged-target LOCK. */
+  var TARGET_COLORS = ["#ff4d6d", "#40c4ff", "#ffd54f", "#81c784", "#ba68c8", "#ff8a65", "#4dd0e1", "#dce775"];
+  function tcolor(tid) { return TARGET_COLORS[((tid % 8) + 8) % 8]; }
+  function pointStyle(v, snr) {
+    var s = (typeof snr === "number" && isFinite(snr)) ? Math.max(0.3, Math.min(1, (snr - 12) / 28)) : 0.7;
+    if (Math.abs(v) < 0.2) return "rgba(0,212,255," + (s * 0.55) + ")";
+    return v > 0 ? "rgba(255,85,85," + s + ")" : "rgba(80,170,255," + s + ")";
+  }
+
+  /* View range: default 100 m; jump to 250 m once a target is beyond 100 m, and to
+   * 500 m once one is beyond 250 m. Grow instantly, shrink only after a few quiet
+   * frames so a one-frame drop doesn't make the scope pump. */
+  var viewRangeM = 100, shrinkCtr = 0, SHRINK_FRAMES = 25;
+  function updateViewRange(radar) {
+    var maxTR = 0;
+    (radar && radar.targets || []).forEach(function (t) { var r = Math.hypot(t.x || 0, t.y || 0); if (r > maxTR) maxTR = r; });
+    var want = maxTR > 250 ? 500 : (maxTR > 100 ? 250 : 100);
+    if (want > viewRangeM) { viewRangeM = want; shrinkCtr = 0; }
+    else if (want < viewRangeM) { if (++shrinkCtr >= SHRINK_FRAMES) { viewRangeM = want; shrinkCtr = 0; } }
+    else shrinkCtr = 0;
+  }
+
+  var radarGeom = null;
   function drawRadar(radar) {
     var f = fit($("radar-cv")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
     ctx.clearRect(0, 0, w, h);
     var cx = w / 2, cy = h - 10 * dpr, maxR = Math.max(20, Math.min(h - 16 * dpr, w / 2 - 6 * dpr));
-    var cyan = css("--cyan"), amber = css("--amber"), dim = css("--dim");
-    var maxM = (radar && radar.max_range_m) || 500;
-    var scale = maxR / maxM, W2C = function (x, y) { return [cx + x * scale, cy - y * scale]; };
-    ctx.font = (10 * dpr) + "px ui-monospace, monospace";
+    var dim = css("--dim");
+    var scale = maxR / Math.max(viewRangeM, 1), W2C = function (x, y) { return [cx + x * scale, cy - y * scale]; };
+    ctx.font = (11 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "left";
 
+    /* rings + labels (100 m ring shown amber when it lands on a ring) */
     for (var i = 1; i <= 4; i++) {
-      var ringM = maxM * i / 4, ref = Math.abs(ringM - REF_M) < 1;
-      ctx.strokeStyle = ref ? amber : cyan; ctx.globalAlpha = ref ? 0.5 : 0.16; ctx.lineWidth = ref ? 1.4 * dpr : dpr;
+      var ringM = viewRangeM * i / 4, ref = Math.abs(ringM - 100) < 0.5;
+      ctx.strokeStyle = ref ? "rgba(255,170,60,0.55)" : "rgba(0,212,255,0.15)"; ctx.lineWidth = (ref ? 1.4 : 1) * dpr;
       ctx.beginPath(); ctx.arc(cx, cy, maxR * i / 4, Math.PI, 2 * Math.PI); ctx.stroke();
-      ctx.globalAlpha = ref ? 0.85 : 0.5; ctx.fillStyle = ref ? amber : dim; ctx.fillText(ringM.toFixed(0) + " m", cx + 4 * dpr, cy - maxR * i / 4 + 12 * dpr);
+      ctx.fillStyle = ref ? "rgba(255,190,90,0.9)" : "rgba(180,220,240,0.55)";
+      ctx.fillText(ringM.toFixed(0) + " m", cx + 5 * dpr, cy - maxR * i / 4 + 13 * dpr);
     }
+    /* FOV wedge (uses the display FOV filter) + boresight */
     var fr = rp.fov * Math.PI / 180;
-    ctx.globalAlpha = 0.07; ctx.fillStyle = cyan; ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.fillStyle = "rgba(0,212,255,0.07)"; ctx.beginPath(); ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, maxR, -Math.PI / 2 - fr, -Math.PI / 2 + fr, false); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = 0.28; ctx.strokeStyle = cyan; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.strokeStyle = "rgba(0,212,255,0.22)"; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
     [-1, 1].forEach(function (s) { var a = -Math.PI / 2 + s * fr; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * maxR, cy + Math.sin(a) * maxR); ctx.stroke(); });
     ctx.setLineDash([]);
-    ctx.globalAlpha = 0.4; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - maxR); ctx.stroke();
-    ctx.globalAlpha = 0.6; ctx.fillStyle = cyan; ctx.textAlign = "center"; ctx.fillText("N", cx, cy - maxR + 12 * dpr); ctx.textAlign = "left";
+    ctx.strokeStyle = "rgba(0,212,255,0.45)"; ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - maxR); ctx.stroke(); ctx.lineWidth = dpr;
 
-    if (!radar || !radar.connected) { ctx.globalAlpha = 0.5; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
+    if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
     radarGeom = { cx: cx, cy: cy, scale: scale, dpr: dpr };
 
-    /* returns — gated by the display filters (fov/range/speed; snr only when the
-     * firmware provides it — null on current fw). v = +approaching. */
+    /* raw returns — gated by the display filters (fov/range/speed/snr). v = +approaching */
     (radar.points || []).forEach(function (p) {
       var az = Math.abs(p.az != null ? p.az : Math.atan2(p.x, p.y) * 180 / Math.PI);
       var rng = (p.r != null) ? p.r : Math.hypot(p.x, p.y);
       if (rng < rp.rmin || az > rp.fov || Math.abs(p.v) < rp.speed) return;
       if (p.snr != null && p.snr < rp.snr) return;
       var pc = W2C(p.x, p.y);
-      ctx.globalAlpha = (p.snr != null) ? Math.max(0.3, Math.min(1, (p.snr - 12) / 28)) : 0.8;
-      ctx.fillStyle = Math.abs(p.v) < 0.3 ? cyan : (p.v > 0 ? "#ff5555" : "#50aaff");
+      ctx.fillStyle = pointStyle(p.v, p.snr);
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
     });
-    ctx.globalAlpha = 1;
 
-    Object.keys(trails).forEach(function (tid) {
-      var hist = trails[tid]; if (hist.length < 2) return;
-      ctx.strokeStyle = TARGET_COLORS[tid % TARGET_COLORS.length]; ctx.lineWidth = 1.3 * dpr; ctx.beginPath();
-      hist.forEach(function (p, k) { var c = W2C(p.x, p.y); if (k) ctx.lineTo(c[0], c[1]); else ctx.moveTo(c[0], c[1]); });
-      ctx.globalAlpha = 0.5; ctx.stroke(); ctx.globalAlpha = 1;
-    });
-
+    /* target boxes — daemon style, plus hold+fade persistence and the engaged LOCK */
     var now = Date.now();
+    ctx.font = (11 * dpr) + "px ui-monospace, monospace";
     Object.keys(held).forEach(function (tid) {
-      var h = held[tid], t = h.t, fade = Math.max(0, 1 - (now - h.ts) / HOLD_MS);
+      var hh = held[tid], t = hh.t, fade = Math.max(0, 1 - (now - hh.ts) / HOLD_MS);
       if (fade <= 0.02) return;
       var tc = W2C(t.x, t.y), locked = (t.tid === engagedTid);
-      var col = locked ? css("--on") : TARGET_COLORS[t.tid % TARGET_COLORS.length];
-      var wpx = Math.max(8 * dpr, 2 * t.sx * scale), hpx = Math.max(8 * dpr, 2 * t.sy * scale);
-      ctx.globalAlpha = fade; ctx.strokeStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
+      var col = locked ? css("--on") : tcolor(t.tid);
+      var wpx = Math.max(6 * dpr, 2 * t.sx * scale), hpx = Math.max(6 * dpr, 2 * t.sy * scale);
+      ctx.globalAlpha = fade; ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
       if (locked) {
         var cc = 8 * dpr, x0 = tc[0] - wpx / 2, y0 = tc[1] - hpx / 2;
         [[x0, y0, 1, 1], [x0 + wpx, y0, -1, 1], [x0, y0 + hpx, 1, -1], [x0 + wpx, y0 + hpx, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
       } else ctx.strokeRect(tc[0] - wpx / 2, tc[1] - hpx / 2, wpx, hpx);
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
       var spd = Math.hypot(t.vx, t.vy);
-      ctx.fillStyle = col; ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      ctx.fillText((locked ? "LOCK " : "R#") + t.tid + " " + spd.toFixed(0) + "m/s " + t.rng.toFixed(0) + "m", tc[0] - wpx / 2, tc[1] - hpx / 2 - 3 * dpr);
+      ctx.fillText((locked ? "LOCK #" : "R#") + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] - wpx / 2 + 2 * dpr, tc[1] - hpx / 2 - 3 * dpr);
       ctx.globalAlpha = 1;
     });
-  }
-  var radarGeom = null;
-
-  function ingestTrails(radar) {
-    var now = Date.now();
-    targets(radar).forEach(function (t) { (trails[t.tid] = trails[t.tid] || []).push({ x: t.x, y: t.y, t: now }); if (trails[t.tid].length > 60) trails[t.tid].shift(); });
-    Object.keys(trails).forEach(function (tid) { trails[tid] = trails[tid].filter(function (p) { return now - p.t < 6000; }); if (!trails[tid].length) delete trails[tid]; });
   }
 
   function redrawAll() { drawEO(); drawRadar(lastRadar); }
@@ -236,7 +288,7 @@
 
   /* ── manual selection: tap the EO (project click az) or the radar target ── */
   $("eo").addEventListener("click", function (e) {
-    if (trackMode !== "man" || e.target.closest(".exp")) return;
+    if (trackMode !== "man" || e.target.closest("#cluster") || e.target.closest("#zoombar")) return;
     var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
     var ts = targets(lastRadar); if (!ts.length || !eoHfov) return;
     var r = this.getBoundingClientRect(), frac = (e.clientX - r.left) / r.width - 0.5;
@@ -250,6 +302,12 @@
     var best = null, bd = 1e9;
     targets(lastRadar).forEach(function (t) { var dx = g.cx + t.x * g.scale - px, dy = g.cy - t.y * g.scale - py, d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = t; } });
     if (best && bd < 40 * g.dpr) engage(best.tid);
+  });
+  /* tap a target-list row → select it (switches TRACK to MANUAL) */
+  $("tgt-list").addEventListener("click", function (e) {
+    var li = e.target.closest("[data-tid]"); if (!li) return;
+    if (trackMode !== "man") setTrack("man");
+    engage(parseInt(li.dataset.tid, 10));
   });
 
   /* ── ZULU ── */
@@ -274,12 +332,13 @@
       $("v-tracks").textContent = (d.tracks === null || d.tracks === undefined) ? "—" : d.tracks + " TRK";
       $("v-est").textContent = "EST " + num(d.mbps, 1) + " Mb/s · " + num(eo.fps, 0) + " fps";
       $("v-srcfps").textContent = num(eo.sfps, 0); $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
-      if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0) { zoom = eo.zoom; $("v-zval").textContent = zoom.toFixed(1) + "×"; }
+      if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0 && Date.now() - zoomTouch > 1200) { zoom = eo.zoom; setZoomLabel(); }
       var light = $("light");
-      light.classList.toggle("firing", !!eo.laser); $("light-s").textContent = eo.laser ? "ON" : "OFF"; light.style.opacity = eo.lpresent ? "1" : ".5";
+      if (Date.now() - lightTouch > 1200) { light.classList.toggle("firing", !!eo.laser); $("light-s").textContent = eo.laser ? "ON" : "OFF"; }
+      light.style.opacity = eo.lpresent ? "1" : ".5";
       if (illumMode === "man") {
-        if (typeof eo.lpower === "number" && idle($("s-pow"))) { var pc = Math.round(eo.lpower * 100 / 255); $("s-pow").value = pc; $("o-pow").textContent = pc + "%"; }
-        if (typeof eo.lfov === "number" && idle($("s-fov"))) { $("s-fov").value = Math.round(eo.lfov); $("o-fov").textContent = Math.round(eo.lfov) + "°"; }
+        /* MANUAL: the sliders are the source of truth — never write them back from
+         * /stats, or touching one would snap the other to a stale value. */
       } else {                                            /* AUTO: fit beam to camera FOV @ max */
         if (typeof eo.lfov === "number") $("o-fov").textContent = Math.round(eo.lfov) + "°";
         $("o-pow").textContent = "MAX";
@@ -294,14 +353,14 @@
   function pollRadar() {
     fetch("/radar").then(function (r) { return r.json(); }).then(function (d) {
       lastRadar = d;
-      if (!d.connected) { held = {}; trails = {}; engage(trackMode === "man" ? engagedTid : null); drawRadar(d); drawEO(); return; }
+      if (!d.connected) { held = {}; updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
       var cur = targets(d), now = Date.now(), present = {};
       cur.forEach(function (t) { held[t.tid] = { t: t, ts: now }; present[t.tid] = 1; });
       Object.keys(held).forEach(function (tid) { if (!present[tid] && now - held[tid].ts > HOLD_MS) delete held[tid]; });
-      ingestTrails(d);
+      updateViewRange(d);
       if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
       else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
-      drawRadar(d); drawEO();
+      renderTargetList(d); drawRadar(d); drawEO();
     }).catch(function () {});
   }
 

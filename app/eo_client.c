@@ -20,6 +20,8 @@
 #define RDBUF (256 * 1024)
 
 static pthread_t       th;
+static pthread_t       stats_th;
+static int             stats_th_ok = 0;
 static volatile int    run_flag = 0;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char  *g_jpeg = NULL;      /* latest JPEG frame (grown as needed) */
@@ -139,6 +141,20 @@ static void *reader(void *a)
     return NULL;
 }
 
+/* /stats poller: run_stream() blocks on the MJPEG socket for the whole session, so the
+ * stream thread can only snapshot /stats once at connect. This thread re-fetches /stats
+ * a few times a second while frames flow, so zoom / laser / illuminator FOV+power the
+ * operator changes are reflected back live (not frozen at connection time). */
+static void *stats_poller(void *a)
+{
+    (void)a;
+    while (run_flag) {
+        if (g_connected) refresh_stats();
+        nap(350);
+    }
+    return NULL;
+}
+
 int eo_start(const char *host_port)
 {
     if (host_port && *host_port) {
@@ -149,13 +165,14 @@ int eo_start(const char *host_port)
     }
     run_flag = 1;
     if (pthread_create(&th, NULL, reader, NULL) != 0) { run_flag = 0; return -1; }
+    stats_th_ok = (pthread_create(&stats_th, NULL, stats_poller, NULL) == 0);  /* non-fatal if it fails */
     fprintf(stderr, "eo: consuming EO feed at %s:%d/stream (proxy; no ISP here)\n", g_host, g_port);
     return 0;
 }
 
 void eo_stop(void)
 {
-    if (run_flag) { run_flag = 0; pthread_join(th, NULL); }
+    if (run_flag) { run_flag = 0; pthread_join(th, NULL); if (stats_th_ok) pthread_join(stats_th, NULL); }
     free(g_jpeg); g_jpeg = NULL; g_cap = g_len = 0;
 }
 
