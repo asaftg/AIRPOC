@@ -7,6 +7,12 @@
 /* eps spacing and min-samples are runtime fields on RadarClusterer (live via
  * /ctl, seeded from CLUSTER_DEFAULT_*); the rest are compile-time. */
 #define EPS_DOP_MPS      3.0f
+/* Range-adaptive spacing: a target's returns spread out with distance (the
+ * radar's cross-range footprint = range x angular spread), so the "how close
+ * counts as one object" distance must grow with range or far targets fail to
+ * cluster. The eps_pos slider is the NEAR-field base; effective eps =
+ * eps_pos + EPS_RANGE_SLOPE * range. At 0.06: +1.8 m @ 30 m, +6 m @ 100 m. */
+#define EPS_RANGE_SLOPE  0.06f
 /* Dynamic-only: points slower than this (|radial doppler|) are static
  * clutter — never seed or join a cluster, so no boxes form on walls/ground.
  * Matches the ground bench's speed_min_mps gate; humans walk >0.4 m/s. */
@@ -128,6 +134,12 @@ static void hist_push(Track *t, int hit) {
     }
 }
 
+/* Squared range-adaptive spacing between two points (see EPS_RANGE_SLOPE). */
+static inline float eps2_pair(float eps_base, float ri, float rj) {
+    float e = eps_base + EPS_RANGE_SLOPE * 0.5f * (ri + rj);
+    return e * e;
+}
+
 /* ── DBSCAN (hand-rolled, O(N^2), N is a few hundred) ── */
 static int dbscan(const RadarPoint *pts, int n, int *labels,
                   float eps_pos, int min_samples) {
@@ -135,7 +147,6 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
     uint8_t *visited = calloc(n, 1);
     if (!visited) return 0;
     for (int i = 0; i < n; i++) labels[i] = -1;
-    float eps2 = eps_pos * eps_pos;
     int next = 0;
 
     /* FIFO of indices — bounded by initial neighbours (<=n) plus each
@@ -151,7 +162,7 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
         for (int j = 0; j < n; j++) {
             float dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, dz = pts[i].z - pts[j].z;
             int ok = fabsf(pts[j].doppler) >= SPEED_MIN_MPS &&
-                     (dx*dx + dy*dy + dz*dz) <= eps2 &&
+                     (dx*dx + dy*dy + dz*dz) <= eps2_pair(eps_pos, pts[i].range, pts[j].range) &&
                      fabsf(pts[i].doppler - pts[j].doppler) <= EPS_DOP_MPS;
             nbr[j] = ok; cnt += ok;
         }
@@ -169,7 +180,7 @@ static int dbscan(const RadarPoint *pts, int n, int *labels,
             for (int k = 0; k < n; k++) {
                 float dx = pts[jj].x - pts[k].x, dy = pts[jj].y - pts[k].y, dz = pts[jj].z - pts[k].z;
                 int ok = fabsf(pts[k].doppler) >= SPEED_MIN_MPS &&
-                         (dx*dx + dy*dy + dz*dz) <= eps2 &&
+                         (dx*dx + dy*dy + dz*dz) <= eps2_pair(eps_pos, pts[jj].range, pts[k].range) &&
                          fabsf(pts[jj].doppler - pts[k].doppler) <= EPS_DOP_MPS;
                 nbr2[k] = ok; cnt2 += ok;
             }

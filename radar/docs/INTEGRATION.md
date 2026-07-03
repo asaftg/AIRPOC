@@ -19,7 +19,10 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 restart, applies on the next frame) and returns `200 ok`. Both params are
 optional — an absent one keeps its current value.
 
-- `eps` — cluster spacing in metres, clamped to **0.5 – 50** (default 8).
+- `eps` — cluster spacing in metres, clamped to **0.5 – 50** (default 8). This
+  is the **near-field base**; the daemon grows it automatically with range (a
+  far target's returns are more spread out), so one slider value works across
+  the whole scene.
 - `minpts` — DBSCAN min-samples, clamped to **1 – 20** (default 2).
 
 `/stats` echoes the currently-applied `cluster_eps_m` and `cluster_min_pts`
