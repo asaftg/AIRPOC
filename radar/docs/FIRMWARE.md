@@ -50,7 +50,7 @@ flag:
 | MIMO | DDMA, 4TX/4RX |
 | Azimuth FOV | **±90°** in cfg (full span; useful AoA ~±60°) |
 | LVDS | **off** (`lvdsStreamCfg -1 0 0 0`) |
-| Frame period | 50 ms → 20 Hz |
+| Frame period | **33.33 ms → 30 Hz** (was 50 ms/20 Hz; period-only change) |
 
 **Publish-max, filter-in-GUI.** The cfg is deliberately *permissive* — CFAR at
 its 17 dB floor and FOV at full span — so the chip emits the **most** points it
@@ -63,14 +63,23 @@ work today** (every point carries `snr` in dB and `az`).
 Human baseline on this profile: a walking person is visible to **~100 m**
 (dynamic returns only). Vehicles/drones reach farther (larger RCS).
 
-## Frame rate (>20 Hz)
+## Frame rate — 30 Hz (period-only change)
 
-Active chirping is only ~30.3 ms of the 50 ms frame. Tightening `frameCfg`'s
-period toward the active dwell (→ ~35 ms, **~28–30 Hz**) with **N=384 and 128
-loops unchanged** raises the rate at **no cost to integration gain or Doppler
-resolution** — so human range is unaffected. The limit is on-chip DSP time
-per frame; HW-verify the shortest period that holds **0 dropped frames** (watch
-`/stats` `drops`) and set that as the shipped period.
+Active chirping is ~30.3 ms. The shipped `frameCfg` period is **33.33 ms → 30
+Hz**, changed from 50 ms/20 Hz. **Only field 6 (framePeriodicity) changed** —
+N=384, 128 loops, all chirps/TX identical — so range, range-resolution,
+sensitivity and velocity-resolution are **unchanged by construction**. Frame
+rate never touches max range or range resolution (those are set by
+slope/bandwidth/ADC, not frame timing).
+
+The only cost is DSP margin: ~30.3 ms active in a 33.33 ms frame ≈ **91 % duty**.
+On-board confirmation is just "does it stream at ~30 Hz with `/stats.drops` = 0";
+if not, back off the period (e.g. 40 ms → 25 Hz) or drop `idleTime` 12→7 µs
+(free now — that 12 was an LVDS leftover) to shorten the active dwell.
+
+**40 Hz** would need the dwell cut below the 25 ms frame — i.e. fewer Doppler
+loops — which *does* cost velocity resolution + ~1–3 dB sensitivity (range and
+range-resolution still unaffected). Only worth it for tracking fast movers.
 
 > Do **not** raise fps by cutting `numLoops`/`numAdcSamples` — that trades away
 > the very gain that holds a weak, slow human at range.
