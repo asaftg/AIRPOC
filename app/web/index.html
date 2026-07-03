@@ -31,6 +31,9 @@
       <div class="otl" id="eo-tl">EO</div>
       <div class="otr" id="eo-tr">BRG —  RNG —</div>
       <div class="track-hint" id="track-hint" hidden>MANUAL · tap a target</div>
+      <button class="exp eo-exp" data-exp aria-label="flip radar and EO">
+        <svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6M4 4l7 7M20 20l-7-7"/></svg>
+      </button>
 
       <div id="zoombar">
         <button data-zoom="1">+</button>
@@ -68,42 +71,35 @@
     <aside id="dev"><div id="dev-body">
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
-      <div class="sec">STREAM <span class="tag">→ EO feed</span></div>
+      <div class="sec">STREAM</div>
       <div class="srow"><label>RES</label><div class="btns" id="res-btns">
         <button data-res="low">640</button><button data-res="med" class="on">960</button><button data-res="high">1280</button><button data-res="native">1440</button>
       </div></div>
       <div class="srow"><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
-      <div class="kv muted">RES = display/stream size (live; shared with the EO preview). FPS caps the operating rate — lower it to buy exposure headroom in the dark (AE opens EXP before adding gain).</div>
 
-      <div class="sec">EO SENSOR <span class="tag" id="ae-tag">AUTO</span></div>
+      <div class="sec">EO SENSOR</div>
       <div class="srow"><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
       <div class="srow"><label>EXP ms</label><input type="range" id="s-exp" min="0.1" max="33" step="0.1" value="16"><span class="val" id="o-exp">—</span></div>
       <div class="srow"><label>GAIN</label><input type="range" id="s-gain" min="0" max="480" step="2" value="0"><span class="val" id="o-gain">—</span></div>
       <div class="srow"><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
       <div class="srow"><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
-      <div class="est" id="v-est">SENSOR — fps · DISP — fps</div>
-      <div class="kv muted">Full EO ISP — mirrors the preview. AUTO fills EXP up to the sensor fps cap, then GAIN (ceiling = AUTO-CAP). Moving EXP or GAIN drops to MANUAL. Sensor fps is fixed at launch (~60) — the feed exposes no runtime fps/res control (ask the EO agent for <code>/ctl?fps=</code> if a GUI cap is wanted).</div>
 
       <div class="sec">ILLUMINATOR <span class="tag" id="illum-tag">AUTO</span></div>
       <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
       <div class="srow"><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
-      <div class="kv muted" id="illum-note">AUTO fits the beam to the EO FOV at max power. Switch ILLUM to MAN to use these.</div>
 
-      <div class="sec">RADAR · display filters</div>
+      <div class="sec">RADAR FILTERS</div>
       <div class="srow"><label>FOV ±</label><input type="range" id="r-fov" min="5" max="90" step="1" value="60"><span class="val" id="ro-fov">60°</span></div>
       <div class="srow"><label>SPEED MIN</label><input type="range" id="r-speed" min="0" max="5" step="0.1" value="0"><span class="val" id="ro-speed">0 m/s</span></div>
       <div class="srow"><label>RANGE MIN</label><input type="range" id="r-rmin" min="0" max="30" step="0.5" value="0"><span class="val" id="ro-rmin">0 m</span></div>
       <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="0" max="50" step="1" value="16"><span class="val" id="ro-snr">16 dB</span></div>
-      <div class="kv muted">Display filters (client-side) on the daemon's cloud. SNR is live (per-point dB) — raise to hide weak returns. Chip cfg (SNR floor ≥17 dB, max FOV) is the radar module's job.</div>
 
-      <div class="sec">RADAR · cluster cfg <span class="tag" id="cluster-tag">→ radar</span></div>
+      <div class="sec">RADAR CLUSTER</div>
       <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>
       <div class="srow"><label>MIN PTS</label><input type="range" id="r-minpts" min="2" max="8" step="1" value="2"><span class="val" id="ro-minpts">2</span></div>
-      <div class="kv muted">DBSCAN spacing (ε) + required points → the radar daemon (live). Sliders show the daemon's <em>applied</em> value (clamped). A change applies next frame — a box that stops clustering drops immediately.</div>
 
       <div class="sec">SYSTEM</div>
       <div class="kv">TEMP <b><span id="v-cpu">—</span>° CPU · <span id="v-cam">—</span>° CAM</b></div>
-      <div class="kv">EO SOURCE <b><span id="v-srcfps">—</span> fps</b></div>
       <div class="sysbtns"><button id="restart">RESTART</button><button id="logs">LOGS</button></div>
     </div></aside>
 

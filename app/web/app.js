@@ -15,6 +15,7 @@
   var illumMode = "auto";
   var rp = { snr: 16, speed: 0, rmin: 0, fov: 60 };   /* GUI display filters only (speed 0 = show static clutter too, like the daemon) */
   var lastStats = {}, lastRadar = null;
+  var rHz = 0, rLastFid = null, rLastTs = 0;   /* radar frame-rate (Hz) from frame_id/timestamp deltas */
 
   /* ── theme / dev / swap ── */
   var theme = localStorage.getItem("airpoc-theme") || "night";
@@ -98,7 +99,7 @@
   $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(1); manualAE(); ctl("expms=" + this.value); };
   $("s-gain").oninput = function () { $("o-gain").textContent = this.value; manualAE(); ctl("gain=" + this.value); };
   $("s-gcap").oninput = function () { $("o-gcap").textContent = this.value; ctl("gaincap=" + this.value); };
-  function manualAE() { var m = document.querySelector('#ae-btns [data-ae="0"]'); if (m) setSeg("ae-btns", m); $("ae-tag").textContent = "MANUAL"; $("ae-tag").classList.add("man"); ispTouch = Date.now(); }
+  function manualAE() { var m = document.querySelector('#ae-btns [data-ae="0"]'); if (m) setSeg("ae-btns", m); ispTouch = Date.now(); }
   var ispTouch = 0, fpsTouch = 0;
 
   /* stream bandwidth levers — res (display size) + fps cap, both live on the EO feed */
@@ -353,11 +354,11 @@
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       $("v-link").textContent = num(d.mbps, 1); $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
-      $("eo-tl").textContent = "EO · FOV " + num(hfov, 1, "°") + " · " + (eo.zoom ? eo.zoom.toFixed(1) : "1.0") + "×";
+      /* live EO telemetry on the EO display itself (FOV/zoom + fps/exposure/gain) */
+      $("eo-tl").textContent = "EO · FOV " + num(hfov, 1, "°") + " · " + (eo.zoom ? eo.zoom.toFixed(1) : "1.0") + "×\n"
+        + num(eo.fps, 0, " fps") + " · exp " + num(eo.exp_ms, 1, " ms") + " · gain " + num(eo.gain, 0) + (eo.ae ? " · AUTO" : " · MAN");
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
-      $("v-tracks").textContent = (d.tracks === null || d.tracks === undefined) ? "—" : d.tracks + " TRK";
-      $("v-est").textContent = "SENSOR " + num(eo.sfps, 0) + " fps · DISP " + num(eo.fps, 0) + " fps";
-      $("v-srcfps").textContent = num(eo.sfps, 0); $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
+      $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
       if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0 && Date.now() - zoomTouch > 1200) { zoom = eo.zoom; setZoomLabel(); }
       updateISP(eo);
       var light = $("light");
@@ -380,6 +381,15 @@
   function pollRadar() {
     fetch("/radar").then(function (r) { return r.json(); }).then(function (d) {
       lastRadar = d;
+      /* radar Hz from the daemon's own frame_id + timestamp (accurate regardless of our poll rate) */
+      if (d.connected && typeof d.frame_id === "number" && typeof d.timestamp === "number") {
+        if (rLastFid !== null && d.frame_id > rLastFid && d.timestamp > rLastTs) {
+          var inst = (d.frame_id - rLastFid) / (d.timestamp - rLastTs);
+          rHz = rHz ? rHz * 0.7 + inst * 0.3 : inst;
+        }
+        rLastFid = d.frame_id; rLastTs = d.timestamp;
+      }
+      $("v-tracks").textContent = d.connected ? (Math.round(rHz) + " Hz · " + (d.num_targets || 0) + " TRK") : "no data";
       if (!d.connected) { held = {}; updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
       var cur = targets(d), now = Date.now(), present = {};
       cur.forEach(function (t) { held[t.tid] = { t: t, ts: now }; present[t.tid] = 1; });
@@ -399,7 +409,6 @@
     if (typeof eo.fps_cap === "number" && idle($("s-fps")) && Date.now() - fpsTouch > 1500) { $("s-fps").value = eo.fps_cap; $("o-fps").textContent = eo.fps_cap; }
     if (typeof eo.ae === "number" && settled) {
       var b = document.querySelector('#ae-btns [data-ae="' + (eo.ae ? 1 : 0) + '"]'); if (b) setSeg("ae-btns", b);
-      $("ae-tag").textContent = eo.ae ? "AUTO" : "MANUAL"; $("ae-tag").classList.toggle("man", !eo.ae);
     }
     if (typeof eo.exp_ms === "number" && idle($("s-exp")) && settled) { $("s-exp").value = eo.exp_ms; $("o-exp").textContent = eo.exp_ms.toFixed(1); }
     if (typeof eo.gain === "number" && idle($("s-gain")) && settled) { $("s-gain").value = eo.gain; $("o-gain").textContent = eo.gain; }

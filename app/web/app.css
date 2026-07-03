@@ -96,6 +96,12 @@ body.day{
 .exp{width:26px;height:26px;padding:5px;background:rgba(0,0,0,.4);
   border:1px solid var(--bd2);border-radius:3px;color:var(--cyan);cursor:pointer}
 .exp svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* the flip button lives on whichever panel is the SMALL one: radar's header normally,
+ * the EO corner once flipped — so you never have to reach into the big view to flip back */
+.eo-exp{position:absolute;top:8px;right:8px;z-index:5;display:none}
+#stage.rbig .eo-exp{display:block}
+#stage.rbig #eo .otr{display:none}
+#stage.rbig #radar .exp{display:none}
 /* expand = FLIP radar <-> EO: radar fills the big left area, EO drops into the small
  * bottom-right slot (where the radar normally sits). Target list stays put. */
 #stage.rbig #radar{position:absolute;left:0;top:0;bottom:0;right:30%;margin:0;z-index:3;border:0;border-right:1px solid var(--bd)}
