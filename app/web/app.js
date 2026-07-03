@@ -87,16 +87,27 @@
   /* ── EO ISP — the full preview control set, forwarded to the EO feed's /ctl:
    * ae (auto/manual exposure), expms, gain, gaincap, median. The feed owns the sensor;
    * these are the same knobs the eo_pipeline preview exposes. ── */
+  var EXP_DEFAULTS = { gaincap: 120, median: 1 };   /* the sensor's default AUTO state */
   document.querySelectorAll("#ae-btns [data-ae]").forEach(function (b) {
-    b.onclick = function () { setSeg("ae-btns", b); var auto = b.dataset.ae === "1"; setExpMode(auto); ispTouch = Date.now(); ctl("ae=" + b.dataset.ae); };
+    b.onclick = function () {
+      setSeg("ae-btns", b); var auto = b.dataset.ae === "1"; setExpMode(auto); ispTouch = Date.now();
+      ctl("ae=" + b.dataset.ae);
+      if (auto) {   /* returning to AUTO resets the sensor to defaults */
+        ctl("gaincap=" + EXP_DEFAULTS.gaincap); $("s-gcap").value = EXP_DEFAULTS.gaincap; $("o-gcap").textContent = EXP_DEFAULTS.gaincap;
+        var md = document.querySelector('#md-btns [data-md="' + EXP_DEFAULTS.median + '"]'); if (md) setSeg("md-btns", md); ctl("median=" + EXP_DEFAULTS.median);
+      }
+    };
   });
   document.querySelectorAll("#md-btns [data-md]").forEach(function (b) {
     b.onclick = function () { setSeg("md-btns", b); ctl("median=" + b.dataset.md); };
   });
   function setSeg(id, on) { document.querySelectorAll("#" + id + " button").forEach(function (x) { x.classList.remove("on"); }); on.classList.add("on"); }
-  /* AUTO exposure freezes the manual knobs (EXP/GAIN) like the illuminator's AUTO; only
-   * AUTO-CAP (the AE ceiling) is live in AUTO. MANUAL unfreezes EXP/GAIN. */
-  function setExpMode(auto) { $("s-exp").disabled = auto; $("s-gain").disabled = auto; $("s-gcap").disabled = !auto; }
+  /* AUTO exposure freezes EVERY sensor knob (EXP/GAIN/AUTO-CAP/MEDIAN) — nothing is
+   * touchable in AUTO, like the illuminator's AUTO. MANUAL unfreezes them all. */
+  function setExpMode(auto) {
+    $("s-exp").disabled = auto; $("s-gain").disabled = auto; $("s-gcap").disabled = auto;
+    document.querySelectorAll("#md-btns button").forEach(function (x) { x.disabled = auto; });
+  }
   /* moving EXP or GAIN drops the feed to MANUAL — reflect that optimistically */
   $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(2); manualAE(); ctl("expms=" + this.value); };
   $("s-gain").oninput = function () { $("o-gain").textContent = this.value; manualAE(); ctl("gain=" + this.value); };
