@@ -6,10 +6,13 @@ exposure/gain, a focus tool, a quality preview, and an MJPEG stream. Global shut
 means no rolling-shutter skew — the whole frame is exposed at once, which suits
 fast-moving targets.
 
-The on-device production datapath (capture + AE + ISP, in C) is
-[`eo/pipeline/`](pipeline/README.md); the Python tools are bench/diagnostic.
+The on-device production datapath is the C module **`libeo`**
+([`eo/pipeline/`](pipeline/README.md)) — it owns capture + AE + ISP behind a **frozen
+API** ([`INTEGRATION.md`](pipeline/INTEGRATION.md)) that the GUI/detector consume; the
+Python tools are bench/diagnostic.
 
-Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md) ·
+Detail docs: [pipeline](pipeline/README.md) · [contract](pipeline/INTEGRATION.md) ·
+[DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md) ·
 [STREAMING](docs/STREAMING.md) · [FOCUS](docs/FOCUS.md).
 
 ## Architecture
@@ -31,8 +34,8 @@ Detail docs: [DRIVER](docs/DRIVER.md) · [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md
 | Sensor driver | `nv_imx296` tegracam C driver (`eo/driver/`) | ✅ Y10 60 fps, exposure/gain |
 | DT overlay | `...imx296-C.dtbo` (CAM1 / serial_c) | ✅ |
 | Capture | V4L2 `/dev/video0`, mmap | ✅ sustained 60 fps (verified) |
-| AE + ISP | production C datapath (`eo/pipeline/`), same law as bench | ✅ production C (`eo/pipeline/`), on-device 60 fps + AE verified |
-| Encode/stream | software MJPEG | ✅ target has no HW video encoder; detector consumes frames on-device |
+| AE + ISP | `libeo` module (`eo/pipeline/`) — expose-don't-gain at fixed fps | ✅ on-device verified; 4 operator display sizes + full ISP panel |
+| Encode/stream | software MJPEG (LAN/bench) | ✅ no HW encoder; RF datalink → software H.264/RTSP (future, [STREAMING](docs/STREAMING.md)) |
 
 ## Key facts (read before changing anything)
 

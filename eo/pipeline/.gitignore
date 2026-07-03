@@ -1,2 +1,3 @@
 eo_pipeline
 *.o
+*.a
