@@ -159,21 +159,14 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* Push the profile over the CLI UART once (best effort). */
-    if (!skip_cfg) {
-        int cli = serial_open(cli_dev, cli_baud);
-        if (cli >= 0) {
-            if (cfg_push(cli, cfg) < 0)
-                fprintf(stderr, "radar_preview: cfg push had errors — continuing\n");
-            close(cli);
-        } else {
-            fprintf(stderr, "radar_preview: CLI %s unavailable — assuming chip "
-                    "already configured\n", cli_dev);
-        }
-    }
-
     TLVStream *stream = tlv_stream_new();
     if (!stream) { perror("tlv_stream_new"); return 1; }
+
+    /* We push the cfg AT MOST ONCE, and only if the chip is silent. Re-pushing
+     * against a live chip sends `sensorStop`, and this firmware won't restart
+     * the sensor without a power-cycle — so a blind re-push on daemon restart
+     * kills the stream. `-n` forces "already configured" (never push). */
+    int cfg_settled = skip_cfg;
 
     uint8_t buf[8192];
     while (g_run) {
@@ -183,8 +176,35 @@ int main(int argc, char **argv) {
             sleep(1);
             continue;
         }
-        fprintf(stderr, "radar_preview: data %s @ %d baud — streaming\n", data_dev, data_baud);
         double last_rx = now_s();
+
+        if (!cfg_settled) {
+            /* Read-first: peek ~2.5 s. Data present ⇒ chip already streaming ⇒
+             * do NOT push. Silent ⇒ fresh boot ⇒ push the cfg over the CLI. */
+            int saw = 0;
+            double t_end = now_s() + 2.5;
+            while (g_run && now_s() < t_end) {
+                ssize_t n = read(fd, buf, sizeof(buf));
+                if (n > 0) { tlv_stream_feed(stream, buf, (size_t)n, on_frame, &ctx);
+                             saw = 1; last_rx = now_s(); break; }
+                if (n < 0) break;
+            }
+            if (saw) {
+                fprintf(stderr, "radar_preview: chip already streaming — not pushing cfg\n");
+            } else {
+                fprintf(stderr, "radar_preview: port silent — pushing cfg over CLI\n");
+                int cli = serial_open(cli_dev, cli_baud);
+                if (cli >= 0) {
+                    if (cfg_push(cli, cfg) < 0)
+                        fprintf(stderr, "radar_preview: cfg push had errors — continuing\n");
+                    close(cli);
+                } else {
+                    fprintf(stderr, "radar_preview: CLI %s unavailable — assuming chip configured\n", cli_dev);
+                }
+            }
+            cfg_settled = 1;
+        }
+        fprintf(stderr, "radar_preview: data %s @ %d baud — streaming\n", data_dev, data_baud);
         while (g_run) {
             ssize_t n = read(fd, buf, sizeof(buf));
             if (n > 0) {

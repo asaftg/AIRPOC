@@ -24,12 +24,14 @@ flag:
 > one remaining firmware item — the parser already recognises 308/309 so a
 > future firmware drops straight in.
 
-> Pitfall (from our own repo history): this firmware only accepts **one full cfg
-> per power-cycle** — re-pushing after `sensorStop` gets "Reconfig not
-> supported" and some lines are rejected. In production (boot → push once)
-> that's clean; on a daemon restart without a radar power-cycle the sensor keeps
-> streaming the loaded cfg and the re-push's unchanged lines are rejected
-> harmlessly.
+> Pitfall (verified 2026-07-02): this firmware accepts **one full cfg per
+> power-cycle**. A re-push starts with `sensorStop` (stops the sensor) and the
+> reconfig + `sensorStart` are then rejected — leaving the sensor **stopped and
+> unrecoverable without a power-cycle** (a bare `sensorStart` does not revive
+> it). This is NOT harmless. The daemon therefore **reads first**: it peeks the
+> data port ~2.5 s and only pushes the cfg if the port is silent (fresh boot);
+> if the chip is already streaming it skips the push entirely, so a daemon
+> restart never stops the sensor. Only a real power-cycle needs a fresh push.
 
 ## Profile — `cfg/awr2944P_ag.cfg` (A/G long-range, DCA-free)
 
