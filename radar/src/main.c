@@ -59,6 +59,10 @@ typedef struct {
     double          last_t;
     uint32_t        last_frame_no;
     int             have_last;
+    int             warmup;      /* skip drop accounting for the first few
+                                    frames after (re)connect — the initial
+                                    frameNumber discontinuity is the connect
+                                    gap, not a real dropped frame */
     unsigned long   drops;
 } Ctx;
 
@@ -69,9 +73,11 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
     double dt = c->last_t > 0 ? (t - c->last_t) : 0.05;
     c->last_t = t;
 
-    /* Drop accounting from frameNumber gaps (chip counts monotonically). */
-    if (c->have_last && frame_no > c->last_frame_no + 1)
+    /* Drop accounting from frameNumber gaps (chip counts monotonically).
+     * Skip while warming up so the (re)connect gap isn't counted as drops. */
+    if (c->have_last && c->warmup == 0 && frame_no > c->last_frame_no + 1)
         c->drops += (frame_no - c->last_frame_no - 1);
+    if (c->warmup > 0) c->warmup--;
     c->last_frame_no = frame_no;
     c->have_last = 1;
 
@@ -179,6 +185,7 @@ int main(int argc, char **argv) {
             continue;
         }
         double last_rx = now_s();
+        ctx.warmup = 5;   /* ignore the connect-gap frameNumber jump */
 
         if (!cfg_settled) {
             /* Read-first: peek ~2.5 s. Data present ⇒ chip already streaming ⇒
