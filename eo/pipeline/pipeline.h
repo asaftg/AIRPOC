@@ -119,24 +119,11 @@ void   isp_median3(uint8_t *img, int w, int h);
 #define EO_FEED_FPS      25            /* encoder rate cap; capture stays ~60 fps */
 #define EO_FEED_QUALITY  85            /* MJPEG quality (libjpeg-turbo)           */
 
-/* ---- Manual exposure/gain override (set via /ctl; read by the AE loop). Lets us
- * sweep gain vs exposure live to see whether the grain is fixable in software
- * (low-gain long-exposure -> smooth-but-dim) or a sensor limit (still grainy). ---- */
-typedef struct {
-    int ae_on;      /* 1 = auto exposure; 0 = use the manual values below */
-    int gain;       /* manual gain 0..480 (0.1 dB/step)                   */
-    int exp_lines;  /* manual integration, lines                          */
-    int vmax;       /* manual frame length (fps = 67500/vmax)             */
-    int gaincap;    /* AE gain ceiling in auto mode                       */
-    int median;     /* 1 = 3x3 median on the display frame                */
-} EoManual;
-
-/* ---- MJPEG monitor server (HTML overlay + controls, /stream, /stats, /ctl) ---- */
-int      mjpeg_start(int port);              /* spawns the HTTP server thread    */
-int      mjpeg_zoom(void);                   /* current digital zoom (1/2/4/8)   */
-EoManual mjpeg_manual(void);                 /* current manual/AE override state */
-void     mjpeg_set_sharp(double sharpness);  /* focus metric for /stats          */
-void     mjpeg_publish(const uint8_t *gray, int w, int h,   /* encoded feed + stats */
-                       double fps, double mean, int exp_lines, int gain, int vmax);
+/* ---- MJPEG monitor server for the operator preview. Consumes finished frames from
+ * libeo (eo.h) and serves them; controls proxy to libeo's bench API (eo_bench.h).
+ * NOTE: capture/AE/ISP/exposure state now live in libeo — not here. ---- */
+int  mjpeg_start(int port);                  /* spawns the HTTP server thread    */
+int  mjpeg_zoom(void);                       /* current digital zoom (1/2/4/8)   */
+void mjpeg_publish(const uint8_t *gray, int w, int h);   /* newest finished frame */
 
 #endif /* AIRPOC_EO_PIPELINE_H */

@@ -4,6 +4,8 @@
  * consumes frames in-process, not over HTTP. */
 #define _GNU_SOURCE
 #include "pipeline.h"
+#include "eo.h"
+#include "eo_bench.h"
 #include "illum.h"
 #include <arpa/inet.h>
 #include <math.h>
@@ -18,27 +20,9 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char  *g_jpeg = NULL;      /* latest encoded frame */
 static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
-static struct { double fps, mean; int exp_lines, gain, vmax; } g_stat;
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
-static double          g_sharp = 0;        /* focus-assist sharpness (Tenengrad) */
 
-/* Exposure/gain override (set via /ctl, read by the AE loop). Defaults = auto. */
-static volatile int g_ae_on   = 1;
-static volatile int g_man_gain = 40;
-static volatile int g_man_exp  = EO_MAX_EXP_LINES;   /* ~16.5 ms                 */
-static volatile int g_man_vmax = EO_VMAX_MIN;        /* 60 fps                   */
-static volatile int g_gaincap  = EO_GAIN_CAP;        /* AE gain ceiling          */
-static volatile int g_median   = 1;                  /* 3x3 median on            */
-
-static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
-
-int      mjpeg_zoom(void)      { return g_zoom; }
-void     mjpeg_set_sharp(double s) { g_sharp = s; }
-EoManual mjpeg_manual(void)
-{
-    EoManual m = { g_ae_on, g_man_gain, g_man_exp, g_man_vmax, g_gaincap, g_median };
-    return m;
-}
+int mjpeg_zoom(void) { return g_zoom; }
 
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
@@ -123,8 +107,7 @@ static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *l
     return out;                            /* caller frees */
 }
 
-void mjpeg_publish(const uint8_t *gray, int w, int h,
-                   double fps, double mean, int exp_lines, int gain, int vmax)
+void mjpeg_publish(const uint8_t *gray, int w, int h)
 {
     unsigned long len = 0;
     unsigned char *j = encode(gray, w, h, &len);
@@ -132,8 +115,6 @@ void mjpeg_publish(const uint8_t *gray, int w, int h,
     pthread_mutex_lock(&g_lock);
     free(g_jpeg);
     g_jpeg = j; g_jpeg_len = len; g_seq++;
-    g_stat.fps = fps; g_stat.mean = mean;
-    g_stat.exp_lines = exp_lines; g_stat.gain = gain; g_stat.vmax = vmax;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -146,25 +127,22 @@ static void *client(void *arg)
     req[n] = 0;
 
     if (strncmp(req, "GET /stats", 10) == 0) {
-        pthread_mutex_lock(&g_lock);
-        double fps = g_stat.fps, mean = g_stat.mean;
-        int e = g_stat.exp_lines, g = g_stat.gain, vm = g_stat.vmax;
-        pthread_mutex_unlock(&g_lock);
-        if (vm < EO_VMAX_MIN) vm = EO_VMAX_MIN;
+        EoStats st; eo_stats(&st);
         int z = g_zoom;
-        double hf = 2 * atan((EO_WIDTH  * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
-        double vf = 2 * atan((EO_HEIGHT * EO_PIX_UM / 1000.0 / z) / (2 * EO_FOCAL_MM)) * 180.0 / M_PI;
+        double fmm = eo_focal_mm(), pum = eo_pixel_um();
+        double hf = 2 * atan((EO_WIDTH  * pum / 1000.0 / z) / (2 * fmm)) * 180.0 / M_PI;
+        double vf = 2 * atan((EO_HEIGHT * pum / 1000.0 / z) / (2 * fmm)) * 180.0 / M_PI;
         int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
         illum_snapshot(&lon, &lpw, &lfov, &lpr);
         char body[560];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,\"sfps\":%.1f,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
-            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,"
+            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
-            fps, mean, EO_EXP_US(e) / 1000.0, EO_DUTY_PCT(e, vm), g, EO_FPS_OF_VMAX(vm),
-            z, hf, vf, g_sharp,
-            g_ae_on, g_gaincap, g_median,
+            st.fps, st.mean, st.exp_ms, st.duty_pct, st.gain, st.sfps,
+            z, hf, vf, st.focus,
+            st.ae_on, st.gaincap, st.median, st.connected,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
@@ -178,18 +156,13 @@ static void *client(void *arg)
         if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
         if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
         if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
-        /* exposure/gain override (manual sweep). Setting a manual value drops to
+        /* exposure/gain override -> libeo bench API. Setting a manual value drops to
          * manual mode; ae=1 returns to auto. Exposure derives the frame length (fps). */
-        if ((q = strstr(req, "ae=")))      g_ae_on = atoi(q + 3) ? 1 : 0;
-        if ((q = strstr(req, "gain=")))  { g_man_gain = clampi(atoi(q + 5), 0, EO_GAIN_MAX); g_ae_on = 0; }
-        if ((q = strstr(req, "expms="))) {
-            int l = (int)(atof(q + 6) * 1000.0 / EO_LINE_US + 0.5);
-            g_man_exp  = clampi(l, EO_MIN_EXP_LINES, EO_VMAX_MAX - EO_SHS1_MIN);
-            g_man_vmax = clampi(g_man_exp + EO_SHS1_MIN, EO_VMAX_MIN, EO_VMAX_MAX);
-            g_ae_on = 0;
-        }
-        if ((q = strstr(req, "gaincap="))) g_gaincap = clampi(atoi(q + 8), 0, EO_GAIN_MAX);
-        if ((q = strstr(req, "median=")))  g_median  = atoi(q + 7) ? 1 : 0;
+        if ((q = strstr(req, "ae=")))      eo_set_ae(atoi(q + 3));
+        if ((q = strstr(req, "gain=")))    eo_set_gain(atoi(q + 5));
+        if ((q = strstr(req, "expms=")))   eo_set_expms(atof(q + 6));
+        if ((q = strstr(req, "gaincap="))) eo_set_gaincap(atoi(q + 8));
+        if ((q = strstr(req, "median=")))  eo_set_median(atoi(q + 7));
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }
