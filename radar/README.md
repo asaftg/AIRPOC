@@ -16,9 +16,12 @@ labelling is **not** done here — that is the fusion module's job.
 **Produces** — HTTP on **:8092** (mirrors the EO monitor shape):
 - `GET /` → PPI previewer page; `GET /radar_view.js` → its script.
 - `GET /stream` → **Server-Sent Events**, one JSON frame per radar frame.
-- `GET /stats` → `{fps, drops, num_points, num_targets, connected, profile,
-  max_range_m, fov_half_deg, cluster_eps_m, cluster_min_pts}`.
-- `GET /ctl?eps=<m>&minpts=<int>` → set host DBSCAN live (`200 ok`).
+- `GET /stats` → fps, drops, counts, connected, profile, max_range, plus the
+  six live control values (`cluster_eps_m`, `cluster_min_pts`, `speed_min_mps`,
+  `snr_min_db`, `fov_half_deg`, `doppler_gate_mps`).
+- `GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` → set the host
+  clustering live (`200 ok`). Six knobs; see
+  [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for ranges/defaults.
 
 Frame JSON (stable — the GUI/fusion consume this unchanged):
 ```

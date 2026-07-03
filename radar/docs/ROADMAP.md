@@ -5,7 +5,8 @@
 Working and **verified on the board**: aarch64 build, cfg push, 3.125 Mbaud
 UART, **20 Hz / 0 dropped frames**, per-point **SNR live** (~16–50 dB),
 range-adaptive DBSCAN → class-less per-frame boxes, SSE previewer with a live
-tuning panel (ε / min-pts / min-speed / min-SNR via `/ctl`). Detections are
+tuning panel (6 live `/ctl` knobs: ε / min-pts / min-speed / min-SNR / FOV /
+doppler gate). Detections are
 class-less; no coasting (that's the tracking module's job). See
 [`README.md`](../README.md).
 
@@ -24,9 +25,11 @@ daemon (a `-r <file>` mode next to `-s` sim). Lets us tune and regression-test
 offline against captured scenes instead of needing a live walk every time. The
 ground bench had recordings; we should too.
 
-### 3. Expose more knobs live (small)
-Promote `EPS_RANGE_SLOPE` and `EPS_DOP_MPS` from `#define` to `/ctl` params so
-we can tune them from the previewer without rebuilds (like ε/min-pts today).
+### 3. Expose the last fixed knobs live (small)
+The doppler gate and FOV are now live `/ctl` params (done). Remaining fixed
+`#define`s worth promoting for live tuning: `EPS_RANGE_SLOPE` (0.06) and
+`MINPTS_RANGE_SLOPE` (0.04) — the two range-taper rates — so we can tune the
+near-vs-far behaviour from the previewer without rebuilds.
 
 ### 4. Sensitivity: use SNR to trade false-alarms vs range (medium)
 Now that per-point SNR is live, explore: lower the CFAR floor (toward ~16 dB)
