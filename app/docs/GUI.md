@@ -22,7 +22,7 @@ targets (14″ laptop → tablet). Visual language matches the Seeker ground ben
   engaged target as a green LOCK. **NOT CONNECTED** when the daemon is down.
 - **Bottom cluster:** `LIGHT` (fire) · `ILLUM` (auto/man) · `TRACK` (auto/man) · `REC`
   (reserved); zoom ± bottom-left.
-- **DEV:** stream fps/quality (forwarded to the EO feed), illuminator PWR/BEAM, radar
+- **DEV:** stream res/fps (forwarded to the EO feed), illuminator PWR/BEAM, radar
   display filters + cluster cfg, system temp.
 
 ## Where each thing lives (the app owns none of the sensor work)
@@ -47,8 +47,9 @@ The **EO module owns the illuminator**; the console forwards commands to its `/c
 - **MANUAL:** PWR/BEAM from the DEV sliders → forwarded. `LIGHT` fires (`laser=0|1`).
 
 ## Radar tuning (DEV)
-- **Display filters (client-side):** `FOV ±`, `SPEED MIN`, `RANGE MIN`. `SNR` is inert
-  (firmware omits SNR).
+- **Display filters (client-side):** `FOV ±`, `SPEED MIN`, `RANGE MIN`, `SNR`. SNR is
+  **live** — every point carries per-point SNR in dB; raise the slider to hide weak
+  returns (default ~16 dB floor).
 - **Cluster cfg (→ daemon):** `CLUSTER ε` + `MIN PTS` via `/ctl` → the daemon; the
   slider reflects the **applied (clamped)** value.
 - Chip cfg (SNR floor ≥17 dB, max FOV) is the radar module's job.
@@ -60,7 +61,7 @@ The **EO module owns the illuminator**; the console forwards commands to its `/c
 | `/stream` | the EO module's JPEG frames **relayed** as MJPEG multipart, fanned to every screen |
 | `/radar` | the radar daemon's latest frame **verbatim** |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` + radar tracks |
-| `/ctl?…` | routed: `track`/`engage` → local; `radar_eps`/`radar_minpts` → daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/quality`) → the EO feed |
+| `/ctl?…` | routed: `track`/`engage` → local; `radar_eps`/`radar_minpts` → daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/res`) → the EO feed |
 
 `/stats` top-level: `eo_connected`, `mbps`, `track` (auto/man), `engage`, `tracks`,
 `radar_eps`, `radar_minpts`, `cpu_c`; reserved `null`: `batt`, `alt`, `brg`, `rng`;
@@ -71,8 +72,9 @@ plus **`eo`** — the EO feed's `/stats` object (`fps`, `sfps`, `hfov`, `vfov`, 
 ## Notes
 - **No synthetic data.** A feed that isn't up shows **NOT CONNECTED**. Never run the
   radar daemon with `-s` in front of an operator.
-- **Bitrate is the EO module's.** DEV forwards plain `fps`/`quality` numbers to the EO
-  feed's `/ctl` — inert until the EO module implements them (requested).
+- **Bitrate is the EO module's.** DEV forwards the two bandwidth levers the EO module
+  owns to its `/ctl`: `res` (`low`640×480 · `med`960×720 · `high`1280×960 · `native`
+  1440×1080, all 4:3) and `fps` (12–60). The detector always runs full-native.
 - **Format:** the EO module encodes (software MJPEG — the Orin Nano has no NVENC/NVJPG);
   the app only relays bytes. Latency = the EO feed's + one proxy hop + WiFi + decode.
 

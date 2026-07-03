@@ -62,10 +62,12 @@
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
       <div class="sec">STREAM <span class="tag">→ EO feed</span></div>
-      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="1" max="60" step="1" value="25"><span class="val" id="o-fps">25</span></div>
-      <div class="srow"><label>QUAL</label><input type="range" id="s-q" min="10" max="95" step="1" value="85"><span class="val" id="o-q">85</span></div>
+      <div class="srow"><label>RES</label><div class="btns" id="res-btns">
+        <button data-res="low">640</button><button data-res="med" class="on">960</button><button data-res="high">1280</button><button data-res="native">1440</button>
+      </div></div>
+      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
       <div class="est" id="v-est">EST — Mb/s · — fps</div>
-      <div class="kv muted">Bitrate is the EO module's (it owns the encoder). These forward fps/quality to the EO feed — inert until it adds that control.</div>
+      <div class="kv muted">Display size + rate → the EO feed (it owns the encoder). All four sizes are 4:3, so the video box never reshapes; the detector always runs full-native. Live.</div>
 
       <div class="sec">ILLUMINATOR <span class="tag" id="illum-tag">AUTO</span></div>
       <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
@@ -76,8 +78,8 @@
       <div class="srow"><label>FOV ±</label><input type="range" id="r-fov" min="5" max="90" step="1" value="60"><span class="val" id="ro-fov">60°</span></div>
       <div class="srow"><label>SPEED MIN</label><input type="range" id="r-speed" min="0" max="5" step="0.1" value="0.4"><span class="val" id="ro-speed">0.4 m/s</span></div>
       <div class="srow"><label>RANGE MIN</label><input type="range" id="r-rmin" min="0" max="30" step="0.5" value="0"><span class="val" id="ro-rmin">0 m</span></div>
-      <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="17" max="40" step="0.5" value="17" disabled><span class="val" id="ro-snr">n/a</span></div>
-      <div class="kv muted">Display filters (client-side) on the daemon's cloud. SNR is inert — the current firmware omits SNR (Phase-2). Chip cfg (SNR floor, max FOV) is the radar module's job.</div>
+      <div class="srow"><label>SNR</label><input type="range" id="r-snr" min="0" max="50" step="1" value="16"><span class="val" id="ro-snr">16 dB</span></div>
+      <div class="kv muted">Display filters (client-side) on the daemon's cloud. SNR is live (per-point dB) — raise to hide weak returns. Chip cfg (SNR floor ≥17 dB, max FOV) is the radar module's job.</div>
 
       <div class="sec">RADAR · cluster cfg <span class="tag" id="cluster-tag">→ radar</span></div>
       <div class="srow"><label>CLUSTER ε</label><input type="range" id="r-eps" min="0.3" max="10" step="0.1" value="8"><span class="val" id="ro-eps">8.0 m</span></div>

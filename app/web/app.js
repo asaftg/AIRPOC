@@ -13,7 +13,7 @@
   var zoom = 1;
   var trackMode = "auto", engagedTid = null, sentEngage = null;
   var illumMode = "auto";
-  var rp = { snr: 17, speed: 0.4, rmin: 0, fov: 60 };   /* GUI display filters only */
+  var rp = { snr: 16, speed: 0.4, rmin: 0, fov: 60 };   /* GUI display filters only */
   var lastStats = {}, lastRadar = null, trails = {};
 
   /* ── theme / dev / swap ── */
@@ -65,10 +65,15 @@
   $("s-pow").oninput = function () { $("o-pow").textContent = this.value + "%"; ctl("power=" + Math.round(this.value * 255 / 100)); };
   $("s-fov").oninput = function () { $("o-fov").textContent = this.value + "°"; ctl("fov=" + this.value); };
 
-  /* ── stream: forwarded to the EO feed's /ctl (fps + quality). The EO module owns
-   * the wire bitrate; these are no-ops until it implements fps/quality (requested). ── */
+  /* ── stream: forwarded to the EO feed's /ctl. Two bandwidth levers the EO module owns:
+   * res (low/med/high/native, all 4:3) + fps (12–60). Detector stays full-native. ── */
   $("s-fps").oninput = function () { $("o-fps").textContent = this.value; ctl("fps=" + this.value); };
-  $("s-q").oninput   = function () { $("o-q").textContent = this.value;   ctl("quality=" + this.value); };
+  document.querySelectorAll("#res-btns [data-res]").forEach(function (b) {
+    b.onclick = function () {
+      document.querySelectorAll("#res-btns [data-res]").forEach(function (x) { x.classList.remove("on"); });
+      b.classList.add("on"); ctl("res=" + b.dataset.res);
+    };
+  });
 
   /* ── radar display filters (client-side only — chip cfg is the radar module's job) ── */
   function bindR(id, key, fmt) {

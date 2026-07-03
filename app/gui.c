@@ -111,7 +111,7 @@ static void handle_radar(int fd)
 }
 
 static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "gain=",
-                                 "expms=", "gaincap=", "median=", "fps=", "quality=" };
+                                 "expms=", "gaincap=", "median=", "fps=", "res=" };
 
 static void handle_ctl(const char *req)
 {
