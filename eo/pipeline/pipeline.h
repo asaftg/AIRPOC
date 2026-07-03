@@ -113,10 +113,9 @@ void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, in
 /* In-place edge-preserving 3x3 median on an 8-bit plane — cheap low-light grain filter. */
 void   isp_median3(uint8_t *img, int w, int h);
 
-/* ---- Wire feed tuning. Full native resolution; kept light on WiFi/CPU by capping
- * the encode rate (capture + detection still run at the sensor rate) and the JPEG
- * quality — NOT by downscaling. ---- */
-#define EO_FEED_FPS      25            /* encoder rate cap; capture stays ~60 fps */
+/* ---- Wire-feed tuning. The display stream is one of four operator-selected 4:3
+ * sizes (below); the DETECTOR always keeps the full-native frame. Two bandwidth
+ * levers: display size (here) and operating fps (eo_set_fps). ---- */
 #define EO_FEED_QUALITY  85            /* MJPEG quality (libjpeg-turbo)           */
 
 /* ---- MJPEG monitor server for the operator preview. Consumes finished frames from
@@ -124,6 +123,8 @@ void   isp_median3(uint8_t *img, int w, int h);
  * NOTE: capture/AE/ISP/exposure state now live in libeo — not here. ---- */
 int  mjpeg_start(int port);                  /* spawns the HTTP server thread    */
 int  mjpeg_zoom(void);                       /* current digital zoom (1/2/4/8)   */
+void mjpeg_res_dims(int *w, int *h);         /* operator-selected display size (4:3) */
+const char *mjpeg_res_name(void);            /* "low"/"med"/"high"/"native"      */
 void mjpeg_publish(const uint8_t *gray, int w, int h);   /* newest finished frame */
 
 #endif /* AIRPOC_EO_PIPELINE_H */

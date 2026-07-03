@@ -19,16 +19,31 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
-/* Digital zoom: center-crop w/z x h/z of the finished 8-bit frame and nearest-neighbour
- * upscale back to w x h, so the feed is a constant size at every zoom. z=1 is a copy. */
-static void zoom8(const uint8_t *in, int w, int h, int z, uint8_t *out)
+/* Zoom + 4:3 crop + area-average scale, in one pass: take the centred zoom region
+ * (sw/z x sh/z) of the finished 8-bit frame, crop it to the output's 4:3 aspect, then
+ * box-average it down (or nearest-up) to the selected display size dw x dh. All four
+ * display sizes are 4:3, so the GUI's video box never changes shape. The area-average
+ * on downscale also knocks noise down; z=1 native is a near-1:1 copy. */
+static void display_scale8(const uint8_t *in, int sw, int sh, int z,
+                           uint8_t *out, int dw, int dh)
 {
     if (z < 1) z = 1;
-    int cw = w / z, ch = h / z, cx = (w - cw) / 2, cy = (h - ch) / 2;
-    for (int y = 0; y < h; y++) {
-        const uint8_t *row = in + (size_t)(cy + y * ch / h) * w + cx;
-        uint8_t *o = out + (size_t)y * w;
-        for (int x = 0; x < w; x++) o[x] = row[x * cw / w];
+    int rw = sw / z, rh = sh / z;              /* zoom crop region */
+    int rh43 = rw * dh / dw;                   /* force region to the 4:3 output aspect */
+    if (rh43 > rh) { rh43 = rh; rw = rh43 * dw / dh; }
+    int cx = (sw - rw) / 2, cy = (sh - rh43) / 2;
+    for (int oy = 0; oy < dh; oy++) {
+        int sy0 = cy + oy * rh43 / dh, sy1 = cy + (oy + 1) * rh43 / dh; if (sy1 <= sy0) sy1 = sy0 + 1;
+        uint8_t *o = out + (size_t)oy * dw;
+        for (int ox = 0; ox < dw; ox++) {
+            int sx0 = cx + ox * rw / dw, sx1 = cx + (ox + 1) * rw / dw; if (sx1 <= sx0) sx1 = sx0 + 1;
+            unsigned acc = 0, cnt = 0;
+            for (int sy = sy0; sy < sy1; sy++) {
+                const uint8_t *row = in + (size_t)sy * sw;
+                for (int sx = sx0; sx < sx1; sx++) { acc += row[sx]; cnt++; }
+            }
+            o[ox] = (uint8_t)(cnt ? acc / cnt : 0);
+        }
     }
 }
 
@@ -59,10 +74,11 @@ int main(int argc, char **argv)
         const uint8_t *buf; uint64_t seq; int w, h, stride, fmt;
         if (eo_latest(&buf, &seq, &w, &h, &stride, &fmt) && seq != last) {
             last = seq;
-            if (!disp || w != dw || h != dh) { free(disp); disp = malloc((size_t)w * h); dw = w; dh = h; }
-            if (disp) { zoom8(buf, w, h, mjpeg_zoom(), disp); mjpeg_publish(disp, w, h); }
+            int tw, th; mjpeg_res_dims(&tw, &th);          /* operator-selected display size */
+            if (!disp || tw != dw || th != dh) { free(disp); disp = malloc((size_t)tw * th); dw = tw; dh = th; }
+            if (disp) { display_scale8(buf, w, h, mjpeg_zoom(), disp, dw, dh); mjpeg_publish(disp, dw, dh); }
         } else {
-            usleep(4000);                      /* ~250 Hz poll; libeo produces at EO_FEED_FPS */
+            usleep(4000);                      /* poll; libeo produces at the operating fps */
         }
     }
 

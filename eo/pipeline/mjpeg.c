@@ -22,7 +22,17 @@ static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
 
+/* Operator-selectable display size — all 4:3 so the GUI's video box never changes.
+ * Detection is unaffected (the detector keeps the full-native frame in libeo). */
+static const struct { const char *name; int w, h; } RES[4] = {
+    { "low",    640, 480 }, { "med",   960, 720 },
+    { "high",  1280, 960 }, { "native", 1440, 1080 },
+};
+static volatile int g_res = 1;             /* med default */
+
 int mjpeg_zoom(void) { return g_zoom; }
+void mjpeg_res_dims(int *w, int *h) { int r = g_res; if (w) *w = RES[r].w; if (h) *h = RES[r].h; }
+const char *mjpeg_res_name(void) { return RES[g_res].name; }
 
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
@@ -52,10 +62,14 @@ static const char *PAGE =
 "&nbsp;gain <button onclick=G(-30)>g-</button><button onclick=G(30)>g+</button>"
 "&nbsp;exp <button onclick=E(0.77)>exp-</button><button onclick=E(1.3)>exp+</button>"
 "&nbsp;auto-cap <button onclick=C(-20)>cap-</button><button onclick=C(20)>cap+</button>"
-"&nbsp;<button onclick=M() id=mdb>median</button></div>"
+"&nbsp;<button onclick=M() id=mdb>median</button>"
+"&nbsp;&nbsp;quality <button onclick=R('low') id=rlow>480</button>"
+"<button onclick=R('med') id=rmed>720</button><button onclick=R('high') id=rhigh>960</button>"
+"<button onclick=R('native') id=rnative>1080</button></div>"
 "<div id=wrap><img src=/stream><div id=roi></div><div id=ov></div></div><script>"
 "var foc=false,peak=0,lpow=64,lfov=70,S={};"
 "function z(v){fetch('/ctl?zoom='+v)}"
+"function R(r){fetch('/ctl?res='+r)}"
 "function A(){fetch('/ctl?ae='+(S.ae?0:1))}"
 "function G(d){fetch('/ctl?gain='+Math.max(0,Math.min(480,(S.gain||0)+d)))}"
 "function E(f){fetch('/ctl?expms='+Math.max(0.1,(S.exp_ms||16)*f).toFixed(2))}"
@@ -72,7 +86,8 @@ static const char *PAGE =
 "async function t(){try{let d=await(await fetch('/stats')).json();S=d;"
 "var s='IMX296 Y10  fps '+d.sfps.toFixed(0)+' (fixed, caps exp)  mean='+d.mean+'/1023\\n'+"
 "'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480  '+(d.ae?'AUTO(cap '+d.gaincap+')':'MANUAL')+'\\n'+"
-"'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x  median '+(d.median?'ON':'off');"
+"'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x  median '+(d.median?'ON':'off')+'\\n'+"
+"'stream '+d.res+' '+d.dw+'x'+d.dh+' @'+d.sfps.toFixed(0)+'fps  (detector: 1440x1088 native)';"
 "if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
 "s+='\\nFOCUS  '+Math.round(d.sharp)+'  peak '+Math.round(peak)+'  '+p+'%  (turn ring to max)';}"
 "if(d.laser)s+='\\n** LASER ON  pow '+d.lpower+'/255  beam '+d.lfov.toFixed(0)+'deg **';"
@@ -85,7 +100,8 @@ static const char *PAGE =
 "[1,2,4,8].forEach(i=>document.getElementById('z'+i).className=i==d.zoom?'on':'');"
 "document.getElementById('aeb').textContent=d.ae?'AUTO':'MANUAL';"
 "document.getElementById('aeb').className=d.ae?'on':'';"
-"document.getElementById('mdb').className=d.median?'on':''}catch(e){}}"
+"document.getElementById('mdb').className=d.median?'on':'';"
+"['low','med','high','native'].forEach(r=>document.getElementById('r'+r).className=r==d.res?'on':'')}catch(e){}}"
 "setInterval(t,150);t();</script></body></html>";
 
 static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *len)
@@ -138,15 +154,18 @@ static void *client(void *arg)
         double vf = 2 * atan((EO_HEIGHT * pum / 1000.0 / z) / (2 * fmm)) * 180.0 / M_PI;
         int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
         illum_snapshot(&lon, &lpw, &lfov, &lpr);
-        char body[560];
+        int dw, dh; mjpeg_res_dims(&dw, &dh);
+        char body[620];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,\"sfps\":%.1f,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
+            "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             st.fps, st.mean, st.exp_ms, st.duty_pct, st.gain, st.sfps,
             z, hf, vf, st.focus,
             st.ae_on, st.gaincap, st.median, st.connected,
+            mjpeg_res_name(), dw, dh,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
@@ -157,6 +176,13 @@ static void *client(void *arg)
     if (strncmp(req, "GET /ctl", 8) == 0) {
         char *q;
         if ((q = strstr(req, "zoom="))) { int v = atoi(q + 5); if (v==1||v==2||v==4||v==8) g_zoom = v; }
+        if ((q = strstr(req, "res="))) {                                 /* display size */
+            char *r = q + 4;
+            if (!strncmp(r, "low", 3))         g_res = 0;
+            else if (!strncmp(r, "med", 3))    g_res = 1;
+            else if (!strncmp(r, "high", 4))   g_res = 2;
+            else if (!strncmp(r, "native", 6)) g_res = 3;
+        }
         if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
         if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
         if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */

@@ -133,7 +133,9 @@ static void *tone_thread(void *arg)
         pthread_mutex_lock(&R.lock);
         while (R.seq == seen && !R.stop) pthread_cond_wait(&R.cond, &R.lock);
         if (R.stop) { pthread_mutex_unlock(&R.lock); break; }
-        double t = now_s(), min_dt = EO_FEED_FPS > 0 ? 1.0 / EO_FEED_FPS : 0.0;
+        /* Finish (and thus stream) at the operating fps — fps is a real bandwidth lever. */
+        double opfps = EO_FPS_OF_VMAX(g_man_vmax), t = now_s();
+        double min_dt = opfps > 0 ? 1.0 / opfps : 0.0;
         if (last > 0 && (t - last) < min_dt) { seen = R.seq; pthread_mutex_unlock(&R.lock); continue; }
         int bpl = R.bpl, w = R.w, h = R.h;
         memcpy(local, R.raw, (size_t)R.bpl * R.h);

@@ -67,9 +67,38 @@ camera) and proxy its feed — same model as the radar SSE previewer:
 
 | Endpoint (`:8091`) | Payload |
 |---|---|
-| `/stream` | `multipart/x-mixed-replace` MJPEG, finished frames |
-| `/stats`  | JSON telemetry (fps, sfps, mean, exp_ms, gain, hfov/vfov, …) |
-| `/ctl?zoom=…` etc. | zoom + illuminator + bench exposure controls |
+| `/stream` | `multipart/x-mixed-replace` MJPEG, finished frames at the selected size |
+| `/stats`  | JSON telemetry (below) |
+| `/ctl?...` | controls (below) |
 
 Then the EO process owns the camera and you do zero capture/AE/ISP/encode. Pick one
 model (link `libeo` **or** proxy MJPEG) — not both, because of single-owner V4L2.
+
+## GUI control contract (`/ctl` — proxy these to the operator)
+
+Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
+**detector always runs on the full-native 1440×1088 frame**, untouched by any of this.
+
+**Bandwidth levers**
+| `/ctl` | Values | Effect |
+|---|---|---|
+| `?res=` | `low`(640×480) · `med`(960×720, default) · `high`(1280×960) · `native`(1440×1080) | display size — all **4:3**, so the GUI video box never changes shape |
+| `?fps=` | 12…60 | **fixed** operating fps — caps exposure AND the stream rate |
+
+**ISP panel** (everything on the previewer)
+| `/ctl` | Values | |
+|---|---|---|
+| `?ae=` | 0/1 | auto-exposure on/off |
+| `?gain=` | 0…480 | manual gain (0.1 dB/step); drops to manual |
+| `?expms=` | ms | manual exposure (capped by fps) |
+| `?gaincap=` | 0…480 | AE gain ceiling |
+| `?median=` | 0/1 | 3×3 denoise |
+| `?zoom=` | 1/2/4/8 | digital zoom |
+| `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
+
+**`/stats`** returns all live values (`fps, sfps, mean, exp_ms, duty_pct, gain, gaincap,
+ae, median, zoom, hfov, vfov, sharp, res, dw, dh, connected, laser, lpower, lfov,
+lpresent`) so the GUI can render the current state of every knob.
+
+> Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
+> knobs apply to an H.264/RTSP output — added when the datalink is locked.
