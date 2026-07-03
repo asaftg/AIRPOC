@@ -48,6 +48,7 @@ static const char *PAGE =
 "beam <button onclick=P(-32)>pow-</button><button onclick=P(32)>pow+</button> "
 "<button onclick=F(-1)>fov-</button><button onclick=F(1)>fov+</button></div>"
 "<div id=bar2>exposure <button onclick=A() id=aeb>AUTO</button>"
+"&nbsp;fps <button onclick=FP(-1)>fps-</button><button onclick=FP(1)>fps+</button>"
 "&nbsp;gain <button onclick=G(-30)>g-</button><button onclick=G(30)>g+</button>"
 "&nbsp;exp <button onclick=E(0.77)>exp-</button><button onclick=E(1.3)>exp+</button>"
 "&nbsp;auto-cap <button onclick=C(-20)>cap-</button><button onclick=C(20)>cap+</button>"
@@ -60,13 +61,16 @@ static const char *PAGE =
 "function E(f){fetch('/ctl?expms='+Math.max(0.1,(S.exp_ms||16)*f).toFixed(2))}"
 "function C(d){fetch('/ctl?gaincap='+Math.max(0,Math.min(480,(S.gaincap||120)+d)))}"
 "function M(){fetch('/ctl?median='+(S.median?0:1))}"
+"function FP(d){var f=[12,15,20,24,30,48,60],c=Math.round(S.sfps||60);"
+"var i=f.reduce((b,v,k)=>Math.abs(v-c)<Math.abs(f[b]-c)?k:b,0);"
+"i=Math.max(0,Math.min(f.length-1,i+d));fetch('/ctl?fps='+f[i])}"
 "function L(v){if(v&&!confirm('Fire 850nm IR laser? (invisible, eye hazard)'))return;fetch('/ctl?laser='+v)}"
 "function P(d){lpow=Math.max(0,Math.min(255,lpow+d));fetch('/ctl?power='+lpow)}"
 "function F(dir){var st=lfov>25?5:1;lfov=Math.max(2,Math.min(70,Math.round(lfov+dir*st)));fetch('/ctl?fov='+lfov)}"
 "function f(){foc=!foc;peak=0;document.getElementById('roi').style.display=foc?'block':'none';"
 "document.getElementById('fb').className=foc?'on':''}"
 "async function t(){try{let d=await(await fetch('/stats')).json();S=d;"
-"var s='IMX296 Y10  disp '+d.fps.toFixed(0)+'fps  sensor '+d.sfps.toFixed(0)+'fps  mean='+d.mean+'/1023\\n'+"
+"var s='IMX296 Y10  fps '+d.sfps.toFixed(0)+' (fixed, caps exp)  mean='+d.mean+'/1023\\n'+"
 "'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480  '+(d.ae?'AUTO(cap '+d.gaincap+')':'MANUAL')+'\\n'+"
 "'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x  median '+(d.median?'ON':'off');"
 "if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
@@ -156,8 +160,9 @@ static void *client(void *arg)
         if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
         if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
         if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
-        /* exposure/gain override -> libeo bench API. Setting a manual value drops to
-         * manual mode; ae=1 returns to auto. Exposure derives the frame length (fps). */
+        /* exposure/gain override -> libeo bench API. fps is the FIXED operating rate
+         * that caps exposure (AE never changes it); a manual gain/exp drops to manual. */
+        if ((q = strstr(req, "fps=")))     eo_set_fps(atof(q + 4));
         if ((q = strstr(req, "ae=")))      eo_set_ae(atoi(q + 3));
         if ((q = strstr(req, "gain=")))    eo_set_gain(atoi(q + 5));
         if ((q = strstr(req, "expms=")))   eo_set_expms(atof(q + 6));

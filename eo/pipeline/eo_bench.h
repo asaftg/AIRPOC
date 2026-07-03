@@ -27,9 +27,10 @@ void    eo_stats(EoStats *out);       /* fill telemetry snapshot           */
 
 /* Manual exposure/gain override. Setting gain/expms drops to manual; ae=1 -> auto. */
 void    eo_set_ae(int on);
-void    eo_set_gain(int gain);        /* 0..480                            */
-void    eo_set_expms(double ms);      /* derives frame length (fps)        */
-void    eo_set_gaincap(int cap);      /* AE gain ceiling                   */
+void    eo_set_gain(int gain);        /* 0..480                             */
+void    eo_set_expms(double ms);      /* manual exposure, capped by the fps */
+void    eo_set_gaincap(int cap);      /* AE gain ceiling                    */
 void    eo_set_median(int on);
+void    eo_set_fps(double fps);       /* FIXED operating fps -> caps exposure; AE never changes it */
 
 #endif /* AIRPOC_EO_BENCH_H */

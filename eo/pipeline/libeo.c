@@ -92,11 +92,13 @@ static void *cap_thread(void *arg)
 
         if (++n % 4 == 0) {                          /* AE @ ~15 Hz */
             double mean = isp_mean10(frame, g_cap.bytesperline, g_cap.width, g_cap.height);
+            g_ae.vmax = g_man_vmax;                   /* fixed operating fps (never auto-changed) */
             if (g_ae_on) {
-                ae_update(&g_ae, mean, g_gaincap);
+                ae_update(&g_ae, mean, g_gaincap);    /* fills exp/gain within the fps ceiling */
             } else {
-                g_ae.exp_lines = g_man_exp; g_ae.gain = g_man_gain;
-                g_ae.vmax = g_man_vmax; g_ae.mean = mean;
+                int cap = g_man_vmax - EO_SHS1_MIN;
+                g_ae.exp_lines = g_man_exp > cap ? cap : g_man_exp;
+                g_ae.gain = g_man_gain; g_ae.mean = mean;
             }
             sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
         }
@@ -233,10 +235,22 @@ void eo_set_ae(int on)       { g_ae_on = on ? 1 : 0; }
 void eo_set_gain(int g)      { g_man_gain = clampi(g, 0, EO_GAIN_MAX); g_ae_on = 0; }
 void eo_set_gaincap(int c)   { g_gaincap = clampi(c, 0, EO_GAIN_MAX); }
 void eo_set_median(int on)   { g_median = on ? 1 : 0; }
+
+/* Operating frame rate — the FIXED fps that caps exposure. The AE never changes it;
+ * lowering it is how the operator buys exposure headroom for dark scenes. */
+void eo_set_fps(double fps)
+{
+    if (fps < 1.0) fps = 1.0;
+    g_man_vmax = clampi(EO_VMAX_OF_FPS(fps), EO_VMAX_MIN, EO_VMAX_MAX);
+    /* keep any manual exposure within the new fps ceiling */
+    int cap = g_man_vmax - EO_SHS1_MIN;
+    if (g_man_exp > cap) g_man_exp = cap;
+}
+
+/* Manual exposure, capped by the current operating fps (does NOT change the fps). */
 void eo_set_expms(double ms)
 {
     int l = (int)(ms * 1000.0 / EO_LINE_US + 0.5);
-    g_man_exp  = clampi(l, EO_MIN_EXP_LINES, EO_VMAX_MAX - EO_SHS1_MIN);
-    g_man_vmax = clampi(g_man_exp + EO_SHS1_MIN, EO_VMAX_MIN, EO_VMAX_MAX);
+    g_man_exp = clampi(l, EO_MIN_EXP_LINES, g_man_vmax - EO_SHS1_MIN);
     g_ae_on = 0;
 }

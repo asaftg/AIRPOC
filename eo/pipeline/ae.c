@@ -1,15 +1,17 @@
-/* Flicker-free auto-exposure, "expose don't gain" (mirrors the seeker IMX568 bench).
- * Filter the metric (EMA); when the brightness is off-target, correct it in the
- * log-brightness domain with damping + a slew cap; when it's on-target, HOLD the
- * brightness. Either way, realize that brightness on a THREE-rung ladder EVERY tick:
- *   1. exposure time, up to the 60 fps frame (16.5 ms)
- *   2. lengthen the frame (raise VMAX -> lower fps) for MORE exposure time — light
- *      gathered optically, no added noise
- *   3. only then analog gain, HARD-CAPPED at gaincap.
- * Because the ladder re-runs every tick (not only when off-target), gain is
- * continuously MINIMIZED: any gain that exposure/frame-length could carry instead is
- * shifted off gain at constant brightness. Gain is never left sitting where it isn't
- * strictly needed — it only rises once exposure is fully maxed (rung 3). */
+/* Flicker-free auto-exposure, "expose don't gain" — at a FIXED frame rate.
+ *
+ * The operating fps is set by the operator (ae->vmax) and is a hard constraint: it
+ * caps the maximum exposure (max integration = vmax - SHS1_MIN) and the AE NEVER
+ * changes it. No frame dropping. Within that fixed exposure budget the AE:
+ *   - when off-target, corrects brightness in the log domain (damped + slew-capped);
+ *     on-target, holds brightness;
+ *   - realizes it EVERY tick on a two-rung ladder: exposure time first (up to the
+ *     fps-capped ceiling), then analog gain (hard-capped at gaincap).
+ * Because the ladder re-runs every tick, gain is continuously MINIMIZED: any gain the
+ * exposure ceiling can absorb is shifted off gain at constant brightness. Gain only
+ * rises once exposure is maxed for the current fps — the only way to get more light
+ * without dropping frames. Want more exposure headroom? Lower the operating fps (a
+ * deliberate operator choice), not something the AE does behind your back. */
 #include "pipeline.h"
 #include <math.h>
 
@@ -43,23 +45,16 @@ void ae_update(AE *ae, double mean10, int gaincap)
         if (factor < 0.667) factor = 0.667;
     }
 
-    /* target brightness = exposure_lines * gain (VMAX only gates how many lines fit) */
-    double B = ae->exp_lines * gain_lin(ae->gain) * factor;
+    double B = ae->exp_lines * gain_lin(ae->gain) * factor;   /* target brightness */
 
-    /* Rung 1+2: spend exposure, extending the frame (dropping fps) up to EO_VMAX_MAX
-     * before touching gain. Re-run every tick, so leftover gain is respent here. */
+    /* Rung 1: spend exposure, up to the ceiling the FIXED operating fps allows.
+     * ae->vmax is set by the operator and is NOT modified here — no frame dropping. */
     double exp = B;
-    double exp_ceiling = EO_VMAX_MAX - EO_SHS1_MIN;    /* longest integration allowed */
+    double exp_ceiling = ae->vmax - EO_SHS1_MIN;       /* max integration at this fps */
     if (exp > exp_ceiling) exp = exp_ceiling;
     if (exp < EO_MIN_EXP_LINES) exp = EO_MIN_EXP_LINES;
 
-    int vmax = EO_VMAX_MIN;                            /* stay at 60 fps while there's light */
-    if (exp > EO_VMAX_MIN - EO_SHS1_MIN) {             /* need a longer frame */
-        vmax = (int)lround(exp) + EO_SHS1_MIN;
-        if (vmax > EO_VMAX_MAX) vmax = EO_VMAX_MAX;
-    }
-
-    /* Rung 3: only the brightness exposure couldn't reach -> gain, capped low. */
+    /* Rung 2: only the brightness exposure couldn't reach at this fps -> gain, capped. */
     double g_lin_needed = B / exp;
     if (g_lin_needed < 1.0) g_lin_needed = 1.0;
     int g = (int)lround(20.0 * log10(g_lin_needed) / 0.1);
@@ -67,6 +62,6 @@ void ae_update(AE *ae, double mean10, int gaincap)
     if (g > gaincap)     g = gaincap;                  /* accept dim past here */
 
     ae->exp_lines = (int)lround(exp);
-    ae->vmax      = vmax;
     ae->gain      = g;
+    /* ae->vmax intentionally left unchanged — the fps is fixed. */
 }
