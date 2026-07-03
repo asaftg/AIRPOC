@@ -61,16 +61,11 @@
     <aside id="dev">
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
-      <div class="sec">STREAM</div>
-      <div class="presets" id="presets">
-        <button data-preset="LEAN">LEAN</button>
-        <button data-preset="SMOOTH" class="active">SMOOTH</button>
-        <button data-preset="BALANCED">BAL</button>
-        <button data-preset="CLEAR">CLEAR</button>
-      </div>
-      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="1" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
-      <div class="srow"><label>QUAL</label><input type="range" id="s-q" min="10" max="95" step="1" value="45"><span class="val" id="o-q">45</span></div>
+      <div class="sec">STREAM <span class="tag">→ EO feed</span></div>
+      <div class="srow"><label>FPS</label><input type="range" id="s-fps" min="1" max="60" step="1" value="25"><span class="val" id="o-fps">25</span></div>
+      <div class="srow"><label>QUAL</label><input type="range" id="s-q" min="10" max="95" step="1" value="85"><span class="val" id="o-q">85</span></div>
       <div class="est" id="v-est">EST — Mb/s · — fps</div>
+      <div class="kv muted">Bitrate is the EO module's (it owns the encoder). These forward fps/quality to the EO feed — inert until it adds that control.</div>
 
       <div class="sec">ILLUMINATOR <span class="tag" id="illum-tag">AUTO</span></div>
       <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>

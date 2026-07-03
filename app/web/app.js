@@ -53,7 +53,8 @@
     b.classList.toggle("auto", m === "auto"); b.classList.toggle("man", m === "man");
     var tag = $("illum-tag"); tag.textContent = m.toUpperCase(); tag.classList.toggle("man", m === "man");
     $("s-pow").disabled = (m === "auto"); $("s-fov").disabled = (m === "auto");
-    ctl("illum=" + m);
+    /* AUTO/MAN is a console concept; the EO feed owns the illuminator, so auto just
+     * forwards fov=<camera FOV> + power=max to the feed (done in poll()). */
   }
   $("illum").onclick = function () { setIllum(illumMode === "auto" ? "man" : "auto"); };
   $("light").onclick = function () {
@@ -64,12 +65,10 @@
   $("s-pow").oninput = function () { $("o-pow").textContent = this.value + "%"; ctl("power=" + Math.round(this.value * 255 / 100)); };
   $("s-fov").oninput = function () { $("o-fov").textContent = this.value + "°"; ctl("fov=" + this.value); };
 
-  /* ── stream ── */
+  /* ── stream: forwarded to the EO feed's /ctl (fps + quality). The EO module owns
+   * the wire bitrate; these are no-ops until it implements fps/quality (requested). ── */
   $("s-fps").oninput = function () { $("o-fps").textContent = this.value; ctl("fps=" + this.value); };
-  $("s-q").oninput   = function () { $("o-q").textContent = this.value;   ctl("q=" + this.value); };
-  document.querySelectorAll("#presets button").forEach(function (b) {
-    b.onclick = function () { document.querySelectorAll("#presets button").forEach(function (x) { x.classList.remove("active"); }); b.classList.add("active"); ctl("preset=" + b.dataset.preset); };
-  });
+  $("s-q").oninput   = function () { $("o-q").textContent = this.value;   ctl("quality=" + this.value); };
 
   /* ── radar display filters (client-side only — chip cfg is the radar module's job) ── */
   function bindR(id, key, fmt) {
@@ -127,10 +126,11 @@
     ctx.globalAlpha = 1;
 
     /* engaged-target lock projected into the EO frame via camera hfov */
-    if (engagedTid !== null && lastStats.hfov) {
+    var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
+    if (engagedTid !== null && eoHfov) {
       var t = targets(lastRadar).filter(function (x) { return x.tid === engagedTid; })[0];
       if (t) {
-        var half = lastStats.hfov / 2;
+        var half = eoHfov / 2;
         if (Math.abs(t.az) <= half) {
           var lx = cx + (t.az / half) * (w / 2), ly = h * 0.5;
           var bw = 72 * dpr, bh = 92 * dpr, col = css("--on");
@@ -232,9 +232,10 @@
   /* ── manual selection: tap the EO (project click az) or the radar target ── */
   $("eo").addEventListener("click", function (e) {
     if (trackMode !== "man" || e.target.closest(".exp")) return;
-    var ts = targets(lastRadar); if (!ts.length || !lastStats.hfov) return;
+    var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
+    var ts = targets(lastRadar); if (!ts.length || !eoHfov) return;
     var r = this.getBoundingClientRect(), frac = (e.clientX - r.left) / r.width - 0.5;
-    var azClick = frac * lastStats.hfov;
+    var azClick = frac * eoHfov;
     engage(ts.slice().sort(function (a, b) { return Math.abs(a.az - azClick) - Math.abs(b.az - azClick); })[0].tid);
   });
   $("radar-cv").addEventListener("click", function (e) {
@@ -257,22 +258,28 @@
   function poll() {
     fetch("/stats").then(function (r) { return r.json(); }).then(function (d) {
       lastStats = d;
-      var eoc = !!d.eo_connected;                       /* real camera present? */
+      var eo = d.eo || {};                              /* the EO feed's own /stats */
+      var eoc = !!d.eo_connected;                        /* EO feed up + delivering? */
+      var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       $("v-link").textContent = num(d.mbps, 1); $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
-      $("eo-tl").textContent = "EO · FOV " + num(d.hfov, 1, "°") + " · " + (d.zoom ? d.zoom.toFixed(1) : "1.0") + "×";
+      $("eo-tl").textContent = "EO · FOV " + num(hfov, 1, "°") + " · " + (eo.zoom ? eo.zoom.toFixed(1) : "1.0") + "×";
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
-      $("v-tracks").textContent = d.tracks === null ? "—" : d.tracks + " TRK";
-      $("v-est").textContent = "EST " + num(d.mbps, 1) + " Mb/s · " + num(d.fps, 0) + " fps";
-      $("v-srcfps").textContent = num(d.src_fps, 0); $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = num(d.cam_c, 0);
-      if (typeof d.zoom === "number" && ZOOMS.indexOf(d.zoom) >= 0) { zoom = d.zoom; $("v-zval").textContent = zoom.toFixed(1) + "×"; }
+      $("v-tracks").textContent = (d.tracks === null || d.tracks === undefined) ? "—" : d.tracks + " TRK";
+      $("v-est").textContent = "EST " + num(d.mbps, 1) + " Mb/s · " + num(eo.fps, 0) + " fps";
+      $("v-srcfps").textContent = num(eo.sfps, 0); $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
+      if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0) { zoom = eo.zoom; $("v-zval").textContent = zoom.toFixed(1) + "×"; }
       var light = $("light");
-      light.classList.toggle("firing", !!d.laser); $("light-s").textContent = d.laser ? "ON" : "OFF"; light.style.opacity = d.lpresent ? "1" : ".5";
+      light.classList.toggle("firing", !!eo.laser); $("light-s").textContent = eo.laser ? "ON" : "OFF"; light.style.opacity = eo.lpresent ? "1" : ".5";
       if (illumMode === "man") {
-        if (typeof d.lpower === "number" && idle($("s-pow"))) { var pc = Math.round(d.lpower * 100 / 255); $("s-pow").value = pc; $("o-pow").textContent = pc + "%"; }
-        if (typeof d.lfov === "number" && idle($("s-fov"))) { $("s-fov").value = Math.round(d.lfov); $("o-fov").textContent = Math.round(d.lfov) + "°"; }
-      } else { if (typeof d.lfov === "number") $("o-fov").textContent = Math.round(d.lfov) + "°"; $("o-pow").textContent = "MAX"; }
+        if (typeof eo.lpower === "number" && idle($("s-pow"))) { var pc = Math.round(eo.lpower * 100 / 255); $("s-pow").value = pc; $("o-pow").textContent = pc + "%"; }
+        if (typeof eo.lfov === "number" && idle($("s-fov"))) { $("s-fov").value = Math.round(eo.lfov); $("o-fov").textContent = Math.round(eo.lfov) + "°"; }
+      } else {                                            /* AUTO: fit beam to camera FOV @ max */
+        if (typeof eo.lfov === "number") $("o-fov").textContent = Math.round(eo.lfov) + "°";
+        $("o-pow").textContent = "MAX";
+        if (eo.lpresent && hfov && (Math.abs((eo.lfov || 0) - hfov) > 1 || (eo.lpower || 0) < 255)) { ctl("fov=" + hfov.toFixed(0)); ctl("power=255"); }
+      }
       /* cluster cfg: reflect the daemon's APPLIED (clamped) value, not the request */
       if (typeof d.radar_eps === "number" && idle($("r-eps"))) { $("r-eps").value = d.radar_eps; $("ro-eps").textContent = d.radar_eps.toFixed(1) + " m"; }
       if (typeof d.radar_minpts === "number" && idle($("r-minpts"))) { $("r-minpts").value = d.radar_minpts; $("ro-minpts").textContent = d.radar_minpts; }
