@@ -95,6 +95,7 @@ module regardless; the radar only ever emits per-frame detections.) See
 - `docs/` —
   [`HARDWARE`](docs/HARDWARE.md) ·
   [`FIRMWARE`](docs/FIRMWARE.md) ·
+  [`FRAMERATE`](docs/FRAMERATE.md) (how high we can go + cost) ·
   [`PREVIEW`](docs/PREVIEW.md) ·
   [`INTEGRATION`](docs/INTEGRATION.md) (GUI/fusion contract) ·
   [`TUNING`](docs/TUNING.md) (parameters + how to tune) ·

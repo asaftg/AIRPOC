@@ -50,7 +50,7 @@ flag:
 | MIMO | DDMA, 4TX/4RX |
 | Azimuth FOV | **±90°** in cfg (full span; useful AoA ~±60°) |
 | LVDS | **off** (`lvdsStreamCfg -1 0 0 0`) |
-| Frame period | **50 ms → 20 Hz** (measured ceiling — DSP-bound at 17 ms/frame) |
+| Frame period | **38 ms → 26 Hz** (zero-compromise dead-time trim; see docs/FRAMERATE.md) |
 
 **Publish-max, filter-in-GUI.** The cfg is deliberately *permissive* — CFAR at
 its 17 dB floor and FOV at full span — so the chip emits the **most** points it
