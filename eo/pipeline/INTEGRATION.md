@@ -85,6 +85,19 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?res=` | `low`(640×480) · `med`(960×720, default) · `high`(1280×960) · `native`(1440×1080) | display size — all **4:3**, so the GUI video box never changes shape |
 | `?fps=` | 12…60 | **fixed** operating fps — caps exposure AND the stream rate |
 
+> **`res` at zoom — it's a bandwidth lever, not always a detail lever.** The feed
+> **crops the native sensor first, then scales the crop to `res`** (the correct order —
+> it keeps every real pixel). At 1× the whole 1440-wide sensor is in view, so `res` also
+> sets detail. But digital zoom shrinks the sensor slice: at N× the crop is only
+> `1440/N` wide (~180 px at 8×). Once the crop is narrower than the chosen `res`, the
+> extra output pixels are pure upscaling — same detail, more bytes. So at high zoom every
+> `res` shows the **same detail** and differs only in bandwidth. That's correct and
+> desirable on a weak link: **zoom in → drop `res` (free bandwidth, zero detail lost).**
+> Do **not** ask for scale-then-crop to make the buttons "look different" — that would
+> discard real detail and force higher bandwidth for the same picture. `/stats` exposes
+> **`eff_w`/`eff_h`** = the real detail = `min(res, sensor-crop)` so the GUI can show the
+> operator what they're actually getting.
+
 **ISP panel** (everything on the previewer)
 | `/ctl` | Values | |
 |---|---|---|
@@ -99,8 +112,10 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 **`/stats`** returns all live values so the GUI renders the current state of every knob:
 `fps` (measured display rate), `sfps` (sensor rate), **`fps_cap`** (the configured
 operating-fps cap = the value set via `?fps=`; the AE never changes fps, so this is the
-set value, not a guess), `mean, exp_ms, duty_pct, gain, gaincap, ae, median, zoom, hfov,
-vfov, sharp, res, dw, dh, connected, laser, lpower, lfov, lpresent`.
+set value, not a guess), `res, dw, dh` (display size), **`eff_w, eff_h`** (real detail =
+`min(res, sensor-crop)` — equals `dw×dh` at 1×, collapses to the crop at high zoom),
+`mean, exp_ms, duty_pct, gain, gaincap, ae, median, zoom, hfov, vfov, sharp, connected,
+laser, lpower, lfov, lpresent`.
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.

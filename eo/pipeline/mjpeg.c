@@ -87,7 +87,9 @@ static const char *PAGE =
 "var s='IMX296 Y10  fps '+d.sfps.toFixed(0)+' (fixed, caps exp)  mean='+d.mean+'/1023\\n'+"
 "'exp='+d.exp_ms.toFixed(2)+'ms  duty='+d.duty_pct+'%  gain='+d.gain+'/480  '+(d.ae?'AUTO(cap '+d.gaincap+')':'MANUAL')+'\\n'+"
 "'FOV '+d.hfov.toFixed(1)+'x'+d.vfov.toFixed(1)+'deg  zoom '+d.zoom+'x  median '+(d.median?'ON':'off')+'\\n'+"
-"'stream '+d.res+' '+d.dw+'x'+d.dh+' @'+d.sfps.toFixed(0)+'fps  (detector: 1440x1088 native)';"
+"'stream '+d.res+' '+d.dw+'x'+d.dh+' @'+d.sfps.toFixed(0)+'fps'+"
+"(d.eff_w<d.dw?'  (real detail '+d.eff_w+'x'+d.eff_h+' — sensor-limited at '+d.zoom+'x)':'')+"
+"'  (detector: 1440x1088 native)';"
 "if(foc){if(d.sharp>peak)peak=d.sharp;var p=peak>0?Math.round(100*d.sharp/peak):0;"
 "s+='\\nFOCUS  '+Math.round(d.sharp)+'  peak '+Math.round(peak)+'  '+p+'%  (turn ring to max)';}"
 "if(d.laser)s+='\\n** LASER ON  pow '+d.lpower+'/255  beam '+d.lfov.toFixed(0)+'deg **';"
@@ -155,19 +157,25 @@ static void *client(void *arg)
         int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
         illum_snapshot(&lon, &lpw, &lfov, &lpr);
         int dw, dh; mjpeg_res_dims(&dw, &dh);
-        char body[620];
+        /* Effective resolution = the REAL detail the operator sees = min(display size,
+         * sensor crop). Zoom crops the native sensor to 1440/z wide (1080/z high, 4:3),
+         * so beyond that the display size is just upscaling. At high zoom eff_w collapses
+         * to the crop regardless of the res button — that's sensor-limited, not a bug. */
+        int cw = EO_WIDTH / z, ch = (EO_WIDTH * 3 / 4) / z;   /* native 4:3 crop at this zoom */
+        int eff_w = dw < cw ? dw : cw, eff_h = dh < ch ? dh : ch;
+        char body[680];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
-            "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,"
+            "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             st.fps, st.mean, st.exp_ms, st.duty_pct, st.gain,
             st.sfps, st.sfps,
             z, hf, vf, st.focus,
             st.ae_on, st.gaincap, st.median, st.connected,
-            mjpeg_res_name(), dw, dh,
+            mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
