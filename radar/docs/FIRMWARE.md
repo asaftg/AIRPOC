@@ -50,7 +50,7 @@ flag:
 | MIMO | DDMA, 4TX/4RX |
 | Azimuth FOV | **±90°** in cfg (full span; useful AoA ~±60°) |
 | LVDS | **off** (`lvdsStreamCfg -1 0 0 0`) |
-| Frame period | **50 ms → 20 Hz** (proven; 25/30 Hz gave no frames — DSP-bound, measuring) |
+| Frame period | **50 ms → 20 Hz** (measured ceiling — DSP-bound at 17 ms/frame) |
 
 **Publish-max, filter-in-GUI.** The cfg is deliberately *permissive* — CFAR at
 its 17 dB floor and FOV at full span — so the chip emits the **most** points it
@@ -86,16 +86,22 @@ The frame budget:
 | idle 12 µs | 30.3 ms | ~3.0 ms |
 | idle 7 µs  | 26.5 ms | ~6.8 ms |
 
-**Measured 2026-07-04:** both 30 Hz (33.33 ms) *and* 25 Hz (40 ms) produced
-**no frames** — cfg pushed cleanly and the chip accepted it, but the data port
-stayed silent. 20 Hz (50 ms) is the only rate proven to stream. That pattern
-points to the profile being **DSP-bound**: the per-frame processing (N=384, 128
-loops, DDMA 4-TX + CFAR + AoA) likely needs ~14–19 ms, so the real ceiling is
-near ~22 Hz and 20 Hz was already close to it — *not* a duty-cycle margin issue
-as first assumed. **Confirm from the chip:** run 20 Hz, read `dsp_proc_ms` from
-`/stats`; the max sustainable rate is `1000 / (active_ms + dsp_proc_ms)`. If
-that's ≤ ~22 Hz, going faster requires **less DSP load** (fewer loops/samples =
-the integration trade), not a shorter period.
+**Measured 2026-07-04 (from the chip's stats TLV):** at 20 Hz, `dsp_proc_ms` =
+**17.07 ms/frame**, `dsp_margin_ms` = **2.57 ms**. This profile (N=384, 128
+loops, DDMA 4-TX + CFAR + AoA) is **DSP-bound** — the per-frame math is the
+limit, not any duty cycle. Ceiling = `1000 / (active_ms + 17.07)` ≈ **21 Hz at
+full dwell** (idle 12) / **~23 Hz at idle 7**. That is exactly why 25 Hz (needs
+a ≤13.5 ms gap) and 30 Hz produced **no frames** — they sit *above* the wall.
+20 Hz runs ~1 Hz under the ceiling with only ~2.6 ms of headroom, and is the
+shipped rate.
+
+To go materially faster you must **reduce DSP load** — fewer Doppler
+loops/ADC samples/virtual antennas (the integration + AoA trade that costs
+human range), or a firmware DSP optimization (better HWA use). The one lever
+that keeps integration is trimming the **~7 µs of wasted ramp after the ADC
+window closes** (`rampEndTime` 27.5 µs vs ~19.8 µs needed): it shrinks *active*
+time, not DSP, so best case ~24–26 Hz — verify on-chip (ramp settling), and
+watch the stats TLV's interchirp margin.
 
 **40 Hz** (25 ms period) would need the dwell cut below 25 ms — i.e. fewer
 Doppler loops — which *does* cost velocity resolution + ~1–3 dB sensitivity
