@@ -13,27 +13,33 @@ body{
   -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
   background:#000;color:var(--fg);
 }
+/* FAZE brand palette: matte black · graphite · titanium · bone · champagne.
+ * --amber is kept as the var name but now carries CHAMPAGNE (the brand accent). */
 body.night{
-  --bg:#0c0e12;--panel:#15171f;--head:#1a1d27;--sub:#12141b;--canvas:#0a0c10;
-  --bd:#232735;--bd2:#2a2f3d;--bd3:#2f3447;
-  --fg:#d8dee9;--muted:#99a3b8;--dim:#5a6173;
-  --amber:#ffb454;--ambert:#ffd7a3;--on:#6cdf8a;--err:#ff6b6b;--cyan:#00d4ff;
+  --bg:#0a0a0c;--panel:#131316;--head:#17171b;--sub:#0f0f12;--canvas:#08080a;
+  --bd:#26262b;--bd2:#303036;--bd3:#3b3b42;
+  --fg:#e9e5dd;--muted:#9a968e;--dim:#5f5c56;
+  --amber:#c1a173;--ambert:#d8bd90;--on:#6cdf8a;--err:#d9736b;--cyan:#8f9298;
 }
 /* DAY = bright/high-contrast for direct sun: light chrome + dark text. Video and
  * on-glass symbology (reticle, scope, locks, overlay chips) stay bright — they sit on
  * the dark sensor image, so those accent vars stay vivid in both modes. */
 body.day{
-  --bg:#eef1f5;--panel:#f8fafc;--head:#ffffff;--sub:#e7ebf1;--canvas:#0a0c10;
-  --bd:#c8cfda;--bd2:#aeb7c6;--bd3:#93a0b5;
-  --fg:#111621;--muted:#3d4553;--dim:#6b7484;
-  --amber:#d97a00;--ambert:#ffd7a3;--on:#188f45;--err:#d32f2f;--cyan:#0a93b5;
+  --bg:#e9e5dd;--panel:#f2efe9;--head:#faf8f4;--sub:#ddd8cd;--canvas:#08080a;
+  --bd:#cbc5b8;--bd2:#b3ac9d;--bd3:#948b7a;
+  --fg:#1a1815;--muted:#4c473f;--dim:#736d62;
+  --amber:#9a7b45;--ambert:#c1a173;--on:#2e8f52;--err:#c0463c;--cyan:#5a6068;
 }
 #app{display:flex;flex-direction:column;height:100vh;background:var(--bg)}
 
 /* ── topbar ── */
 .topbar{display:flex;align-items:center;gap:18px;height:48px;padding:0 16px;
   background:linear-gradient(to bottom,var(--head),var(--bg));border-bottom:1px solid var(--bd)}
-.topbar h1{margin:0;font-size:18px;letter-spacing:2px;color:var(--amber);font-weight:600}
+/* FAZE wordmark: thin, wide-tracked, uppercase, bone (approximates the brand logotype
+ * with system fonts — the console ships no external font files). */
+.topbar h1{margin:0;font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;font-weight:200;
+  font-size:23px;letter-spacing:.52em;padding-left:.52em;color:var(--fg);text-transform:uppercase;line-height:1}
+.topbar h1 .unit{font-size:11px;font-weight:400;letter-spacing:.15em;color:var(--amber);vertical-align:3px;margin-left:-.15em}
 .pills{display:flex;gap:6px;margin-left:auto;align-items:center}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;font-size:11px;
   letter-spacing:1px;border-radius:2px;background:var(--sub);color:var(--muted);border:1px solid var(--bd2)}

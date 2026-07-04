@@ -259,8 +259,8 @@
   function tcolor(tid) { return TARGET_COLORS[((tid % 8) + 8) % 8]; }
   function pointStyle(v, snr) {
     var s = (typeof snr === "number" && isFinite(snr)) ? Math.max(0.3, Math.min(1, (snr - 12) / 28)) : 0.7;
-    if (Math.abs(v) < 0.2) return "rgba(0,212,255," + (s * 0.55) + ")";
-    return v > 0 ? "rgba(255,85,85," + s + ")" : "rgba(80,170,255," + s + ")";
+    if (Math.abs(v) < 0.2) return "rgba(150,157,168," + (s * 0.55) + ")";   /* static → titanium */
+    return v > 0 ? "rgba(255,85,85," + s + ")" : "rgba(80,170,255," + s + ")";  /* doppler in/out (functional) */
   }
 
   /* View range: default 100 m; jump to 250 m once a target is beyond 100 m, and to
@@ -294,20 +294,20 @@
     /* rings + labels (100 m ring shown amber when it lands on a ring) */
     for (var i = 1; i <= 4; i++) {
       var ringM = viewRangeM * i / 4, ref = Math.abs(ringM - 100) < 0.5;
-      ctx.strokeStyle = ref ? "rgba(255,170,60,0.55)" : "rgba(0,212,255,0.15)"; ctx.lineWidth = (ref ? 1.4 : 1) * dpr;
+      ctx.strokeStyle = ref ? "rgba(193,161,115,0.6)" : "rgba(150,157,168,0.16)"; ctx.lineWidth = (ref ? 1.4 : 1) * dpr;
       ctx.beginPath(); ctx.arc(cx, cy, maxR * i / 4, Math.PI, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = ref ? "rgba(255,190,90,0.9)" : "rgba(180,220,240,0.55)";
+      ctx.fillStyle = ref ? "rgba(216,189,144,0.9)" : "rgba(170,175,185,0.55)";
       ctx.fillText(ringM.toFixed(0) + " m", cx + 5 * dpr, cy - maxR * i / 4 + 13 * dpr);
     }
     /* FOV wedge from the daemon's live fov_half_deg (tracks the FOV knob) + boresight */
     var fovDeg = (radar && typeof radar.fov_half_deg === "number") ? radar.fov_half_deg : 90;
     var fr = fovDeg * Math.PI / 180;
-    ctx.fillStyle = "rgba(0,212,255,0.07)"; ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.fillStyle = "rgba(150,157,168,0.06)"; ctx.beginPath(); ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, maxR, -Math.PI / 2 - fr, -Math.PI / 2 + fr, false); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "rgba(0,212,255,0.22)"; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.strokeStyle = "rgba(150,157,168,0.24)"; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
     [-1, 1].forEach(function (s) { var a = -Math.PI / 2 + s * fr; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * maxR, cy + Math.sin(a) * maxR); ctx.stroke(); });
     ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(0,212,255,0.45)"; ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = "rgba(150,157,168,0.5)"; ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - maxR); ctx.stroke(); ctx.lineWidth = dpr;
 
     if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
