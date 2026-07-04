@@ -35,7 +35,7 @@ flag:
 
 ## Profile — `cfg/awr2944P_ag.cfg` (A/G long-range, DCA-free)
 
-`profileCfg 0 77 12 7 27.5 0 0 4.5 0 384 30000 0 0 164`
+`profileCfg 0 77 7 7 27.5 0 0 4.5 0 384 30000 0 0 164`
 
 | Quantity | Value |
 |---|---|
@@ -50,7 +50,7 @@ flag:
 | MIMO | DDMA, 4TX/4RX |
 | Azimuth FOV | **±90°** in cfg (full span; useful AoA ~±60°) |
 | LVDS | **off** (`lvdsStreamCfg -1 0 0 0`) |
-| Frame period | **33.33 ms → 30 Hz** (was 50 ms/20 Hz; period-only change) |
+| Frame period | **40 ms → 25 Hz** (30 Hz measured infeasible at full dwell) |
 
 **Publish-max, filter-in-GUI.** The cfg is deliberately *permissive* — CFAR at
 its 17 dB floor and FOV at full span — so the chip emits the **most** points it
@@ -86,12 +86,16 @@ The frame budget:
 | idle 12 µs | 30.3 ms | ~3.0 ms |
 | idle 7 µs  | 26.5 ms | ~6.8 ms |
 
-**Observed:** 30 Hz at idle 12 µs (~3 ms gap) was pushed cleanly but produced
-**no frames** — the DSP needs more than that gap, so the margin went negative
-and the frame engine never launched. idle 7 µs widens the gap to ~6.8 ms. Read
-`dsp_proc_ms` at any streaming rate (e.g. 20 Hz) to know the *exact* DSP time,
-then the max frame rate for a given dwell is `1000 / (dwell_ms + dsp_proc_ms)`
-— no trial and error.
+**Measured 2026-07-04:** 30 Hz produced **no frames at both idle settings** —
+idle 12 µs (~3 ms gap) *and* idle 7 µs (~6.8 ms gap). Both pushed cleanly and
+the chip accepted the cfg, but the data port stayed silent: the DSP interframe
+time exceeds even 6.8 ms, so the margin is negative and the frame engine never
+launches. **25 Hz (40 ms, ~13.5 ms gap) is the shipped rate** — full dwell, all
+integration gain, streams with margin. Read `dsp_proc_ms`/`dsp_margin_ms` from
+`/stats` at 25 Hz to know the *exact* DSP time; the max frame rate for a given
+dwell is then `1000 / (dwell_ms + dsp_proc_ms)`, no trial and error. To push
+past 25 Hz without cutting chirps, trim the wasted ramp (see below) — check the
+chip's interchirp margin first.
 
 **40 Hz** (25 ms period) would need the dwell cut below 25 ms — i.e. fewer
 Doppler loops — which *does* cost velocity resolution + ~1–3 dB sensitivity
