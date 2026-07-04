@@ -1,14 +1,16 @@
 # Radar module — status & future work
 
-## Status (2026-07-02)
+## Status (2026-07-04)
 
 Working and **verified on the board**: aarch64 build, cfg push, 3.125 Mbaud
-UART, **20 Hz / 0 dropped frames**, per-point **SNR live** (~16–50 dB),
+UART, **26 Hz / 0 dropped frames** (zero-compromise dead-time trim — see
+[`FRAMERATE.md`](FRAMERATE.md)), per-point **SNR live** (~16–50 dB), the chip's
+own DSP timing surfaced in `/stats` (`dsp_proc_ms`/`dsp_margin_ms`),
 range-adaptive DBSCAN → class-less per-frame boxes, SSE previewer with a live
 tuning panel (6 live `/ctl` knobs: ε / min-pts / min-speed / min-SNR / FOV /
-doppler gate). Detections are
-class-less; no coasting (that's the tracking module's job). See
-[`README.md`](../README.md).
+doppler gate). Consumed end-to-end by the GUI (`app/radar_client.c` → `:8092`).
+Detections are class-less; no coasting (that's the tracking module's job). Daemon
+runs at ~1.9% CPU / ~1 MB RSS. See [`README.md`](../README.md).
 
 ## Future work — ordered by value / readiness
 
@@ -37,10 +39,14 @@ to detect farther, and lean on a host `min SNR` gate + SNR-weighted cluster
 centroids to keep false alarms down. Requires a power-cycle to re-push a lower
 CFAR cfg; measure human detection range before/after.
 
-### 5. Frame rate → ~30 Hz (small, HW-gated)
-Tighten `frameCfg` period toward the ~30 ms active dwell (N=384 / 128 loops
-unchanged, so no sensitivity loss). Needs a power-cycle re-push and a DSP-
-headroom check (0 dropped frames). See [`FIRMWARE.md`](FIRMWARE.md).
+### 5. Frame rate — 26 Hz SHIPPED; 30 Hz+ is firmware, and parked
+**Done:** 26 Hz via a zero-compromise dead-time trim (idle/ramp), 0 drops. The
+profile is DSP-bound at ~17 ms/frame (measured), so 25/30 Hz at the old timing
+gave *zero* frames — the earlier "just tighten the period" idea was wrong. 30 Hz
+clean needs a small firmware DSP trim; 40 Hz is a firmware stretch; 50–60 Hz is
+impossible at full dwell. **Firmware frame-rate work is parked** — reflash only
+earns its keep for *better detection*, never for Hz. Full analysis + the Phase-0
+(measure the 17 ms split) recipe in [`FRAMERATE.md`](FRAMERATE.md).
 
 ### 6. On-chip Group Tracker (gtrack) — the one real remaining firmware item
 Link TI's gtrack into our custom firmware so the chip emits target boxes
