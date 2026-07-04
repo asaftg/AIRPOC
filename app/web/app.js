@@ -155,8 +155,10 @@
   function targets(radar) {
     if (!radar || !radar.targets) return [];
     return radar.targets.map(function (t) {
-      return { tid: t.tid, x: t.x, y: t.y, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, conf: t.conf,
-               rng: Math.hypot(t.x, t.y), az: Math.atan2(t.x, t.y) * 180 / Math.PI };
+      return { tid: t.tid, x: t.x, y: t.y, z: t.z, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, conf: t.conf,
+               rng: Math.hypot(t.x, t.y),
+               az: Math.atan2(t.x, t.y) * 180 / Math.PI,                 /* azimuth from radar */
+               el: Math.atan2(t.z || 0, Math.hypot(t.x, t.y)) * 180 / Math.PI };  /* elevation from radar z */
     });   /* no client filtering — the daemon gates points/clusters server-side now */
   }
   /* AUTO priority: fused (EO+radar) first [pending detector], then nearer, then conf. */
@@ -218,15 +220,19 @@
     [[m, m, 1, 1], [w - m, m, -1, 1], [m, h - m, 1, -1], [w - m, h - m, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * L); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * L, c[1]); ctx.stroke(); });
     ctx.globalAlpha = 1;
 
-    /* engaged-target lock projected into the EO frame via camera hfov */
-    var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
+    /* engaged-target lock projected into the EO frame from the RADAR's azimuth (→ x, via
+     * camera hfov) AND elevation (→ y, via camera vfov). The radar owns both angles; we
+     * only map them to pixels. Off-frame → an edge arrow pointing the true 2-D direction. */
+    var es = lastStats.eo || {};
+    var eoHfov = es.hfov || 0, eoVfov = es.vfov || (eoHfov * 0.75);   /* 4:3 fallback */
     if (engagedTid !== null && eoHfov) {
       var t = targets(lastRadar).filter(function (x) { return x.tid === engagedTid; })[0];
       if (t) {
-        var half = eoHfov / 2;
-        if (Math.abs(t.az) <= half) {
-          var lx = cx + (t.az / half) * (w / 2), ly = h * 0.5;
-          var bw = 72 * dpr, bh = 92 * dpr, col = css("--on");
+        var fx = t.az / (eoHfov / 2), fy = -t.el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
+        var col = css("--on");
+        if (Math.abs(fx) <= 1 && Math.abs(fy) <= 1) {
+          var lx = cx + fx * (w / 2), ly = cy + fy * (h / 2);
+          var bw = 72 * dpr, bh = 92 * dpr;
           ctx.strokeStyle = col; ctx.lineWidth = 2 * dpr;
           var cc = 14 * dpr, x0 = lx - bw / 2, y0 = ly - bh / 2;
           [[x0, y0, 1, 1], [x0 + bw, y0, -1, 1], [x0, y0 + bh, 1, -1], [x0 + bw, y0 + bh, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
@@ -234,9 +240,12 @@
           ctx.fillStyle = col; ctx.font = (11 * dpr) + "px ui-monospace, monospace";
           ctx.fillText("LOCK #" + t.tid + "  " + t.rng.toFixed(0) + " m", x0, y0 - 4 * dpr);
         } else {
-          var dir = t.az > 0 ? 1 : -1, ex = cx + dir * (w / 2 - 24 * dpr);
-          ctx.fillStyle = css("--on"); ctx.globalAlpha = 0.9; ctx.beginPath();
-          ctx.moveTo(ex, cy); ctx.lineTo(ex - dir * 16 * dpr, cy - 10 * dpr); ctx.lineTo(ex - dir * 16 * dpr, cy + 10 * dpr); ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+          var ex = cx + Math.max(-1, Math.min(1, fx)) * (w / 2 - 24 * dpr);
+          var ey = cy + Math.max(-1, Math.min(1, fy)) * (h / 2 - 24 * dpr);
+          ctx.fillStyle = col; ctx.globalAlpha = 0.9;
+          ctx.save(); ctx.translate(ex, ey); ctx.rotate(Math.atan2(fy, fx));
+          ctx.beginPath(); ctx.moveTo(15 * dpr, 0); ctx.lineTo(-11 * dpr, -10 * dpr); ctx.lineTo(-11 * dpr, 10 * dpr); ctx.closePath(); ctx.fill();
+          ctx.restore(); ctx.globalAlpha = 1;
         }
       }
     }
