@@ -35,11 +35,10 @@ body.day{
 /* ── topbar ── */
 .topbar{display:flex;align-items:center;gap:18px;height:48px;padding:0 16px;
   background:linear-gradient(to bottom,var(--head),var(--bg));border-bottom:1px solid var(--bd)}
-/* FAZE wordmark: thin, wide-tracked, uppercase, bone (approximates the brand logotype
- * with system fonts — the console ships no external font files). */
-.topbar h1{margin:0;font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;font-weight:200;
-  font-size:23px;letter-spacing:.52em;padding-left:.52em;color:var(--fg);text-transform:uppercase;line-height:1}
-.topbar h1 .unit{font-size:11px;font-weight:400;letter-spacing:.15em;color:var(--amber);vertical-align:3px;margin-left:-.15em}
+/* FAZE wordmark — the actual brand logo, embedded (bg keyed out) as the title. */
+.topbar h1{margin:0;display:flex;align-items:center;gap:10px;line-height:1}
+.topbar h1 .wordmark{height:22px;width:auto;display:block}
+.topbar h1 .unit{font-size:11px;font-family:ui-monospace,monospace;letter-spacing:.15em;color:var(--amber)}
 .pills{display:flex;gap:6px;margin-left:auto;align-items:center}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;font-size:11px;
   letter-spacing:1px;border-radius:2px;background:var(--sub);color:var(--muted);border:1px solid var(--bd2)}
