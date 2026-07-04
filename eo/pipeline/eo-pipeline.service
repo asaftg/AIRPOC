@@ -1,0 +1,32 @@
+# AIRPOC EO pipeline — systemd unit (production run).
+#
+# Runs libeo/eo_pipeline from the PERSISTENT clone (not /tmp), on boot, and
+# auto-restarts if it ever exits — e.g. the single-owner camera was momentarily
+# grabbed. This is what makes the EO feed reliable: no manual bounces, no stale
+# binaries, survives reboots.
+#
+# Install (once, on the Jetson):
+#   cd ~/AIRPOC/eo/pipeline && make                      # build libeo.a + eo_pipeline
+#   sudo cp eo-pipeline.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now eo-pipeline
+# Update after a git pull:
+#   cd ~/AIRPOC/eo/pipeline && git pull && make && sudo systemctl restart eo-pipeline
+# Logs:  journalctl -u eo-pipeline -f
+
+[Unit]
+Description=AIRPOC EO pipeline (libeo: IMX296 capture + AE + ISP + MJPEG preview :8091)
+After=network.target
+
+[Service]
+Type=simple
+User=asaftg
+WorkingDirectory=/home/asaftg/AIRPOC/eo/pipeline
+ExecStart=/home/asaftg/AIRPOC/eo/pipeline/eo_pipeline -d /dev/video0 -p 8091 -i /dev/ttyUSB0
+Restart=always
+RestartSec=2
+# don't hammer if the camera is held for a while
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

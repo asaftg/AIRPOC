@@ -1,8 +1,8 @@
 # EO Image Pipeline (ISP + AE)
 
 How a raw Y10 frame becomes a clean, well-exposed image. The **shipping implementation
-is the C module `libeo`** (`eo/pipeline/`); the Python tool (`eo/tools/`) was the
-validated reference it was ported from. It runs on the Orin Nano Super's A78 cores —
+is the C module `libeo`** (`eo/pipeline/`), ported from a validated Python bench
+reference (since retired — see git history). It runs on the Orin Nano Super's A78 cores —
 CUDA was not needed; C at native res holds the frame budget.
 
 ## Pipeline (in `libeo`, per finished frame)

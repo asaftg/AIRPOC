@@ -83,6 +83,14 @@ make                 # -> libeo.a (the module) + eo_pipeline (the preview)
 make libeo.a         # just the linkable module (what the GUI links)
 ./eo_pipeline -d /dev/video0 -p 8091 -i /dev/ttyUSB0   # -i = illuminator port (optional)
 ```
+**Production run — as a service** (boot-persistent + auto-restart; the reliable way):
+```bash
+sudo cp eo-pipeline.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now eo-pipeline
+journalctl -u eo-pipeline -f      # logs
+```
+Runs from this persistent clone (not `/tmp`) and `Restart=always` brings it back if the
+single-owner camera is briefly grabbed — no stale binaries, no manual bounces.
 
 ## Design notes
 - **Copy the frame out of the V4L2 mmap before processing.** The DMA buffer is
@@ -108,8 +116,9 @@ make libeo.a         # just the linkable module (what the GUI links)
 - **Detector raw tap** — an `eo_latest_raw()` handing the full-native **linear Y10**
   (the detector wants linear sensor data, not the human tone-map). ~2-line add; the data
   already flows inside libeo.
-- **systemd unit** to run `eo_pipeline`/the module owner at boot and retire the Python
-  bench preview from the device.
+- **Camera-drop resilience in-process** — currently `Restart=always` (systemd) handles a
+  dropped/held camera by restarting; a nicer refinement is an in-process reopen-retry so
+  the process never exits. Low priority given the service already auto-recovers.
 
 ## Status
 > `-Wall -Wextra` clean; `libeo.a` + `eo_pipeline` built and verified on the Orin Nano

@@ -23,10 +23,8 @@ Detail docs: [pipeline](pipeline/README.md) · [contract](pipeline/INTEGRATION.m
         ▼
  Tegra NVCSI ─► VI5 (nv_imx296 advertises Y10) ─► /dev/video0   [Y10, 60 fps]
         │
-        ├─► eo/pipeline/   PRODUCTION C: capture + AE + ISP → detector + MJPEG :8091
-        ├─► preview tool   eo/tools/imx296_preview.py   (bench: i2c AE + ISP → :8091)
-        ├─► focus tool     eo/tools/imx296_focus_web.py (bench: sharpness → :8090)
-        └─► MJPEG stream   eo/streaming/                (bench: low-latency UDP/RTP)
+        └─► eo/pipeline/  libeo (C): capture + AE + ISP → detector (full native)
+                                                        └─► preview/GUI: MJPEG :8091
 ```
 
 | Layer | Implementation | State |
@@ -84,10 +82,8 @@ stats overlay (fps/exposure/duty/gain/FOV), **digital zoom 1–8×**, a **focus*
 controls** (laser on/off, beam power, beam FOV). Full UI + endpoints:
 [`pipeline/README.md`](pipeline/README.md).
 
-### Bench tools (Python — diagnostic only, not shipped)
-```bash
-bash eo/tools/preview.sh          # AE/ISP preview  :8091   (superseded by eo/pipeline)
-bash eo/tools/focus.sh            # standalone focus assist :8090
-bash eo/streaming/imx296_stream.sh <your-ip> 5000   # low-latency MJPEG over UDP/RTP
-```
 Detail: [IMAGE_PIPELINE](docs/IMAGE_PIPELINE.md) · [FOCUS](docs/FOCUS.md) · [STREAMING](docs/STREAMING.md).
+
+> The earlier Python bench tools (`eo/tools/`, `eo/streaming/`) were retired once the C
+> `libeo`/`eo_pipeline` superseded them (preview, focus, AE, ISP all live there). They're
+> in git history if ever needed for reference.
