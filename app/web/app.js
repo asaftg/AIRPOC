@@ -376,13 +376,18 @@
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       $("v-link").textContent = num(d.mbps, 1); $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
-      /* live EO telemetry on the EO display: EFFECTIVE resolution (actual sensor detail
-       * in view) + zoom + FOV on line 1; sensor fps/exposure/gain on line 2. Digital zoom
-       * crops 1/zoom of the sensor, so real detail = min(stream size, native/zoom) — at
-       * 8x on 1440 you're seeing ~180 px upscaled, not 1440. */
-      var z = eo.zoom || 1, NATW = 1440, NATH = 1088, resStr = "—";
-      if (eo.dw && eo.dh) resStr = Math.min(eo.dw, Math.round(NATW / z)) + "×" + Math.min(eo.dh, Math.round(NATH / z));
-      $("eo-tl").textContent = "EO · " + resStr + " · " + z.toFixed(1) + "× · FOV " + num(hfov, 1, "°") + "\n"
+      /* live EO telemetry on the EO display: EFFECTIVE resolution (real sensor detail in
+       * view) + zoom + FOV on line 1; sensor fps/exposure/gain on line 2. Prefer the feed's
+       * own eff_w/eff_h (authoritative = min(stream size, native/zoom)); a "·lim" flag marks
+       * when the sensor crop (not your quality pick) is the limit. */
+      var z = eo.zoom || 1, resStr = "—", lim = "";
+      if (typeof eo.eff_w === "number" && typeof eo.eff_h === "number") {
+        resStr = eo.eff_w + "×" + eo.eff_h;
+        if (eo.dw && eo.eff_w < eo.dw) lim = " ·lim";     /* crop-limited, not quality-limited */
+      } else if (eo.dw && eo.dh) {
+        resStr = Math.min(eo.dw, Math.round(1440 / z)) + "×" + Math.min(eo.dh, Math.round(1088 / z));
+      }
+      $("eo-tl").textContent = "EO · " + resStr + lim + " · " + z.toFixed(1) + "× · FOV " + num(hfov, 1, "°") + "\n"
         + num(eo.fps, 0, " fps") + " · exp " + num(eo.exp_ms, 1, " ms") + " · gain " + num(eo.gain, 0) + (eo.ae ? " · AUTO" : " · MAN");
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
       $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cam").textContent = "—";
