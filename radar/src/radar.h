@@ -40,6 +40,20 @@ typedef struct {
     int   num_points;             /* hits accumulated */
 } RadarTarget;
 
+/* Per-frame timing the chip measures and reports in the stats TLV (type 6,
+ * MmwDemo_output_message_stats). This is the ground truth for "how fast can we
+ * run the frame": the DSP must finish interframe_proc within the inter-frame
+ * gap (period - active). interframe_margin is the chip's own spare-time figure;
+ * it going toward zero is what caps the frame rate, not any duty-cycle guess. */
+typedef struct {
+    double interframe_proc_us;    /* DSP range/Doppler/CFAR/AoA time per frame */
+    double transmit_out_us;       /* time to ship the output TLVs */
+    double interframe_margin_us;  /* spare time before the next frame (chip-reported) */
+    double interchirp_margin_us;  /* spare time between chirps */
+    double active_cpu_pct;        /* CPU load during active (chirping) phase */
+    double interframe_cpu_pct;    /* CPU load during inter-frame phase */
+} RadarStats;
+
 /* A fully parsed + clustered frame, ready to serialise. */
 typedef struct {
     uint32_t    frame_number;     /* chip frameNumber — gaps == dropped frames */

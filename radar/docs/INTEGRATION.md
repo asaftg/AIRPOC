@@ -10,7 +10,7 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 | GET | `/` | the standalone PPI previewer (works on its own) |
 | GET | `/radar_view.js` | the previewer script (reference renderer) |
 | GET | `/stream` | **SSE** — one `data: <frame-json>\n\n` per radar frame |
-| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db, fov_half_deg, doppler_gate_mps}` |
+| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db, fov_half_deg, doppler_gate_mps, dsp_valid, dsp_proc_ms, dsp_margin_ms, active_cpu_pct, interframe_cpu_pct}` |
 | GET | `/ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` | set the host clustering live → `200 ok` |
 
 ## Live controls — `/ctl` (the 6 tuning knobs)
@@ -33,6 +33,15 @@ keeps its current value. All are clamped server-side.
 `doppler_gate_mps` — initialise the sliders from `/stats` on load, don't assume
 defaults. Changes take effect on the **next frame** — a box that stops
 clustering disappears immediately (no coasting).
+
+## Chip DSP timing in `/stats` (frame-rate health)
+
+`/stats` also reports the chip's own per-frame timing, parsed from the stats TLV
+(type 6): `dsp_proc_ms` (DSP range/Doppler/CFAR/AoA time), `dsp_margin_ms`
+(spare time before the next frame — **the frame-rate ceiling; must stay > 0**),
+`active_cpu_pct`, `interframe_cpu_pct`, and `dsp_valid` (`false` until the first
+stats TLV arrives, then `true`). Surface `dsp_margin_ms` as a health readout —
+if it trends to ~0 the frame period is too aggressive and frames will drop.
 
 ## Frame JSON (the `/stream` payload)
 

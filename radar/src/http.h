@@ -23,6 +23,12 @@ void http_set_stats(double fps, unsigned long drops, int n_points,
                     int n_targets, int connected, const char *profile,
                     double max_range_m, double fov_half_deg);
 
+/* Publish the chip's per-frame DSP timing (TLV 6) for /stats. This is the
+ * ground truth for frame-rate headroom: margin_us going to zero is what caps
+ * the rate. Call only when a stats TLV was actually seen. */
+void http_set_timing(double dsp_proc_us, double dsp_margin_us,
+                     double active_cpu_pct, double interframe_cpu_pct);
+
 /* Register the handler for GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=.
  * Called with the parsed values on each /ctl hit; `user` passed back verbatim. */
 void http_set_ctl_cb(void (*cb)(double eps_m, int min_pts, double speed_min,

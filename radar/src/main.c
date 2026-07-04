@@ -67,7 +67,8 @@ typedef struct {
 } Ctx;
 
 /* Called once per complete radar frame by the parser. */
-static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n) {
+static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n,
+                     const RadarStats *stats) {
     Ctx *c = user;
     double t = now_s();
     double dt = c->last_t > 0 ? (t - c->last_t) : 0.05;
@@ -101,6 +102,9 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
     http_publish(c->json, (size_t)len);
     http_set_stats(c->fps, c->drops, c->frame.n_points, c->frame.n_targets,
                    1, c->profile, AG_MAX_RANGE_M, fov);
+    if (stats)
+        http_set_timing(stats->interframe_proc_us, stats->interframe_margin_us,
+                        stats->active_cpu_pct, stats->interframe_cpu_pct);
 }
 
 int main(int argc, char **argv) {

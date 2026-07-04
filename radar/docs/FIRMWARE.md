@@ -63,23 +63,40 @@ work today** (every point carries `snr` in dB and `az`).
 Human baseline on this profile: a walking person is visible to **~100 m**
 (dynamic returns only). Vehicles/drones reach farther (larger RCS).
 
-## Frame rate — 30 Hz (period-only change)
+## Frame rate — the real limit is DSP margin, and the chip reports it
 
-Active chirping is ~30.3 ms. The shipped `frameCfg` period is **33.33 ms → 30
-Hz**, changed from 50 ms/20 Hz. **Only field 6 (framePeriodicity) changed** —
-N=384, 128 loops, all chirps/TX identical — so range, range-resolution,
-sensitivity and velocity-resolution are **unchanged by construction**. Frame
-rate never touches max range or range resolution (those are set by
-slope/bandwidth/ADC, not frame timing).
+Raising fps by shortening the frame period is safe for detection: range,
+range-resolution, integration gain and velocity-resolution are all set by
+slope / bandwidth / ADC / dwell — **not** by frame timing. Field 6
+(framePeriodicity) alone never touches them.
 
-The only cost is DSP margin: ~30.3 ms active in a 33.33 ms frame ≈ **91 % duty**.
-On-board confirmation is just "does it stream at ~30 Hz with `/stats.drops` = 0";
-if not, back off the period (e.g. 40 ms → 25 Hz) or drop `idleTime` 12→7 µs
-(free now — that 12 was an LVDS leftover) to shorten the active dwell.
+The only thing shortening the period spends is **inter-frame DSP time**. Each
+frame the chip must finish range/Doppler FFT + CFAR + AoA in the gap between the
+end of active chirping and the next frame. The chip **measures this itself** and
+ships it in the **stats TLV (type 6)** — `interFrameProcessingTime` and
+`interFrameProcessingMargin`. The daemon now parses it and exposes it in
+`/stats` as **`dsp_proc_ms`** and **`dsp_margin_ms`** (plus `active_cpu_pct` /
+`interframe_cpu_pct`). **`dsp_margin_ms` going to zero is the frame-rate
+ceiling — measured, not guessed.**
 
-**40 Hz** would need the dwell cut below the 25 ms frame — i.e. fewer Doppler
-loops — which *does* cost velocity resolution + ~1–3 dB sensitivity (range and
-range-resolution still unaffected). Only worth it for tracking fast movers.
+The frame budget:
+
+| Config | Active dwell | Period 33.33 ms → gap for DSP |
+|---|---|---|
+| idle 12 µs | 30.3 ms | ~3.0 ms |
+| idle 7 µs  | 26.5 ms | ~6.8 ms |
+
+**Observed:** 30 Hz at idle 12 µs (~3 ms gap) was pushed cleanly but produced
+**no frames** — the DSP needs more than that gap, so the margin went negative
+and the frame engine never launched. idle 7 µs widens the gap to ~6.8 ms. Read
+`dsp_proc_ms` at any streaming rate (e.g. 20 Hz) to know the *exact* DSP time,
+then the max frame rate for a given dwell is `1000 / (dwell_ms + dsp_proc_ms)`
+— no trial and error.
+
+**40 Hz** (25 ms period) would need the dwell cut below 25 ms — i.e. fewer
+Doppler loops — which *does* cost velocity resolution + ~1–3 dB sensitivity
+(range and range-resolution still unaffected). Only worth it for fast movers.
 
 > Do **not** raise fps by cutting `numLoops`/`numAdcSamples` — that trades away
-> the very gain that holds a weak, slow human at range.
+> the very gain that holds a weak, slow human at range. Shorten idle/period, or
+> accept a lower rate; never cut the integration.

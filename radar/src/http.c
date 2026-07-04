@@ -37,6 +37,9 @@ static struct {
     unsigned long drops;
     int n_points, n_targets, connected;
     char profile[64];
+    /* chip-reported per-frame DSP timing (TLV 6); have_timing=0 until seen */
+    double dsp_proc_us, dsp_margin_us, active_cpu_pct, interframe_cpu_pct;
+    int have_timing;
 } g_stat;
 
 void http_publish(const char *json, size_t len) {
@@ -64,6 +67,17 @@ void http_set_stats(double fps, unsigned long drops, int n_points,
     g_stat.connected = connected;
     g_stat.max_range_m = max_range_m; g_stat.fov_half_deg = fov_half_deg;
     snprintf(g_stat.profile, sizeof(g_stat.profile), "%s", profile ? profile : "");
+    pthread_mutex_unlock(&g_lock);
+}
+
+void http_set_timing(double dsp_proc_us, double dsp_margin_us,
+                     double active_cpu_pct, double interframe_cpu_pct) {
+    pthread_mutex_lock(&g_lock);
+    g_stat.dsp_proc_us = dsp_proc_us;
+    g_stat.dsp_margin_us = dsp_margin_us;
+    g_stat.active_cpu_pct = active_cpu_pct;
+    g_stat.interframe_cpu_pct = interframe_cpu_pct;
+    g_stat.have_timing = 1;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -102,17 +116,22 @@ static void *client(void *arg) {
 
     if (!strncmp(req, "GET /stats", 10)) {
         pthread_mutex_lock(&g_lock);
-        char body[512];
+        char body[768];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"drops\":%lu,\"num_points\":%d,\"num_targets\":%d,"
             "\"connected\":%s,\"profile\":\"%s\",\"max_range_m\":%.1f,"
             "\"cluster_eps_m\":%.2f,\"cluster_min_pts\":%d,"
             "\"speed_min_mps\":%.2f,\"snr_min_db\":%.1f,"
-            "\"fov_half_deg\":%.1f,\"doppler_gate_mps\":%.2f}\n",
+            "\"fov_half_deg\":%.1f,\"doppler_gate_mps\":%.2f,"
+            "\"dsp_valid\":%s,\"dsp_proc_ms\":%.3f,\"dsp_margin_ms\":%.3f,"
+            "\"active_cpu_pct\":%.0f,\"interframe_cpu_pct\":%.0f}\n",
             g_stat.fps, g_stat.drops, g_stat.n_points, g_stat.n_targets,
             g_stat.connected ? "true" : "false", g_stat.profile,
             g_stat.max_range_m, g_eps, g_minpts,
-            g_speed, g_snrmin, g_fov, g_dop);
+            g_speed, g_snrmin, g_fov, g_dop,
+            g_stat.have_timing ? "true" : "false",
+            g_stat.dsp_proc_us / 1000.0, g_stat.dsp_margin_us / 1000.0,
+            g_stat.active_cpu_pct, g_stat.interframe_cpu_pct);
         pthread_mutex_unlock(&g_lock);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);

@@ -24,9 +24,11 @@ void       tlv_stream_free(TLVStream *s);
 
 /* Callback invoked once per complete, sanity-checked frame. `points`/
  * `n_points` are the parsed DetectedPoints (with SideInfo applied if the
- * frame carried it); `frame_number` is the chip's frameNumber. */
+ * frame carried it); `frame_number` is the chip's frameNumber. `stats` is the
+ * chip's per-frame timing (TLV 6) or NULL if that frame carried no stats TLV. */
 typedef void (*tlv_frame_cb)(void *user, uint32_t frame_number,
-                             const RadarPoint *points, int n_points);
+                             const RadarPoint *points, int n_points,
+                             const RadarStats *stats);
 
 /* Append `n` bytes and drain all complete frames, invoking `cb` for each. */
 void tlv_stream_feed(TLVStream *s, const uint8_t *data, size_t n,

@@ -14,7 +14,9 @@ const uint8_t TLV_MAGIC[8] = {0x02, 0x01, 0x04, 0x03, 0x06, 0x05, 0x08, 0x07};
 #define MAX_BUFFER     (1 * 1024 * 1024)
 
 #define TLV_DETECTED_POINTS 1
+#define TLV_STATS           6   /* MmwDemo_output_message_stats: 6x u32 = 24 B */
 #define TLV_SIDE_INFO       7
+#define STATS_SIZE          24
 /* 308 TARGET_LIST / 309 TARGET_INDEX: emitted only by a gtrack-linked
  * firmware. Not produced by today's build; recognised, skipped. */
 
@@ -73,7 +75,8 @@ static long find_magic(const uint8_t *buf, size_t len) {
 /* Parse one complete packet at buf[0..plen). Fills points; returns
  * n_points (>=0) on success, -1 on a sanity failure. */
 static int parse_packet(const uint8_t *buf, size_t plen, uint32_t *frame_number,
-                        RadarPoint *out, int max_out) {
+                        RadarPoint *out, int max_out,
+                        RadarStats *stats_out, int *have_stats) {
     if (plen < ENVELOPE_SIZE) return -1;
     if (memcmp(buf, TLV_MAGIC, 8) != 0) return -1;
 
@@ -83,6 +86,7 @@ static int parse_packet(const uint8_t *buf, size_t plen, uint32_t *frame_number,
     uint32_t num_tlvs  = rd_u32(h + 24);
     if (total_len < ENVELOPE_SIZE || total_len > plen) return -1;
 
+    *have_stats = 0;
     int n_pts = 0;
     /* SideInfo is applied positionally on top of DetectedPoints. We fill
      * points first; if a SideInfo TLV follows, we overwrite snr/noise. */
@@ -120,8 +124,19 @@ static int parse_packet(const uint8_t *buf, size_t plen, uint32_t *frame_number,
                 out[i].snr   = rd_i16(rec)     * 0.1f;
                 out[i].noise = rd_i16(rec + 2) * 0.1f;
             }
+        } else if (type == TLV_STATS && tlen >= STATS_SIZE) {
+            /* Chip's own per-frame timing — the ground truth for frame-rate
+             * headroom. Six u32 (usec / percent), field order per the SDK's
+             * MmwDemo_output_message_stats. */
+            stats_out->interframe_proc_us   = (double)rd_u32(pl);
+            stats_out->transmit_out_us      = (double)rd_u32(pl + 4);
+            stats_out->interframe_margin_us = (double)rd_u32(pl + 8);
+            stats_out->interchirp_margin_us = (double)rd_u32(pl + 12);
+            stats_out->active_cpu_pct       = (double)rd_u32(pl + 16);
+            stats_out->interframe_cpu_pct   = (double)rd_u32(pl + 20);
+            *have_stats = 1;
         }
-        /* stats / temperature / other TLVs intentionally skipped. */
+        /* temperature / other TLVs intentionally skipped. */
     }
 
     *frame_number = frame_no;
@@ -162,9 +177,11 @@ void tlv_stream_feed(TLVStream *s, const uint8_t *data, size_t n,
         if (s->len < total_len) return;   /* full packet not arrived yet */
 
         uint32_t fn = 0;
-        int np = parse_packet(s->buf, total_len, &fn, pts, RADAR_MAX_POINTS);
+        RadarStats st; int have_st = 0;
+        int np = parse_packet(s->buf, total_len, &fn, pts, RADAR_MAX_POINTS,
+                              &st, &have_st);
         if (np < 0) { consume(s, 1); continue; }
         consume(s, total_len);
-        if (cb) cb(user, fn, pts, np);
+        if (cb) cb(user, fn, pts, np, have_st ? &st : NULL);
     }
 }
