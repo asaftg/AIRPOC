@@ -35,7 +35,7 @@ flag:
 
 ## Profile — `cfg/awr2944P_ag.cfg` (A/G long-range, DCA-free)
 
-`profileCfg 0 77 7 7 27.5 0 0 4.5 0 384 30000 0 0 164`
+`profileCfg 0 77 12 7 27.5 0 0 4.5 0 384 30000 0 0 164`
 
 | Quantity | Value |
 |---|---|
@@ -50,7 +50,7 @@ flag:
 | MIMO | DDMA, 4TX/4RX |
 | Azimuth FOV | **±90°** in cfg (full span; useful AoA ~±60°) |
 | LVDS | **off** (`lvdsStreamCfg -1 0 0 0`) |
-| Frame period | **40 ms → 25 Hz** (30 Hz measured infeasible at full dwell) |
+| Frame period | **50 ms → 20 Hz** (proven; 25/30 Hz gave no frames — DSP-bound, measuring) |
 
 **Publish-max, filter-in-GUI.** The cfg is deliberately *permissive* — CFAR at
 its 17 dB floor and FOV at full span — so the chip emits the **most** points it
@@ -86,16 +86,16 @@ The frame budget:
 | idle 12 µs | 30.3 ms | ~3.0 ms |
 | idle 7 µs  | 26.5 ms | ~6.8 ms |
 
-**Measured 2026-07-04:** 30 Hz produced **no frames at both idle settings** —
-idle 12 µs (~3 ms gap) *and* idle 7 µs (~6.8 ms gap). Both pushed cleanly and
-the chip accepted the cfg, but the data port stayed silent: the DSP interframe
-time exceeds even 6.8 ms, so the margin is negative and the frame engine never
-launches. **25 Hz (40 ms, ~13.5 ms gap) is the shipped rate** — full dwell, all
-integration gain, streams with margin. Read `dsp_proc_ms`/`dsp_margin_ms` from
-`/stats` at 25 Hz to know the *exact* DSP time; the max frame rate for a given
-dwell is then `1000 / (dwell_ms + dsp_proc_ms)`, no trial and error. To push
-past 25 Hz without cutting chirps, trim the wasted ramp (see below) — check the
-chip's interchirp margin first.
+**Measured 2026-07-04:** both 30 Hz (33.33 ms) *and* 25 Hz (40 ms) produced
+**no frames** — cfg pushed cleanly and the chip accepted it, but the data port
+stayed silent. 20 Hz (50 ms) is the only rate proven to stream. That pattern
+points to the profile being **DSP-bound**: the per-frame processing (N=384, 128
+loops, DDMA 4-TX + CFAR + AoA) likely needs ~14–19 ms, so the real ceiling is
+near ~22 Hz and 20 Hz was already close to it — *not* a duty-cycle margin issue
+as first assumed. **Confirm from the chip:** run 20 Hz, read `dsp_proc_ms` from
+`/stats`; the max sustainable rate is `1000 / (active_ms + dsp_proc_ms)`. If
+that's ≤ ~22 Hz, going faster requires **less DSP load** (fewer loops/samples =
+the integration trade), not a shorter period.
 
 **40 Hz** (25 ms period) would need the dwell cut below 25 ms — i.e. fewer
 Doppler loops — which *does* cost velocity resolution + ~1–3 dB sensitivity
