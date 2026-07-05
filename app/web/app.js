@@ -374,6 +374,16 @@
   /* ── polls ── */
   function num(v, dp, suf) { return (v === null || v === undefined) ? "—" : v.toFixed(dp) + (suf || ""); }
   function idle(el) { return document.activeElement !== el; }
+  /* 4-bar signal icon from RSSI (dBm), phone-style: >-55 great, -65 good, -72 fair, -82 weak */
+  function signalSVG(rssi) {
+    if (rssi === null || rssi === undefined) return "";
+    var bars = rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -72 ? 2 : rssi >= -82 ? 1 : 0;
+    var col = bars >= 3 ? css("--on") : bars === 2 ? css("--amber") : css("--err");
+    var hs = [4, 7, 10, 13], s = "";
+    for (var i = 0; i < 4; i++)
+      s += '<rect x="' + (i * 4) + '" y="' + (13 - hs[i]) + '" width="3" height="' + hs[i] + '" rx="0.6" fill="' + (i < bars ? col : css("--bd3")) + '"/>';
+    return '<svg width="15" height="13" viewBox="0 0 15 13" aria-label="signal">' + s + '</svg>';
+  }
 
   function poll() {
     fetch("/stats").then(function (r) { return r.json(); }).then(function (d) {
@@ -382,10 +392,11 @@
       var eoc = !!d.eo_connected;                        /* EO feed up + delivering? */
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
-      /* link chip: type · current/ceiling Mb/s · RSSI (wifi only). ceiling = negotiated PHY rate */
+      /* link chip: signal bars (wifi) · type · live Mb/s · delivered fps */
       $("v-ltype").textContent = d.link_type ? d.link_type.toUpperCase() : "LINK";
-      $("v-link").textContent = num(d.mbps, 1) + (d.link_mbps > 0 ? "/" + Math.round(d.link_mbps) : "") + " Mb/s";
-      $("v-rssi").textContent = (d.rssi_dbm != null) ? (d.rssi_dbm + " dBm") : "";
+      $("v-link").textContent = num(d.mbps, 1) + " Mb/s";
+      $("v-txfps").innerHTML = (d.tx_fps != null && d.mbps > 0.05) ? "&nbsp;·&nbsp;" + Math.round(d.tx_fps) + " fps" : "";
+      $("v-sig").innerHTML = signalSVG(d.rssi_dbm);
       $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
       /* live EO telemetry on the EO display: EFFECTIVE resolution (real sensor detail in

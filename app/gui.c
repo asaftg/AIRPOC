@@ -32,6 +32,7 @@ static int       g_listen_fd = -1;
 static volatile int g_track_man = 0;      /* tracking select: 0 auto / 1 manual */
 static volatile int g_engage    = -1;     /* engaged target tid, -1 = none       */
 static volatile unsigned long long g_stream_bytes = 0;  /* total video bytes relayed → true Mb/s meter */
+static volatile unsigned long long g_stream_frames = 0; /* total frames written to clients → delivered-fps meter */
 static char            g_wifi_if[32] = "";              /* WiFi iface name, or "" if none associated */
 static volatile double g_rssi = 0, g_link_mbps = -1;    /* RSSI dBm + negotiated PHY rate (Mb/s) */
 static pthread_t       g_net_th;
@@ -58,6 +59,20 @@ static double stream_mbps(void)
     double mbps = (prevt > 0 && now > prevt) ? (double)(cur - prev) * 8.0 / ((now - prevt) * 1e6) : 0.0;
     prev = cur; prevt = now;
     return mbps;
+}
+
+/* Frames per second actually WRITTEN to the operator's stream — the send loop skips to the
+ * newest frame and write() blocks on a slow link, so this is the delivered fps (drops below
+ * the 60 fps capture rate when the link can't keep up). */
+static double stream_fps(void)
+{
+    static unsigned long long prev = 0; static double prevt = 0;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    unsigned long long cur = g_stream_frames;
+    double fps = (prevt > 0 && now > prevt) ? (double)(cur - prev) / (now - prevt) : 0.0;
+    prev = cur; prevt = now;
+    return fps;
 }
 
 /* --- link status: wired vs WiFi, RSSI, and the negotiated PHY rate (the ceiling) --- */
@@ -156,12 +171,12 @@ static void handle_stats(int fd)
         ltype = "usb";
     }
 
-    char body[960];
+    char body[980];
     int bl = snprintf(body, sizeof body,
-        "{\"eo_connected\":%d,\"mbps\":%.2f,\"track\":\"%s\",\"engage\":%d,"
+        "{\"eo_connected\":%d,\"mbps\":%.2f,\"tx_fps\":%.0f,\"track\":\"%s\",\"engage\":%d,"
         "\"tracks\":%s,\"cpu_c\":%s,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
-        eoc, mbps, g_track_man ? "man" : "auto", g_engage,
+        eoc, mbps, stream_fps(), g_track_man ? "man" : "auto", g_engage,
         tracks_s, cpu_s, ltype, rssi_s, lrate_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
@@ -247,6 +262,7 @@ static void stream_mjpeg(int fd)
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", n);
         if (write(fd, part, pl) < 0 || write(fd, buf, n) < 0 || write(fd, "\r\n", 2) < 0) break;
         g_stream_bytes += (unsigned long long)(pl + n + 2);   /* true throughput meter */
+        g_stream_frames++;                                     /* delivered-fps meter */
     }
     free(buf);
 }
