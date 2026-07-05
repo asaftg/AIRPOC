@@ -7,7 +7,7 @@
 # A consumer (e.g. the GUI) links libeo.a and includes eo.h — nothing else.
 ILLUM   = ../../illuminator/src
 CC      ?= cc
-CFLAGS  ?= -O2 -Wall -Wextra -pthread -I$(ILLUM)
+CFLAGS  ?= -O3 -Wall -Wextra -pthread -I$(ILLUM)   # -O3: auto-vectorize the pixel loops
 LDLIBS   = -ljpeg -lpthread -lm
 
 # libeo = the frozen EO module: camera + capture + AE + ISP behind eo.h.
