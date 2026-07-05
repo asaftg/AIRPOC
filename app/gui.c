@@ -52,13 +52,14 @@ static double read_temp_c(const char *path)
  * time. Honest (accounts for res/fps/zoom/JPEG), unlike frame-size x fps guessing. */
 static double stream_mbps(void)
 {
-    static unsigned long long prev = 0; static double prevt = 0;
+    static unsigned long long prev = 0; static double prevt = 0, last = 0;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (prevt > 0 && now - prevt < 0.5) return last;   /* recompute over >=0.5s so /stats poll jitter can't make it blip to 0 */
     unsigned long long cur = g_stream_bytes;
-    double mbps = (prevt > 0 && now > prevt) ? (double)(cur - prev) * 8.0 / ((now - prevt) * 1e6) : 0.0;
+    last = (prevt > 0 && now > prevt) ? (double)(cur - prev) * 8.0 / ((now - prevt) * 1e6) : 0.0;
     prev = cur; prevt = now;
-    return mbps;
+    return last;
 }
 
 /* Frames per second actually WRITTEN to the operator's stream — the send loop skips to the
@@ -66,13 +67,14 @@ static double stream_mbps(void)
  * the 60 fps capture rate when the link can't keep up). */
 static double stream_fps(void)
 {
-    static unsigned long long prev = 0; static double prevt = 0;
+    static unsigned long long prev = 0; static double prevt = 0, last = 0;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (prevt > 0 && now - prevt < 0.5) return last;   /* >=0.5s window → stable, no blips */
     unsigned long long cur = g_stream_frames;
-    double fps = (prevt > 0 && now > prevt) ? (double)(cur - prev) / (now - prevt) : 0.0;
+    last = (prevt > 0 && now > prevt) ? (double)(cur - prev) / (now - prevt) : 0.0;
     prev = cur; prevt = now;
-    return fps;
+    return last;
 }
 
 /* --- link status: wired vs WiFi, RSSI, and the negotiated PHY rate (the ceiling) --- */

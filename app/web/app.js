@@ -395,9 +395,9 @@
       /* link chip: signal bars (wifi) · type · live Mb/s · delivered fps */
       $("v-ltype").textContent = d.link_type ? d.link_type.toUpperCase() : "LINK";
       $("v-link").textContent = num(d.mbps, 1) + " Mb/s";
-      $("v-txfps").innerHTML = (d.tx_fps != null && d.mbps > 0.05) ? "&nbsp;·&nbsp;" + Math.round(d.tx_fps) + " fps" : "";
+      $("v-txfps").innerHTML = (eoc && d.tx_fps != null) ? "&nbsp;·&nbsp;" + Math.round(d.tx_fps) + " fps" : "";
       $("v-sig").innerHTML = signalSVG(d.rssi_dbm);
-      $("p-link").classList.toggle("on", d.mbps > 0.05);
+      $("p-link").classList.add("on");   /* steady green while connected — catch() clears it if the poll fails */
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
       /* live EO telemetry on the EO display: EFFECTIVE resolution (real sensor detail in
        * view) + zoom + FOV on line 1; sensor fps/exposure/gain on line 2. Prefer the feed's
