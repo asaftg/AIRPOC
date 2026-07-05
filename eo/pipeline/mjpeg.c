@@ -23,12 +23,31 @@ static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
 static double          g_wire_fps = 0.0;   /* MEASURED emit rate (frames actually served) */
+static double          g_wire_last = 0.0;  /* last publish time (under g_lock)            */
 
 static double now_s(void)
 {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec / 1e9;
 }
+
+/* ---- parallel encode pool ----------------------------------------------------
+ * HARD REQUIREMENT: 60 fps on the wire at EVERY res/median setting. A single thread
+ * cannot JPEG a native 1440x1080 frame in <16.7 ms, so frames round-robin across
+ * ENC_WORKERS workers (each gets ENC_WORKERS frame-times per frame) and are published
+ * strictly in sequence order. Median (when on) runs in the worker too, so it
+ * parallelizes the same way instead of eating the producer's frame budget. */
+#define ENC_WORKERS 3
+#define ENC_SLOTS   4
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  work;                  /* a slot became ready              */
+    pthread_cond_t  done;                  /* a publish completed (order gate) */
+    struct { uint8_t *buf; int w, h; uint64_t seq; int state; } s[ENC_SLOTS];
+    uint64_t enq_seq;                      /* seq for the next enqueued frame  */
+    uint64_t pub_seq;                      /* seq allowed to publish next      */
+} E = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,
+        PTHREAD_COND_INITIALIZER, {{0}}, 0, 0 };
 
 /* Operator-selectable display size — all 4:3 so the GUI's video box never changes.
  * Detection is unaffected (the detector keeps the full-native frame in libeo). */
@@ -137,20 +156,74 @@ static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *l
     return out;                            /* caller frees */
 }
 
+/* Producer side: copy the finished display frame into a free slot and signal a worker.
+ * Never blocks the producer for the encode; the copy (<=1.5 MB) is ~0.2 ms. */
 void mjpeg_publish(const uint8_t *gray, int w, int h)
 {
-    unsigned long len = 0;
-    unsigned char *j = encode(gray, w, h, &len);
-    if (!j) return;
-    static double last = 0.0;                 /* measure the real emit rate here */
-    double t = now_s();
-    if (last > 0.0) { double inst = 1.0 / (t - last);
-                      g_wire_fps = g_wire_fps > 0 ? 0.9 * g_wire_fps + 0.1 * inst : inst; }
-    last = t;
-    pthread_mutex_lock(&g_lock);
-    free(g_jpeg);
-    g_jpeg = j; g_jpeg_len = len; g_seq++;
-    pthread_mutex_unlock(&g_lock);
+    pthread_mutex_lock(&E.lock);
+    int fi = -1;
+    for (int i = 0; i < ENC_SLOTS; i++) if (E.s[i].state == 0) { fi = i; break; }
+    if (fi < 0) { pthread_mutex_unlock(&E.lock); return; }   /* pool saturated: skip —
+        the wire-fps meter shows it; with 3 workers this doesn't happen when sized */
+    if (!E.s[fi].buf) E.s[fi].buf = malloc((size_t)EO_WIDTH * EO_HEIGHT);
+    if (!E.s[fi].buf) { pthread_mutex_unlock(&E.lock); return; }
+    memcpy(E.s[fi].buf, gray, (size_t)w * h);
+    E.s[fi].w = w; E.s[fi].h = h;
+    E.s[fi].seq = E.enq_seq++;
+    E.s[fi].state = 1;                                       /* ready */
+    pthread_cond_signal(&E.work);
+    pthread_mutex_unlock(&E.lock);
+}
+
+/* Encode worker: take the oldest ready slot, median (if on) + JPEG it, then publish
+ * strictly in sequence order (the gate keeps the MJPEG stream monotonic). */
+static void *enc_worker(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&E.lock);
+        int mi = -1;
+        for (;;) {
+            uint64_t best = 0;
+            mi = -1;
+            for (int i = 0; i < ENC_SLOTS; i++)
+                if (E.s[i].state == 1 && (mi < 0 || E.s[i].seq < best)) { mi = i; best = E.s[i].seq; }
+            if (mi >= 0) break;
+            pthread_cond_wait(&E.work, &E.lock);
+        }
+        E.s[mi].state = 2;                                   /* busy */
+        uint64_t myseq = E.s[mi].seq;
+        int w = E.s[mi].w, h = E.s[mi].h;
+        uint8_t *buf = E.s[mi].buf;
+        pthread_mutex_unlock(&E.lock);
+
+        if (eo_median_on()) isp_median3(buf, w, h);          /* parallelizes with encode */
+        unsigned long len = 0;
+        unsigned char *j = encode(buf, w, h, &len);
+
+        pthread_mutex_lock(&E.lock);                         /* in-order publish gate */
+        while (E.pub_seq != myseq) pthread_cond_wait(&E.done, &E.lock);
+        pthread_mutex_unlock(&E.lock);
+
+        if (j) {
+            pthread_mutex_lock(&g_lock);
+            double t = now_s();                              /* real emit rate, measured */
+            if (g_wire_last > 0.0) { double inst = 1.0 / (t - g_wire_last);
+                g_wire_fps = g_wire_fps > 0 ? 0.9 * g_wire_fps + 0.1 * inst : inst; }
+            g_wire_last = t;
+            free(g_jpeg);
+            g_jpeg = j; g_jpeg_len = len; g_seq++;
+            pthread_mutex_unlock(&g_lock);
+        }
+
+        pthread_mutex_lock(&E.lock);
+        E.s[mi].state = 0;                                   /* slot free again */
+        E.pub_seq = myseq + 1;
+        pthread_cond_broadcast(&E.done);                     /* wake order-waiters */
+        pthread_cond_signal(&E.work);
+        pthread_mutex_unlock(&E.lock);
+    }
+    return NULL;
 }
 
 static void *client(void *arg)
@@ -278,6 +351,10 @@ static void *server(void *arg)
 int mjpeg_start(int port)
 {
     pthread_t t;
+    for (int i = 0; i < ENC_WORKERS; i++) {              /* the 60fps-guarantee pool */
+        if (pthread_create(&t, NULL, enc_worker, NULL)) return -1;
+        pthread_detach(t);
+    }
     if (pthread_create(&t, NULL, server, (void *)(long)port)) return -1;
     pthread_detach(t);
     return 0;

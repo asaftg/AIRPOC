@@ -64,11 +64,11 @@ int main(int argc, char **argv)
             if (!disp || tw != dw || th != dh) { free(disp); disp = malloc((size_t)tw * th); dw = tw; dh = th; }
             if (disp) {
                 /* crop(zoom, 4:3) + downscale + tone-map the RAW straight to display res —
-                 * one pass, no full-native intermediate. Then median on the small frame. */
+                 * one pass, no full-native intermediate. Median + JPEG happen in the
+                 * encode worker pool (mjpeg.c), so this loop always holds the frame rate. */
                 int cx, cy, cw, ch;
                 zoom_crop_43(w, h, mjpeg_zoom(), dw, dh, &cx, &cy, &cw, &ch);
                 isp_scale_tonemap(buf, stride, cx, cy, cw, ch, disp, dw, dh);
-                if (eo_median_on()) isp_median3(disp, dw, dh);
                 mjpeg_publish(disp, dw, dh);
             }
         } else {

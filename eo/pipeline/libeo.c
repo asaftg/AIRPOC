@@ -26,7 +26,8 @@ static volatile int g_man_gain = 40;
 static volatile int g_man_exp  = EO_MAX_EXP_LINES;   /* ~16.5 ms */
 static volatile int g_man_vmax = EO_VMAX_MIN;        /* 60 fps   */
 static volatile int g_gaincap  = EO_GAIN_CAP;
-static volatile int g_median   = 0;   /* OFF by default — image is clean at low gain; +0.25 core, -5 fps when on */
+static volatile int g_median   = 1;   /* ON by default (operator requirement). Runs inside the
+                                       * encode workers, so it parallelizes — 60 fps holds. */
 static double       g_focus    = 0.0;
 
 /* raw full-native frame -> consumer (triple buffer = zero-copy latest) */
