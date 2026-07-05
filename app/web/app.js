@@ -518,8 +518,8 @@
   $("dlg-x").onclick = closeSaveDialog;   /* dismiss leaves the session pending */
   $("dlg-save").onclick = function () {
     if (!pendingSid) return;
-    var tags = [].slice.call(document.querySelectorAll("#dlg-tags .tagchip.on")).map(function (c) { return c.textContent; }).join(",");
-    fetch("/rec/ctl?save=" + encodeURIComponent(pendingSid) + "&name=" + encodeURIComponent($("dlg-name").value) + "&tags=" + encodeURIComponent(tags) + "&note=" + encodeURIComponent($("dlg-note").value)).catch(function () {});
+    var tags = [].slice.call(document.querySelectorAll("#dlg-tags .tagchip.on")).map(function (c) { return encodeURIComponent(c.textContent); }).join(",");
+    fetch("/rec/ctl?save=" + encodeURIComponent(pendingSid) + "&name=" + encodeURIComponent($("dlg-name").value) + "&tags=" + tags + "&note=" + encodeURIComponent($("dlg-note").value)).catch(function () {});
     closeSaveDialog(); if (!$("library").hidden) loadLibrary();
   };
   $("dlg-discard").onclick = function () {
