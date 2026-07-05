@@ -13,8 +13,8 @@ replays at full native detail. This is the default whenever the native channel
 is present.
 
 **Same tone map as the live feed — not a lookalike.** The decode→8-bit step
-calls `eo_tonemap()` from `eo/pipeline/eo_tonemap.c`, the EO module's canonical
-tone map, compiled into the recorder from that same source file. So a night
+calls `eo_tonemap()` (`recorder/src/eo_tonemap.c`), the recorder's own copy of
+the EO feed's tone map, kept byte-identical to `eo/pipeline/isp.c`. So a night
 scene on replay is pixel-for-pixel what the operator could have seen live
 (same adaptive p1/p99 stretch, temporal anti-breathing EMA, min-span floor,
 gamma, and the median filter when it was on), just at full resolution. The EMA
@@ -23,18 +23,16 @@ seek/jump.
 
 ### Keeping replay identical to the live feed — and knowing if it isn't
 
-Three layers, so a divergence can never pass unnoticed:
-1. **One source file.** `eo_tonemap.c` is compiled into BOTH `eo_pipeline` and
-   the recorder (the recorder's Makefile builds `../../eo/pipeline/eo_tonemap.c`
-   directly — not a copy). Code divergence is impossible without a build break.
-2. **Device drift signature.** At record time the recorder stamps
+Two layers, so a divergence can never pass unnoticed:
+1. **Device drift signature.** At record time the recorder stamps
    `tonemap_version` + `tonemap_hash` (a hash of the tone map's output on a
    canonical frame, computed on that device) into `eo_y10/channel.json`. At
    replay open it recomputes the hash and reports `tonemap_match` in
    `/replay/state`. If a session was recorded under different tone-map math than
-   the current build, `tonemap_match:false` — the GUI shows a caveat instead of
-   silently rendering it wrong. **If it's ever false, we know.**
-3. **Empirical check.** `tools/verify_replay_match.py` records-then-compares the
+   the current build (e.g. the EO feed's tone map changed and this copy wasn't
+   mirrored), `tonemap_match:false` — the GUI shows a caveat instead of silently
+   rendering it wrong. **If it's ever false, we know.**
+2. **Empirical check.** `tools/verify_replay_match.py` records-then-compares the
    native replay frame against the operator's recorded display frame (at native
    display res) pixel-by-pixel; a drift shows as a jump in mean pixel difference.
    Run it as part of EO/recorder acceptance whenever the tone map is touched.

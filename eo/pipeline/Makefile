@@ -11,9 +11,7 @@ CFLAGS  ?= -O3 -Wall -Wextra -pthread -I$(ILLUM)   # -O3: auto-vectorize the pix
 LDLIBS   = -ljpeg -lpthread -lm -lrt   # -lrt: shm_open for the recorder taps
 
 # libeo = the frozen EO module: camera + capture + AE + ISP behind eo.h.
-# eo_tonemap.c is the canonical Y10->8-bit tone map; the recorder compiles the
-# SAME file for native replay (see recorder/), so the two can never diverge.
-LIBEO_SRC = libeo.c capture.c sensor.c ae.c isp.c eo_tonemap.c
+LIBEO_SRC = libeo.c capture.c sensor.c ae.c isp.c
 LIBEO_OBJ = $(LIBEO_SRC:.c=.o)
 LIBEO     = libeo.a
 
@@ -22,7 +20,7 @@ APP_SRC = main.c mjpeg.c illum.c
 APP_OBJ = $(APP_SRC:.c=.o) sg_ir850.o
 BIN     = eo_pipeline
 
-HDRS = eo.h eo_bench.h pipeline.h illum.h eo_tonemap.h $(ILLUM)/sg_ir850.h
+HDRS = eo.h eo_bench.h pipeline.h illum.h $(ILLUM)/sg_ir850.h
 
 all: $(LIBEO) $(BIN)
 

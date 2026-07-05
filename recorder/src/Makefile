@@ -9,22 +9,20 @@ CFLAGS  += -march=armv8.2-a+crc
 endif
 LDFLAGS := -pthread -lrt -ljpeg -lm
 
-# eo_tonemap.o is the EO module's canonical tone map, compiled from its OWN
-# source (not a copy) so native replay is pixel-identical to the live feed and
-# cannot drift. This is the one deliberate cross-module source dependency.
-EO := ../../eo/pipeline
-
+# eo_tonemap.c is the recorder's own copy of the EO feed's tone map (kept
+# identical, drift-alarmed at runtime) — see eo_tonemap.h. Self-contained; the
+# recorder does not reach into the eo/ module tree.
 SRC := main.c channel.c session.c store.c disk.c events.c http.c \
-       pack10.c library.c thumbs.c replay.c render.c
-OBJ := $(SRC:.c=.o) eo_tonemap.o
+       pack10.c library.c thumbs.c replay.c render.c eo_tonemap.c
+OBJ := $(SRC:.c=.o)
 
 all: airpoc_recorder tap_bench
 
 airpoc_recorder: $(OBJ)
 	$(CC) -o $@ $(OBJ) $(LDFLAGS)
 
-eo_tonemap.o: $(EO)/eo_tonemap.c $(EO)/eo_tonemap.h
-	$(CC) $(CFLAGS) -c $< -o $@
+eo_tonemap.o: eo_tonemap.c eo_tonemap.h
+	$(CC) $(CFLAGS) -c eo_tonemap.c -o $@
 
 %.o: %.c recorder.h ../tap/airpoc_tap.h
 	$(CC) $(CFLAGS) -c $< -o $@

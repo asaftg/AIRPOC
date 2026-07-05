@@ -1,15 +1,15 @@
 /* render.c — reconstruct a viewable NATIVE-resolution JPEG from a recorded
  * eo_y10 frame, for replay.
  *
- * The tone map is NOT reimplemented here: we call eo_tonemap() — the exact same
- * code the live EO feed uses (eo/pipeline/eo_tonemap.c, compiled into this
- * binary) — so a night scene on replay looks precisely like it looked live,
- * only at full 1440x1088 instead of the downscaled display res. The only work
- * here is unpacking the recorded frame back into the 16-bit layout eo_tonemap
- * consumes, running the shared tone map (+ median if it was on), and JPEG.
+ * The tone map is not a new implementation: eo_tonemap() (recorder/src/
+ * eo_tonemap.c) is kept byte-identical to the live EO feed's tone map, so a
+ * night scene on replay looks precisely like it looked live, only at full
+ * 1440x1088 instead of the downscaled display res. The only work here is
+ * unpacking the recorded frame back into the 16-bit layout eo_tonemap consumes,
+ * running the tone map (+ median if it was on), and JPEG.
  */
 #include "recorder.h"
-#include "../../eo/pipeline/eo_tonemap.h"
+#include "eo_tonemap.h"
 #include <stdlib.h>
 #include <setjmp.h>
 #include <jpeglib.h>

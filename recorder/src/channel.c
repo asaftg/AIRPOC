@@ -14,8 +14,7 @@
  */
 #define _GNU_SOURCE
 #include "recorder.h"
-#include "../../eo/pipeline/eo_tonemap.h"    /* EO_TONEMAP_VERSION: stamp it so a
-                                                future ISP change is detectable */
+#include "eo_tonemap.h"    /* EO_TONEMAP_VERSION/hash: stamp it so a future ISP change is detectable */
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>

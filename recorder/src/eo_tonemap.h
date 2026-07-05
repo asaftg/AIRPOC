@@ -1,14 +1,18 @@
-/* eo_tonemap — the canonical Y10 -> 8-bit human-view tone map.
+/* eo_tonemap — Y10 -> 8-bit human-view tone map, for native-resolution replay.
  *
- * SHARED UNIT. This is the single source of truth for "how raw sensor Y10
- * becomes the picture a human sees." The EO pipeline uses it for the live feed;
- * the recorder compiles this SAME file to render native-resolution replay, so
- * replay shows exactly what the operator could have seen at full detail. There
- * is no second copy of this algorithm — both modules build eo_tonemap.c.
+ * The RECORDER's own copy of the EO pipeline's tone map, kept byte-for-byte
+ * identical to eo/pipeline/isp.c:isp_scale_tonemap so native replay shows
+ * exactly what the operator could have seen — at full detail. It lives here,
+ * not in eo/, so the recorder never reaches into the EO module.
  *
- * If this algorithm changes, bump EO_TONEMAP_VERSION. The recorder stamps the
- * version into every session manifest; a replay whose recording predates a
- * change is flagged rather than silently re-rendered with new math.
+ * Being a copy, it could drift from the EO feed — but never silently: the
+ * recorder stamps a hash of this tone map's output (eo_tonemap_hash) into every
+ * recording, and replay recomputes it and reports `tonemap_match:false` if the
+ * running build differs from the tone map that recorded the session. If the EO
+ * feed's tone map ever changes, mirror it here and bump EO_TONEMAP_VERSION.
+ *
+ * Algorithm source of truth: eo/pipeline/isp.c + pipeline.h (EO_GAMMA=0.85,
+ * EO_MIN_SPAN=40) as of the version below.
  */
 #ifndef EO_TONEMAP_H
 #define EO_TONEMAP_H

@@ -7,7 +7,7 @@
  */
 #define _GNU_SOURCE
 #include "recorder.h"
-#include "../../eo/pipeline/eo_tonemap.h"
+#include "eo_tonemap.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
