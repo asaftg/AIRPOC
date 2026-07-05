@@ -3,33 +3,32 @@
 The production EO datapath for the IMX296 camera, in C, on the Jetson Orin Nano Super.
 It is split into two parts:
 
-- **`libeo`** (`eo.h` + `libeo.a`) — **the module.** Owns the camera and the whole
-  V4L2 capture → auto-exposure → ISP path, and produces finished, display-ready frames
-  behind a **frozen** API. Consumers (the GUI, a recorder, the future detector) link it
-  and pull frames; they never open the camera or run AE/ISP. Internals change freely
-  behind `eo.h`. **This is the contract — see [`INTEGRATION.md`](INTEGRATION.md).**
-- **`eo_pipeline`** — a thin **operator preview** that links `libeo`, pulls frames with
-  `eo_latest()`, applies digital zoom + the selected display size, and serves them as
-  MJPEG with a control page on `:8091`. It is the bench/LAN tool and (for now) the thing
-  the GUI proxies.
+- **`libeo`** (`eo.h` + `libeo.a`) — **the module.** Owns the camera and the V4L2
+  capture → auto-exposure loop, and hands the **raw full-native Y10** frame behind a
+  **frozen** API. Consumers (the detector, a recorder, the preview) link it and pull the
+  raw frame; they never open the camera or run AE. Internals change freely behind
+  `eo.h`. **This is the contract — see [`INTEGRATION.md`](INTEGRATION.md).**
+- **`eo_pipeline`** — a thin **operator preview** that links `libeo`, pulls the raw frame
+  with `eo_latest()`, and **tone-maps + downscales it to the selected display size** (the
+  work scales with what's shown, not the sensor), serving MJPEG + a control page on
+  `:8091`. It's the bench/LAN tool and (for now) the thing the GUI proxies.
 
 ```
-libeo (owns the camera, single V4L2 owner):
-  capture thread (~sensor fps):
-    V4L2 mmap (capture.c) ─► copy off uncached DMA ─► detector hook (consume_frame, full Y10)
-                         └─► AE every 4th (ae.c ─► sensor i2c sensor.c) ─► publish raw ─► framestore
-  tone thread (at the operating fps):
-    tone-map + 3×3 median on the full native frame (isp.c) ─► finished 8-bit, triple-buffered
-                                                                    │  eo_latest()  (zero-copy)
-  ────────────────────────────────────────────────────────────────┼───────────────────────────
-  eo_pipeline (preview) or GUI:  zoom + 4:3 crop + area-scale to the selected size ─► MJPEG :8091
+libeo (owns the camera, single V4L2 owner) — ONE thread:
+  capture (~operating fps):
+    V4L2 mmap (capture.c) ─► copy off uncached DMA ─► detector hook (consume_frame, raw Y10)
+                         └─► AE + focus every 4th (ae.c ─► sensor i2c) ─► publish RAW ─► triple buffer
+                                                                              │  eo_latest()  (raw, zero-copy)
+  ────────────────────────────────────────────────────────────────────────────┼──────────────────────────
+  eo_pipeline (preview) or GUI:  crop(zoom,4:3) + downscale + tone-map to the display size,
+                                 ONE pass on the raw (isp.c) ─► median ─► MJPEG :8091
   SG-IR850 illuminator (illum.c → ../../illuminator/src) ◄─ /ctl
 ```
 
 | File | Role |
 |---|---|
 | **`eo.h`** | **FROZEN** module API v1 (`eo_start/eo_stop/eo_latest/eo_connected/eo_focal_mm/eo_pixel_um`) |
-| **`libeo.c`** | the module core — capture + tone threads, AE, ISP orchestration, triple-buffered finished frame |
+| **`libeo.c`** | the module core — one capture thread, AE, raw triple-buffered Y10 frame |
 | `eo_bench.h` | **unstable** bench controls (manual gain/exposure sweep, telemetry) — preview only, not for the GUI |
 | `capture.c` | V4L2 mmap capture; geometry probed from the driver |
 | `sensor.c` | IMX296 VMAX(fps) + exposure(SHS1) + gain over i2c, REGHOLD-latched together |
@@ -97,9 +96,11 @@ single-owner camera is briefly grabbed — no stale binaries, no manual bounces.
   *uncached*: per-pixel work read straight from it is ~100× slower (measured 414 ms vs
   3.6 ms for the tone map). The capture thread does one streaming `memcpy` into a cached
   buffer and requeues immediately.
-- **Two threads in libeo**, decoupled through a mutex/cond framestore, so a consumer's
-  pull rate can never throttle capture or the detector. `eo_latest()` is triple-buffered
-  and zero-copy (pointer valid until the next call).
+- **Process at the display resolution, not full native.** libeo hands the raw frame;
+  the preview tone-maps + downscales it straight to the selected display size in one
+  `isp_scale_tonemap` pass. Tone-mapping full native and *then* shrinking wasted ~2×
+  the CPU (measured). `eo_latest()` is triple-buffered and zero-copy so a consumer's pull
+  rate can never throttle capture or the detector.
 - **Sensor control is i2c** (VMAX `0x3010`, SHS1 `0x308d`, GAIN `0x3204`, REGHOLD
   `0x3008`), all latched together per frame.
 - **Illuminator is optional and off the hot path** — serial writes happen only on the
