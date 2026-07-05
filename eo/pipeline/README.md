@@ -20,10 +20,23 @@ libeo (owns the camera, single V4L2 owner) — ONE thread:
                          └─► AE + focus every 4th (ae.c ─► sensor i2c) ─► publish RAW ─► triple buffer
                                                                               │  eo_latest()  (raw, zero-copy)
   ────────────────────────────────────────────────────────────────────────────┼──────────────────────────
-  eo_pipeline (preview) or GUI:  crop(zoom,4:3) + downscale + tone-map to the display size,
-                                 ONE pass on the raw (isp.c) ─► median ─► MJPEG :8091
+  eo_pipeline (preview):
+    producer:  crop(zoom,4:3) + downscale + tone-map to the display size, ONE pass (isp.c)
+    encode pool (3 workers):  NEON median ─► JPEG (libjpeg-turbo NEON) ─► publish IN ORDER
+    serving:   event-driven — every published frame is written to every /stream client
   SG-IR850 illuminator (illum.c → ../../illuminator/src) ◄─ /ctl
 ```
+
+**The 60 fps guarantee.** Sensor 60 → published 60 → **client receives 60**, at every
+display size with median on — verified by counting frames a client actually receives,
+not by a meter. What it took (each was a real, found bug): frames round-robin across a
+3-worker encode pool (one thread can't JPEG native in <16.7 ms) with an in-order publish
+gate; the serving loop is condvar-driven (the old 2 ms poll + latest-wins skipped frames
+when workers published in bursts — clients saw ~half rate); the scaler's per-pixel
+division and per-frame mallocs are gone; median runs in NEON (16 px/instruction).
+`/stats` exposes raw pipeline counters (`prod`/`drop`/`pub`) so a stall shows *where*
+frames vanish, and `fps` is **count-based** over a ≥0.5 s window — inter-arrival EMAs
+are burst-biased and lied twice; a count cannot.
 
 | File | Role |
 |---|---|
@@ -70,10 +83,11 @@ Shrinking the operator view never costs a target.
 ## Controls (preview `/ctl`, proxied by the GUI)
 
 Full contract in [`INTEGRATION.md`](INTEGRATION.md). Two bandwidth levers —
-`?res=low|med|high|native` (640×480 / **960×720 default** / 1280×960 / 1440×1080, all
-**4:3**) and `?fps=12..60` — plus the whole ISP panel (`ae, gain, expms, gaincap,
-median, zoom`) and the illuminator (`laser, power, fov`). `/stats` reports every live
-value.
+`?res=low|med|high|native` (320×240 panic / 480×360 / **640×480 boot default** /
+1440×1080 — a weak-link ladder, all **4:3**) and `?fps=12..60` — plus the whole ISP
+panel (`ae, gain, expms, gaincap, median, zoom`) and the illuminator
+(`laser, power, fov`). `/stats` reports every live value + the `prod/drop/pub`
+pipeline counters.
 
 ## Build & run (on the Jetson)
 ```bash
@@ -114,15 +128,17 @@ single-owner camera is briefly grabbed — no stale binaries, no manual bounces.
   zerolatency) → RTSP on `192.168.144.x` for the air unit, **or** feed the Orin's HDMI
   to the SIYI HDMI→Ethernet converter (HW H.265, but 30 fps-capped). The same
   `res`/`fps` knobs drive it. See [../docs/STREAMING.md](../docs/STREAMING.md).
-- **Detector raw tap** — an `eo_latest_raw()` handing the full-native **linear Y10**
-  (the detector wants linear sensor data, not the human tone-map). ~2-line add; the data
-  already flows inside libeo.
+- **Wire the real detector into `consume_frame()`** — the hook already receives every
+  raw full-native Y10 frame inside libeo (and `eo_latest()` hands the same raw frame to
+  a linked consumer), so the detector plugs in without any datapath change.
 - **Camera-drop resilience in-process** — currently `Restart=always` (systemd) handles a
   dropped/held camera by restarting; a nicer refinement is an in-process reopen-retry so
   the process never exits. Low priority given the service already auto-recovers.
 
 ## Status
-> `-Wall -Wextra` clean; `libeo.a` + `eo_pipeline` built and verified on the Orin Nano
-> Super. AUTO holds a fixed fps with expose-first/low-gain; all four display sizes emit
-> exact 4:3; the fps lever gates both exposure and stream rate; illuminator + focus +
-> zoom live. GUI consumes via the frozen `eo.h` or by proxying MJPEG (`INTEGRATION.md`).
+> `-Wall -Wextra` clean; verified on the Orin Nano Super by **counting client-received
+> frames**: 60 fps end-to-end (sensor → publish → client) at all four display sizes with
+> median on. CPU (median on): 320p ~1.05 · 480p ~1.1 · 640p ~1.2 · native ~1.7 cores —
+> the JPEG encode dominates and already runs libjpeg-turbo's internal NEON. AUTO holds
+> the fixed fps with expose-first/low-gain; illuminator + focus + zoom live. GUI consumes
+> via the frozen `eo.h` or by proxying MJPEG (`INTEGRATION.md`).

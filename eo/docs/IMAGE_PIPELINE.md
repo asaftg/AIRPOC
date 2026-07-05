@@ -48,9 +48,10 @@ the 16.67 ms frame). This is the window the NIR illuminator must fire within; it
 only drops below ~99% when ambient light lets the AE shorten exposure.
 
 ## Preview / control features
-Digital zoom 1/2/4/8×; four operator-selectable **4:3** display sizes (640×480 /
-960×720 / 1280×960 / 1440×1080); the full ISP panel (ae, gain, expms, gaincap, median,
-fps) + illuminator, all over `/ctl`; live overlay + `/stats` JSON. FOV is computed from
+Digital zoom 1/2/4/8×; four operator-selectable **4:3** display sizes (320×240 /
+480×360 / 640×480 boot-default / 1440×1080 — a weak-link ladder); the full ISP panel
+(ae, gain, expms, gaincap, median, fps) + illuminator, all over `/ctl`; live overlay +
+`/stats` JSON. FOV is computed from
 the CommonLands **CIL122 (f = 12 mm, F/2.0)** on the IMX296 (3.45 µm px):
 **23.4° × 17.8°** at 1440×1088, scaling with zoom. Full contract:
 [../pipeline/INTEGRATION.md](../pipeline/INTEGRATION.md).

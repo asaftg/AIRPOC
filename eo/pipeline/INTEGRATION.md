@@ -112,12 +112,15 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
 
 **`/stats`** returns all live values so the GUI renders the current state of every knob:
-`fps` (measured display rate), `sfps` (sensor rate), **`fps_cap`** (the configured
-operating-fps cap = the value set via `?fps=`; the AE never changes fps, so this is the
-set value, not a guess), `res, dw, dh` (display size), **`eff_w, eff_h`** (real detail =
-`min(res, sensor-crop)` — equals `dw×dh` at 1×, collapses to the crop at high zoom),
-`mean, exp_ms, duty_pct, gain, gaincap, ae, median, zoom, hfov, vfov, sharp, connected,
-laser, lpower, lfov, lpresent`.
+`fps` (**the emitted wire rate, count-based** over a ≥0.5 s window — every published
+frame is also written to every `/stream` client, so this IS what a client receives on a
+healthy link), `sfps` (sensor rate), **`fps_cap`** (the configured operating-fps cap =
+the value set via `?fps=`; the AE never changes fps, so this is the set value, not a
+guess), **`prod, drop, pub`** (raw pipeline counters: frames produced / skipped
+pool-full / published — diff two polls to localize any stall), `res, dw, dh` (display
+size), **`eff_w, eff_h`** (real detail = `min(res, sensor-crop)` — equals `dw×dh` at 1×,
+collapses to the crop at high zoom), `mean, exp_ms, duty_pct, gain, gaincap, ae, median,
+zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`.
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.
