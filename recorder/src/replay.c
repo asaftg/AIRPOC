@@ -240,8 +240,13 @@ static int rp_open(const char *sid)
     }
     rp_unload();
 
-    if (rchan_load(dir, "eo_jpeg", &g_rp.jpeg, &g_rp.t0_mono) != 0) return -1;
-    rchan_load(dir, "radar_wire", &g_rp.radar, NULL);        /* optional */
+    /* every channel is optional — replay whatever the session really has
+     * (a radar-only session replays scope + stats; video shows no frames) */
+    uint64_t t0_rd = 0;
+    int has_jpeg = rchan_load(dir, "eo_jpeg", &g_rp.jpeg, &g_rp.t0_mono) == 0;
+    int has_radar = rchan_load(dir, "radar_wire", &g_rp.radar, &t0_rd) == 0;
+    if (!has_jpeg && has_radar) g_rp.t0_mono = t0_rd;
+    if (!has_jpeg && !has_radar) return -1;                  /* nothing to replay */
     load_events(dir);
 
     char v[64] = "";
@@ -249,6 +254,8 @@ static int rp_open(const char *sid)
     g_rp.dur_ms = atoll(v);
     if (g_rp.dur_ms <= 0 && g_rp.jpeg.n)
         g_rp.dur_ms = g_rp.jpeg.t_ms[g_rp.jpeg.n - 1];
+    if (g_rp.dur_ms <= 0 && g_rp.radar.n)
+        g_rp.dur_ms = g_rp.radar.t_ms[g_rp.radar.n - 1];
     const char *rt = strstr(mf, "\"t_start\"");
     g_rp.t0_real = 0;
     if (rt) {
@@ -315,14 +322,15 @@ void replay_ctl(const char *qs, char *resp, size_t rlen)
     } else if (query_get(qs, "seek", v, sizeof v) == 0) {
         clock_set(atoll(v), g_rp.playing);
     } else if (query_get(qs, "step", v, sizeof v) == 0) {
-        int dir = atoi(v) < 0 ? -1 : 1;
-        int64_t t = clock_now();
-        long i = rchan_at(&g_rp.jpeg, t);
-        long j = i + dir;
-        if (i < 0) j = 0;
-        if (j < 0) j = 0;
-        if (j >= g_rp.jpeg.n) j = g_rp.jpeg.n - 1;
-        clock_set(g_rp.jpeg.t_ms[j], 0);
+        /* step over the video frames when present, else radar frames */
+        const RChan *c = g_rp.jpeg.n ? &g_rp.jpeg : &g_rp.radar;
+        if (c->n) {
+            int dir = atoi(v) < 0 ? -1 : 1;
+            long j = rchan_at(c, clock_now()) + dir;
+            if (j < 0) j = 0;
+            if (j >= c->n) j = c->n - 1;
+            clock_set(c->t_ms[j], 0);
+        }
     }
     snprintf(resp, rlen, "{\"ok\":1}");
     pthread_mutex_unlock(&g_rp.lk);
@@ -418,7 +426,7 @@ int replay_rstats_json(char *buf, size_t len)
 int replay_frame_copy(int64_t t_ms, uint8_t *buf, uint32_t cap, uint32_t *len)
 {
     pthread_mutex_lock(&g_rp.lk);
-    if (!g_rp.open) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    if (!g_rp.open || !g_rp.jpeg.n) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     long i = rchan_at(&g_rp.jpeg, t_ms);
     if (i < 0) i = 0;
     uint32_t plen;
