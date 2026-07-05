@@ -1,102 +1,94 @@
 /* render.c — reconstruct a viewable NATIVE-resolution JPEG from a recorded
- * eo_y10 frame, for replay. The display channel was whatever low res the
- * operator selected; native replay decodes the raw sensor frame at full
- * 1440x1088 so no detail is lost.
+ * eo_y10 frame, for replay.
  *
- * Raw Y10 is linear, so a night scene occupies a small slice of the range —
- * a flat >>2 would look black. We apply the same idea as the live ISP: a
- * per-frame percentile stretch (p1..p99, subsampled) + gamma, then libjpeg
- * grayscale encode. This is a replay rendering choice, self-contained here —
- * it does not touch the EO module's ISP.
+ * The tone map is NOT reimplemented here: we call eo_tonemap() — the exact same
+ * code the live EO feed uses (eo/pipeline/eo_tonemap.c, compiled into this
+ * binary) — so a night scene on replay looks precisely like it looked live,
+ * only at full 1440x1088 instead of the downscaled display res. The only work
+ * here is unpacking the recorded frame back into the 16-bit layout eo_tonemap
+ * consumes, running the shared tone map (+ median if it was on), and JPEG.
  */
 #include "recorder.h"
+#include "../../eo/pipeline/eo_tonemap.h"
 #include <stdlib.h>
-#include <math.h>
 #include <setjmp.h>
 #include <jpeglib.h>
-
-#define TONE_GAMMA 0.85
-#define HIST_BINS  1024
-
-/* decode one pixel's 10-bit value by channel encoding */
-static inline int decode_px(const uint8_t *p, uint32_t i, int mode)
-{
-    if (mode == MODE_RAW16) { uint16_t v; memcpy(&v, p + 2 * i, 2); return v >> 6; }
-    if (mode == MODE_Y8)    return (int)p[i] << 2;
-    /* MODE_Y10P: 4 px per 5 bytes, LSB-first */
-    uint32_t grp = i >> 2, k = i & 3;
-    uint64_t v = 0;
-    memcpy(&v, p + grp * 5, 5);
-    return (int)((v >> (10 * k)) & 0x3ff);
-}
 
 typedef struct { struct jpeg_error_mgr mgr; jmp_buf env; } JErr;
 static void jerr_exit(j_common_ptr c) { longjmp(((JErr *)c->err)->env, 1); }
 
-int render_y10_to_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
-                       uint8_t *out, uint32_t cap, uint32_t *outlen)
+static int encode_gray(const uint8_t *g, int w, int h, int quality,
+                       uint8_t *out, uint32_t cap, uint32_t *len)
 {
-    uint32_t npx = (uint32_t)w * h;
-    /* sanity: payload must be able to hold npx pixels in this encoding */
-    uint32_t need = mode == MODE_RAW16 ? npx * 2 : mode == MODE_Y8 ? npx : npx * 10 / 8;
-    if (plen + 8 < need) return -1;
-
-    uint8_t *gray = malloc(npx);         /* set once, before setjmp; freed on all paths */
-    if (!gray) return -1;
-
-    /* percentile histogram, subsampled every 4th pixel */
-    uint32_t hist[HIST_BINS] = { 0 };
-    uint32_t nsamp = 0;
-    for (uint32_t i = 0; i < npx; i += 4) { hist[decode_px(payload, i, mode)]++; nsamp++; }
-    uint32_t lo_c = nsamp / 100, hi_c = nsamp - nsamp / 100;
-    int lo = 0, hi = HIST_BINS - 1;
-    uint32_t acc = 0;
-    for (int b = 0; b < HIST_BINS; b++) { acc += hist[b]; if (acc >= lo_c) { lo = b; break; } }
-    acc = 0;
-    for (int b = 0; b < HIST_BINS; b++) { acc += hist[b]; if (acc >= hi_c) { hi = b; break; } }
-    if (hi <= lo) { lo = 0; hi = HIST_BINS - 1; }
-
-    /* LUT: stretch [lo,hi] -> [0,255] with gamma */
-    uint8_t lut[HIST_BINS];
-    double span = hi - lo;
-    for (int v = 0; v < HIST_BINS; v++) {
-        double n = v <= lo ? 0.0 : v >= hi ? 1.0 : (v - lo) / span;
-        lut[v] = (uint8_t)(pow(n, TONE_GAMMA) * 255.0 + 0.5);
-    }
-    for (uint32_t i = 0; i < npx; i++) gray[i] = lut[decode_px(payload, i, mode)];
-
-    /* encode grayscale JPEG into the caller's buffer */
     struct jpeg_compress_struct c;
     JErr err;
-    unsigned long jlen = 0;
     unsigned char *jbuf = out;
-    unsigned long jcap = cap;
+    unsigned long jlen = 0;
     c.err = jpeg_std_error(&err.mgr);
     err.mgr.error_exit = jerr_exit;
-    if (setjmp(err.env)) { jpeg_destroy_compress(&c); free(gray); return -1; }
+    if (setjmp(err.env)) { jpeg_destroy_compress(&c); return -1; }
     jpeg_create_compress(&c);
-    /* encode straight into the fixed caller buffer (no libjpeg malloc/realloc) */
-    jpeg_mem_dest(&c, &jbuf, &jlen);
+    jpeg_mem_dest(&c, &jbuf, &jlen);            /* fixed caller buffer */
     c.image_width = w; c.image_height = h;
     c.input_components = 1; c.in_color_space = JCS_GRAYSCALE;
     jpeg_set_defaults(&c);
-    jpeg_set_quality(&c, 85, TRUE);
+    jpeg_set_quality(&c, quality, TRUE);        /* 85 = full (pause); lower = play/bandwidth */
     jpeg_start_compress(&c, TRUE);
     while (c.next_scanline < (JDIMENSION)h) {
-        JSAMPROW row = gray + (size_t)c.next_scanline * w;
+        JSAMPROW row = (JSAMPROW)(g + (size_t)c.next_scanline * w);
         jpeg_write_scanlines(&c, &row, 1);
     }
     jpeg_finish_compress(&c);
     jpeg_destroy_compress(&c);
-    free(gray);
+    int rc = 0;
+    if (jbuf != out) { if (jlen <= cap) memcpy(out, jbuf, jlen); else rc = -1; free(jbuf); }
+    *len = (uint32_t)jlen;
+    return rc;
+}
 
-    if (jbuf != out) {                       /* libjpeg grew its own buffer */
-        if (jlen <= jcap) memcpy(out, jbuf, jlen);
-        free(jbuf);
-        if (jlen > jcap) return -1;
+/* Reconstruct a native JPEG. st carries the tonemap EMA across frames (pass the
+ * same state on sequential frames to match the live anti-breathing; set reseed
+ * on a seek/jump). median_on applies the same 3x3 median the live feed used. */
+int render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+                       int median_on, void *tone_state, int reseed, int quality,
+                       uint8_t *out, uint32_t cap, uint32_t *outlen)
+{
+    uint32_t npx = (uint32_t)w * h;
+    uint32_t need = mode == MODE_RAW16 ? npx * 2 : mode == MODE_Y8 ? npx : npx * 10 / 8;
+    if (plen + 8 < need) return -1;
+
+    /* left-justified 16-bit LE view (what eo_tonemap reads: (lo|hi<<8)>>6) */
+    const uint8_t *y16;
+    uint8_t *tmp = NULL;
+    if (mode == MODE_RAW16) {
+        y16 = payload;                          /* already in that layout */
+    } else {
+        tmp = malloc((size_t)npx * 2);
+        if (!tmp) return -1;
+        for (uint32_t i = 0; i < npx; i++) {
+            int v10;
+            if (mode == MODE_Y8) v10 = (int)payload[i] << 2;
+            else { uint32_t g = i >> 2, k = i & 3; uint64_t v = 0;
+                   memcpy(&v, payload + g * 5, 5); v10 = (int)((v >> (10 * k)) & 0x3ff); }
+            uint16_t le = (uint16_t)(v10 << 6);
+            tmp[2 * i] = (uint8_t)le; tmp[2 * i + 1] = (uint8_t)(le >> 8);
+        }
+        y16 = tmp;
     }
-    *outlen = (uint32_t)jlen;
-    return 0;
+
+    uint16_t *sm = malloc((size_t)npx * sizeof(uint16_t));
+    int *xs = malloc((size_t)(w + 1) * sizeof(int));
+    uint8_t *out8 = malloc(npx);
+    int rc = -1;
+    if (sm && xs && out8) {
+        EoToneState *st = tone_state;
+        if (reseed) st->seeded = 0;
+        eo_tonemap(y16, 2 * w, 0, 0, w, h, out8, w, h, st, sm, xs);
+        if (median_on) { uint8_t *msc = malloc(npx); if (msc) { eo_median3(out8, w, h, msc); free(msc); } }
+        rc = encode_gray(out8, w, h, quality, out, cap, outlen);
+    }
+    free(sm); free(xs); free(out8); free(tmp);
+    return rc;
 }
 
 int render_selftest(void)
@@ -109,10 +101,10 @@ int render_selftest(void)
         uint16_t le = (uint16_t)(v10 << 6);
         raw[2 * i] = (uint8_t)le; raw[2 * i + 1] = (uint8_t)(le >> 8);
     }
+    EoToneState st = {0};
     uint8_t out[16384];
     uint32_t len = 0;
-    int r = render_y10_to_jpeg(raw, npx * 2, w, h, MODE_RAW16, out, sizeof out, &len);
+    int r = render_native_jpeg(raw, npx * 2, w, h, MODE_RAW16, 0, &st, 1, 85, out, sizeof out, &len);
     free(raw);
-    /* JPEG SOI marker + non-trivial length */
     return (r == 0 && len > 100 && out[0] == 0xFF && out[1] == 0xD8) ? 0 : -1;
 }

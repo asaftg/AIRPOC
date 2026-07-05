@@ -197,8 +197,11 @@ int  thumbs_serve_path(const char *sid, int n, char *path, size_t plen);
 /* thumbs.c */
 int  thumbs_generate(const char *dir);   /* 8 stills from eo_jpeg */
 
-/* render.c — reconstruct a native-res JPEG from a recorded eo_y10 frame */
-int  render_y10_to_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+/* render.c — reconstruct a native-res JPEG from a recorded eo_y10 frame, using
+ * the EO module's shared tone map (eo_tonemap.c) so it matches the live view.
+ * tone_state is an EoToneState* (opaque here); reseed=1 on a seek/jump. */
+int  render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+                        int median_on, void *tone_state, int reseed, int quality,
                         uint8_t *out, uint32_t cap, uint32_t *outlen);
 int  render_selftest(void);
 

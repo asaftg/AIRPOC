@@ -33,7 +33,12 @@ any session through the operator console exactly as it looked live.
 | `src/replay.c` | timeline clock, MJPEG pushers, recorded-endpoint views |
 | `src/library.c` `src/thumbs.c` | /library filters, 8-still previews |
 | `src/store.c` `src/http.c` `src/events.c` `src/disk.c` `src/pack10.c` | manifest store, :8093 server, stats poller, disk guard, pack kernel |
-| `tools/` | `tap_bench.c` (synthetic soak publisher), `airec_dump.py` (verify), `offload_pull.sh`, `compress_native.sh` |
+| `tools/` | `tap_bench.c` (synthetic soak), `airec_dump.py` (verify), `verify_replay_match.py` (native-vs-live tone-map check), `offload_pull.sh` + `airpoc-offload.ps1` (pull), `compress_native.sh` |
+
+**Shared with the EO module:** native replay renders through `eo_tonemap()` —
+the recorder Makefile compiles `../../eo/pipeline/eo_tonemap.c` directly (one
+source, no copy) so replay's tone map is identical to the live feed and cannot
+drift. See [docs/REPLAY.md](docs/REPLAY.md#keeping-replay-identical-to-the-live-feed--and-knowing-if-it-isnt).
 | `systemd/` | `airpoc-recorder.service` + `install.sh` |
 
 ## Build / run

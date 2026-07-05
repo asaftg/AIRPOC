@@ -7,6 +7,7 @@
  */
 #define _GNU_SOURCE
 #include "recorder.h"
+#include "../../eo/pipeline/eo_tonemap.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -49,18 +50,28 @@ static struct {
     RChan jpeg, radar, y10;
     int has_native, has_display, video_native;    /* video source selection */
     int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
+    int tonemap_match;                             /* replay tone map == record-time tone map */
+    int play_q;                                    /* native JPEG quality while playing */
+    double play_fps;                               /* native frame cap while playing */
     char *evbuf;                         /* events channel, loaded whole */
     Ev evs[MAX_EVS];
     int n_evs;
 } g_rp = { .lk = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER, .rate = 1.0 };
 
-/* native-render cache: one encoded frame shared across pushers/viewers */
+/* native-render cache + tonemap EMA: shared across pushers/viewers, so the
+ * encode happens once per distinct frame and the anti-breathing EMA advances
+ * like the live feed (sequential frames) or re-seeds on a seek/jump. */
 static struct {
     pthread_mutex_t lk;
     long idx;                            /* eo_y10 row index cached, -1 = none */
+    int q;                               /* quality the cached frame was encoded at */
     uint8_t *jpg;
     uint32_t len;
-} g_nat = { .lk = PTHREAD_MUTEX_INITIALIZER, .idx = -1 };
+    EoToneState tone;                    /* EMA state, reflects tone_i */
+    long tone_i;                         /* frame index `tone` currently reflects */
+} g_nat = { .lk = PTHREAD_MUTEX_INITIALIZER, .idx = -1, .q = -1, .tone_i = -2 };
+
+#define NAT_FULL_Q 85                    /* pause/step/scrub: full native detail */
 
 #define NAT_JPG_CAP (1u << 20)          /* matches the http serve buffer */
 
@@ -69,6 +80,8 @@ static RChan *video_chan(void)
 {
     return (g_rp.video_native && g_rp.has_native) ? &g_rp.y10 : &g_rp.jpeg;
 }
+
+static const Ev *ev_at(int type, int64_t t);       /* defined below */
 
 /* ---- loading ---- */
 
@@ -236,15 +249,30 @@ static void nat_cache_drop(void)
     free(g_nat.jpg);
     g_nat.jpg = NULL;
     g_nat.idx = -1;
+    g_nat.tone_i = -2;
+    memset(&g_nat.tone, 0, sizeof g_nat.tone);
     pthread_mutex_unlock(&g_nat.lk);
 }
 
-/* native JPEG for eo_y10 row i, shared 1-frame cache; encodes outside g_rp.lk.
- * Returns bytes into buf (cap NAT_JPG_CAP) or -1. Caller must NOT hold g_rp.lk. */
-static int nat_jpeg(long i, uint8_t *buf, uint32_t *len)
+static int ev_int(const Ev *e, const char *key, int dflt)
+{
+    if (!e) return dflt;
+    char pat[24];
+    snprintf(pat, sizeof pat, "\"%s\":", key);
+    const char *p = e->body;
+    for (int i = 0; i < e->len - (int)strlen(pat); i++)
+        if (!strncmp(p + i, pat, strlen(pat))) return atoi(p + i + strlen(pat));
+    return dflt;
+}
+
+/* Native JPEG for eo_y10 row i via the SHARED EO tone map, 1-frame cache.
+ * Never holds two locks at once (avoids the g_rp<->g_nat ordering deadlock):
+ * cache check (g_nat), payload+params copy (g_rp), render+cache (g_nat).
+ * Caller must NOT hold g_rp.lk. */
+static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
 {
     pthread_mutex_lock(&g_nat.lk);
-    if (g_nat.idx == i && g_nat.jpg) {
+    if (g_nat.idx == i && g_nat.q == quality && g_nat.jpg) {
         memcpy(buf, g_nat.jpg, g_nat.len);
         *len = g_nat.len;
         pthread_mutex_unlock(&g_nat.lk);
@@ -252,27 +280,39 @@ static int nat_jpeg(long i, uint8_t *buf, uint32_t *len)
     }
     pthread_mutex_unlock(&g_nat.lk);
 
-    /* copy the raw payload out from under g_rp.lk (mmap stable while open) */
-    static _Thread_local uint8_t *raw;      /* per-thread scratch */
+    /* copy raw payload + params out from under g_rp.lk (mmap stable while open) */
+    static _Thread_local uint8_t *raw;
     static _Thread_local uint32_t raw_cap;
     pthread_mutex_lock(&g_rp.lk);
     if (!g_rp.open || i < 0 || i >= g_rp.y10.n) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     uint32_t plen;
     const uint8_t *p = rchan_payload(&g_rp.y10, i, &plen, NULL);
     int w = g_rp.nat_w, h = g_rp.nat_h, mode = g_rp.nat_mode;
+    int median = ev_int(ev_at(EV_EO, g_rp.y10.t_ms[i]), "median", 0);   /* as it was live */
     if (!p) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     if (plen > raw_cap) { free(raw); raw = malloc(plen); raw_cap = raw ? plen : 0; }
     if (!raw) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     memcpy(raw, p, plen);
     pthread_mutex_unlock(&g_rp.lk);
 
-    if (render_y10_to_jpeg(raw, plen, w, h, mode, buf, NAT_JPG_CAP, len) != 0) return -1;
-
     pthread_mutex_lock(&g_nat.lk);
-    if (!g_nat.jpg) g_nat.jpg = malloc(NAT_JPG_CAP);
-    if (g_nat.jpg && *len <= NAT_JPG_CAP) { memcpy(g_nat.jpg, buf, *len); g_nat.len = *len; g_nat.idx = i; }
+    if (g_nat.idx == i && g_nat.q == quality && g_nat.jpg) {   /* another thread just did it */
+        memcpy(buf, g_nat.jpg, g_nat.len); *len = g_nat.len;
+        pthread_mutex_unlock(&g_nat.lk);
+        return 0;
+    }
+    int reseed = (i != g_nat.tone_i + 1);        /* EMA advances on sequential play */
+    int rc = render_native_jpeg(raw, plen, w, h, mode, median, &g_nat.tone, reseed, quality,
+                                buf, NAT_JPG_CAP, len);
+    if (rc == 0) {
+        g_nat.tone_i = i;
+        if (!g_nat.jpg) g_nat.jpg = malloc(NAT_JPG_CAP);
+        if (g_nat.jpg && *len <= NAT_JPG_CAP) {
+            memcpy(g_nat.jpg, buf, *len); g_nat.len = *len; g_nat.idx = i; g_nat.q = quality;
+        }
+    }
     pthread_mutex_unlock(&g_nat.lk);
-    return 0;
+    return rc;
 }
 
 static void rp_unload(void)
@@ -323,7 +363,10 @@ static int rp_open(const char *sid)
     g_rp.has_native = has_y10;
     g_rp.has_display = has_jpeg;
     g_rp.video_native = has_y10;                             /* default to native when present */
+    g_rp.play_q = 55;                                        /* smooth over WiFi while playing */
+    g_rp.play_fps = 20.0;                                    /* ~1.5-2.5 MB/s native during play */
     g_rp.nat_w = 1440; g_rp.nat_h = 1088; g_rp.nat_mode = MODE_Y10P;
+    g_rp.tonemap_match = 1;
     if (has_y10) {
         char cj[512], v[24];
         char cpath[700];
@@ -335,6 +378,9 @@ static int rp_open(const char *sid)
             if (store_manifest_field(cj, "h", v, sizeof v) == 0 && atoi(v) > 0) g_rp.nat_h = atoi(v);
             if (store_manifest_field(cj, "encoding", v, sizeof v) == 0)
                 g_rp.nat_mode = !strcmp(v, "y16le") ? MODE_RAW16 : !strcmp(v, "y8") ? MODE_Y8 : MODE_Y10P;
+            /* does the current build's tone map match the one that recorded this? */
+            if (store_manifest_field(cj, "tonemap_hash", v, sizeof v) == 0 && v[0])
+                g_rp.tonemap_match = ((uint32_t)strtoul(v, NULL, 10) == eo_tonemap_hash());
         }
     }
     nat_cache_drop();
@@ -417,6 +463,14 @@ void replay_ctl(const char *qs, char *resp, size_t rlen)
         int want_nat = !strcmp(v, "native");
         g_rp.video_native = want_nat && g_rp.has_native;
         pthread_cond_broadcast(&g_rp.cv);                 /* pushers re-pick source */
+    } else if (query_get(qs, "playq", v, sizeof v) == 0) {
+        int q = atoi(v);
+        if (q >= 20 && q <= 95) g_rp.play_q = q;          /* native play bandwidth/quality */
+        pthread_cond_broadcast(&g_rp.cv);
+    } else if (query_get(qs, "playfps", v, sizeof v) == 0) {
+        double f = atof(v);
+        if (f >= 2.0 && f <= 60.0) g_rp.play_fps = f;
+        pthread_cond_broadcast(&g_rp.cv);
     } else if (query_get(qs, "step", v, sizeof v) == 0) {
         /* step over the active video channel, else radar frames */
         RChan *vc = video_chan();
@@ -442,13 +496,15 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
     return (size_t)snprintf(buf, len,
         "{\"sid\":\"%s\",\"name\":\"%s\",\"t_ms\":%lld,\"dur_ms\":%lld,"
         "\"playing\":%d,\"rate\":%.2f,\"t_wall_ms\":%llu,\"frame_i\":%ld,\"frames\":%ld,"
-        "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d}",
+        "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d,"
+        "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
         (unsigned long long)((g_rp.t0_real + (uint64_t)t * 1000000ull) / 1000000ull),
         fi, vc->n,
         g_rp.video_native && g_rp.has_native ? "native" : "display",
-        g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h);
+        g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h,
+        g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match);
 }
 
 void replay_state_json(char *buf, size_t len)
@@ -537,7 +593,7 @@ int replay_frame_copy(int64_t t_ms, uint8_t *buf, uint32_t cap, uint32_t *len)
     if (native) {
         pthread_mutex_unlock(&g_rp.lk);      /* nat_jpeg takes g_rp.lk itself */
         if (cap < NAT_JPG_CAP) return -1;
-        return nat_jpeg(i, buf, len);
+        return nat_jpeg(i, NAT_FULL_Q, buf, len);   /* single-frame inspect: full detail */
     }
     uint32_t plen;
     const uint8_t *p = rchan_payload(vc, i, &plen, NULL);
@@ -564,6 +620,7 @@ void replay_stream(int fd)
     unsigned gen = g_rp.gen;
     g_rp.pushers++;
     long last = -2;
+    uint64_t last_emit = 0;
 
     while (g_rp.open && g_rp.gen == gen) {
         int64_t t = clock_now();
@@ -572,13 +629,23 @@ void replay_stream(int fd)
         long i = rchan_at(vc, t);
         if (i < 0) i = vc->n ? 0 : -1;
 
-        if (i >= 0 && i != last) {
+        /* Bandwidth cap: native frames are big; while PLAYING, hold output to
+         * play_fps at play_q so a thin WiFi link stays smooth. Paused/stepped/
+         * scrubbed frames are always full-res full-quality (single frame, not a
+         * bandwidth problem). Display-source frames are already small: no cap. */
+        double fps_cap = (native && g_rp.playing) ? g_rp.play_fps : 0.0;
+        uint64_t nowns = now_ns();
+        int throttled = fps_cap > 0.0 && nowns < last_emit + (uint64_t)(1e9 / fps_cap);
+        int quality = g_rp.playing ? g_rp.play_q : NAT_FULL_Q;
+
+        if (i >= 0 && i != last && !throttled) {
             last = i;
+            last_emit = nowns;
             int bad = 0;
             if (native && natbuf) {
                 pthread_mutex_unlock(&g_rp.lk);
                 uint32_t jlen = 0;
-                if (nat_jpeg(i, natbuf, &jlen) == 0) {   /* decode+tonemap+encode, cached */
+                if (nat_jpeg(i, quality, natbuf, &jlen) == 0) {   /* decode+tonemap+encode, cached */
                     char ph[128];
                     int hn = snprintf(ph, sizeof ph,
                         "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", jlen);

@@ -5,21 +5,11 @@
  *     supports box-average downscale if ever asked (ow<cw), but the feed runs 1:1.
  *     The detector uses the raw Y10; tone/gamma here is for the human view only. */
 #include "pipeline.h"
+#include "eo_tonemap.h"        /* canonical tone map + median (shared with the recorder) */
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-static uint8_t g_lut[256];
-static int     g_lut_ready = 0;
-static void lut_init(void)
-{
-    for (int i = 0; i < 256; i++) {
-        double v = pow(i / 255.0, 1.0 / EO_GAMMA) * 255.0;
-        g_lut[i] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
-    }
-    g_lut_ready = 1;
-}
 
 static inline int y10_at(const uint8_t *y10, int bpl, int x, int y)
 {
@@ -54,116 +44,25 @@ double isp_sharpness(const uint8_t *y10, int bpl, int w, int h)
 /* Crop (cx,cy,cw,ch) of the Y10 frame, box-average downscale to ow*oh, then
  * black-level + adaptive-white tone map + gamma -> 8-bit. The crop is the digital
  * zoom; box-average anti-aliases the downscale. One pass, small output. */
+/* Live-feed tone map: delegates to the canonical shared unit (eo_tonemap.c),
+ * which the recorder also compiles so native replay is pixel-identical. This
+ * wrapper only owns the hot-path statics (EMA state + malloc-free scratch). */
 void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
                        uint8_t *out8, int ow, int oh)
 {
-    if (!g_lut_ready) lut_init();
     int npx = ow * oh;
-    /* hot path (60 fps): cached work buffers, no per-frame malloc; the column map is
-     * precomputed once per frame — the naive form costs a per-PIXEL integer division
-     * (~1.5M/frame at native), which was exactly the producer's frame-budget overrun. */
     static uint16_t *sm = NULL;  static int sm_cap = 0;
     static int      *xs = NULL;  static int xs_cap = 0;
+    static EoToneState st;                               /* zero-init: seeds on first frame */
     if (npx > sm_cap) { free(sm); sm = malloc((size_t)npx * sizeof(uint16_t)); sm_cap = sm ? npx : 0; }
     if (ow + 1 > xs_cap) { free(xs); xs = malloc((size_t)(ow + 1) * sizeof(int)); xs_cap = xs ? ow + 1 : 0; }
     if (!sm || !xs) return;
-    for (int ox = 0; ox <= ow; ox++) xs[ox] = cx + ox * cw / ow;   /* once, not per pixel */
-    for (int oy = 0; oy < oh; oy++) {
-        int sy0 = cy + oy * ch / oh, sy1 = cy + (oy + 1) * ch / oh; if (sy1 <= sy0) sy1 = sy0 + 1;
-        uint16_t *orow = sm + (size_t)oy * ow;
-        for (int ox = 0; ox < ow; ox++) {
-            int sx0 = xs[ox], sx1 = xs[ox + 1]; if (sx1 <= sx0) sx1 = sx0 + 1;
-            unsigned acc = 0, cnt = 0;
-            for (int sy = sy0; sy < sy1; sy++) {
-                const uint8_t *row = y10 + (size_t)sy * bpl;
-                for (int sx = sx0; sx < sx1; sx++) { acc += (row[2*sx] | (row[2*sx+1] << 8)) >> 6; cnt++; }
-            }
-            orow[ox] = (uint16_t)(cnt ? acc / cnt : 0);
-        }
-    }
-    /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
-     * small blown streetlight; p1 sets a real black. Endpoints are EMA-smoothed across
-     * frames so the mapping doesn't wobble frame-to-frame (the "breathing"), and the
-     * span is floored so a flat/dim scene isn't blown up to full range (6x noise gain).*/
-    int hist[1024] = {0}, nh = 0;
-    for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* subsample: percentiles don't need every px */
-    int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
-    int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
-    for (int v = 0; v < 1024; v++) {
-        a += hist[v];
-        if (!got_lo && a >= lo_t) { p_lo = v; got_lo = 1; }
-        if (a >= hi_t) { p_hi = v; break; }
-    }
-    static double s_lo = -1.0, s_hi = -1.0;
-    if (s_lo < 0.0) { s_lo = p_lo; s_hi = p_hi; }      /* seed on first frame */
-    s_lo = 0.85 * s_lo + 0.15 * p_lo;
-    s_hi = 0.85 * s_hi + 0.15 * p_hi;
-    double lo = s_lo, hi = s_hi;
-    if (hi - lo < EO_MIN_SPAN) hi = lo + EO_MIN_SPAN;
-    double scale = 255.0 / (hi - lo);
-    /* 10-bit -> 8-bit via a per-frame 1024-entry LUT (folds the stretch + gamma into
-     * one table lookup per pixel instead of float math per pixel). */
-    uint8_t map[1024];
-    for (int v = 0; v < 1024; v++) {
-        double s = (v - lo) * scale;
-        int q = (int)(s < 0 ? 0 : s > 255 ? 255 : s);
-        map[v] = g_lut[q];
-    }
-    for (int i = 0; i < npx; i++) out8[i] = map[sm[i]];
+    eo_tonemap(y10, bpl, cx, cy, cw, ch, out8, ow, oh, &st, sm, xs);
 }
 
-/* 3x3 median (Devillard's optimal 9-element sorting network), edge-preserving grain
- * filter. Reads a scratch copy so the in-place write can't corrupt a pixel's own
- * neighbours; the 1px border is left as-is.
- * On aarch64 the network runs in NEON — the same 19 min/max steps on 16 pixels per
- * instruction (~10x the scalar rate); the scalar tail covers the row remainder and
- * non-ARM builds (the x86 compile check). */
-#if defined(__aarch64__) || defined(__ARM_NEON)
-#include <arm_neon.h>
-#define VSORT(a, b) { uint8x16_t t_ = vminq_u8(a, b); b = vmaxq_u8(a, b); a = t_; }
-#endif
-#define PIX_SWAP(a, b) { uint8_t t_ = (a); (a) = (b); (b) = t_; }
-#define PIX_SORT(a, b) { if ((a) > (b)) PIX_SWAP((a), (b)); }
 void isp_median3(uint8_t *img, int w, int h)
 {
-    if (w < 3 || h < 3) return;
     static uint8_t *src = NULL; static int cap = 0;      /* hot path: no per-frame malloc */
     if (w * h > cap) { free(src); src = malloc((size_t)w * h); cap = src ? w * h : 0; }
-    if (!src) return;
-    memcpy(src, img, (size_t)w * h);
-    for (int y = 1; y < h - 1; y++) {
-        const uint8_t *r0 = src + (size_t)(y - 1) * w;
-        const uint8_t *r1 = src + (size_t)y * w;
-        const uint8_t *r2 = src + (size_t)(y + 1) * w;
-        uint8_t *o = img + (size_t)y * w;
-        int x = 1;
-#if defined(__aarch64__) || defined(__ARM_NEON)
-        for (; x + 16 <= w - 1; x += 16) {
-            uint8x16_t p0 = vld1q_u8(r0+x-1), p1 = vld1q_u8(r0+x), p2 = vld1q_u8(r0+x+1);
-            uint8x16_t p3 = vld1q_u8(r1+x-1), p4 = vld1q_u8(r1+x), p5 = vld1q_u8(r1+x+1);
-            uint8x16_t p6 = vld1q_u8(r2+x-1), p7 = vld1q_u8(r2+x), p8 = vld1q_u8(r2+x+1);
-            VSORT(p1,p2); VSORT(p4,p5); VSORT(p7,p8);
-            VSORT(p0,p1); VSORT(p3,p4); VSORT(p6,p7);
-            VSORT(p1,p2); VSORT(p4,p5); VSORT(p7,p8);
-            VSORT(p0,p3); VSORT(p5,p8); VSORT(p4,p7);
-            VSORT(p3,p6); VSORT(p1,p4); VSORT(p2,p5);
-            VSORT(p4,p7); VSORT(p4,p2); VSORT(p6,p4);
-            VSORT(p4,p2);
-            vst1q_u8(o + x, p4);
-        }
-#endif
-        for (; x < w - 1; x++) {
-            uint8_t p[9] = { r0[x-1], r0[x], r0[x+1],
-                             r1[x-1], r1[x], r1[x+1],
-                             r2[x-1], r2[x], r2[x+1] };
-            PIX_SORT(p[1],p[2]); PIX_SORT(p[4],p[5]); PIX_SORT(p[7],p[8]);
-            PIX_SORT(p[0],p[1]); PIX_SORT(p[3],p[4]); PIX_SORT(p[6],p[7]);
-            PIX_SORT(p[1],p[2]); PIX_SORT(p[4],p[5]); PIX_SORT(p[7],p[8]);
-            PIX_SORT(p[0],p[3]); PIX_SORT(p[5],p[8]); PIX_SORT(p[4],p[7]);
-            PIX_SORT(p[3],p[6]); PIX_SORT(p[1],p[4]); PIX_SORT(p[2],p[5]);
-            PIX_SORT(p[4],p[7]); PIX_SORT(p[4],p[2]); PIX_SORT(p[6],p[4]);
-            PIX_SORT(p[4],p[2]);
-            o[x] = p[4];
-        }
-    }
+    eo_median3(img, w, h, src);
 }

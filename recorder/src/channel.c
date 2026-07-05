@@ -14,6 +14,8 @@
  */
 #define _GNU_SOURCE
 #include "recorder.h"
+#include "../../eo/pipeline/eo_tonemap.h"    /* EO_TONEMAP_VERSION: stamp it so a
+                                                future ISP change is detectable */
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -396,7 +398,7 @@ static void write_channel_json(Chan *c, const char *dir)
 {
     char path[640], body[640];
     const char *enc = c->cfg->encoding;
-    char geom[48] = "";
+    char geom[64] = "";
     if (c->id == CH_EO_Y10) {
         VideoMode m = g_rec.mode;
         enc = m == MODE_Y10P ? "y10p" : m == MODE_Y8 ? "y8" : "y16le";
@@ -408,7 +410,11 @@ static void write_channel_json(Chan *c, const char *dir)
             if (store_manifest_field(c->sub.t.h->meta_json, "w", tmp, sizeof tmp) == 0 && atoi(tmp) > 0) w = atoi(tmp);
             if (store_manifest_field(c->sub.t.h->meta_json, "h", tmp, sizeof tmp) == 0 && atoi(tmp) > 0) h = atoi(tmp);
         }
-        snprintf(geom, sizeof geom, ",\"w\":%d,\"h\":%d", w, h);
+        /* stamp the tone-map version: native replay renders with the EO module's
+         * shared eo_tonemap; if that algorithm ever changes, this flags sessions
+         * recorded under the old math instead of silently re-rendering them */
+        snprintf(geom, sizeof geom, ",\"w\":%d,\"h\":%d,\"tonemap_version\":%d,\"tonemap_hash\":%u",
+                 w, h, EO_TONEMAP_VERSION, eo_tonemap_hash());
     }
     snprintf(path, sizeof path, "%s/%s/channel.json", dir, c->cfg->name);
     int n = snprintf(body, sizeof body,
