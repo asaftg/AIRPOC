@@ -31,6 +31,7 @@ void    eo_set_gain(int gain);        /* 0..480                             */
 void    eo_set_expms(double ms);      /* manual exposure, capped by the fps */
 void    eo_set_gaincap(int cap);      /* AE gain ceiling                    */
 void    eo_set_median(int on);
+int     eo_median_on(void);           /* current median flag (applied on the display frame) */
 void    eo_set_fps(double fps);       /* FIXED operating fps -> caps exposure; AE never changes it */
 
 #endif /* AIRPOC_EO_BENCH_H */

@@ -8,6 +8,7 @@
  *   ./eo_pipeline [-d /dev/video0] [-p 8091] [-i /dev/ttyUSB0]
  */
 #include "eo.h"
+#include "eo_bench.h"
 #include "pipeline.h"
 #include "illum.h"
 #include <getopt.h>
@@ -76,7 +77,11 @@ int main(int argc, char **argv)
             last = seq;
             int tw, th; mjpeg_res_dims(&tw, &th);          /* operator-selected display size */
             if (!disp || tw != dw || th != dh) { free(disp); disp = malloc((size_t)tw * th); dw = tw; dh = th; }
-            if (disp) { display_scale8(buf, w, h, mjpeg_zoom(), disp, dw, dh); mjpeg_publish(disp, dw, dh); }
+            if (disp) {
+                display_scale8(buf, w, h, mjpeg_zoom(), disp, dw, dh);
+                if (eo_median_on()) isp_median3(disp, dw, dh);   /* grain filter on the small frame */
+                mjpeg_publish(disp, dw, dh);
+            }
         } else {
             usleep(4000);                      /* poll; libeo produces at the operating fps */
         }

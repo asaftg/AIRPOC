@@ -148,7 +148,8 @@ static void *tone_thread(void *arg)
         pthread_mutex_unlock(&F.lock);
 
         isp_scale_tonemap(local, bpl, 0, 0, w, h, F.buf[wi], w, h);   /* full-frame finish */
-        if (g_median) isp_median3(F.buf[wi], w, h);
+        /* median moved to the display path (main.c) — on the small downscaled frame it's
+         * ~5x cheaper and keeps this thread free to emit at the full operating fps. */
 
         pthread_mutex_lock(&F.lock);
         F.w = w; F.h = h; F.stride = w; F.front = wi; F.seq++;
@@ -237,6 +238,7 @@ void eo_set_ae(int on)       { g_ae_on = on ? 1 : 0; }
 void eo_set_gain(int g)      { g_man_gain = clampi(g, 0, EO_GAIN_MAX); g_ae_on = 0; }
 void eo_set_gaincap(int c)   { g_gaincap = clampi(c, 0, EO_GAIN_MAX); }
 void eo_set_median(int on)   { g_median = on ? 1 : 0; }
+int  eo_median_on(void)      { return g_median; }
 
 /* Operating frame rate — the FIXED fps that caps exposure. The AE never changes it;
  * lowering it is how the operator buys exposure headroom for dark scenes. */

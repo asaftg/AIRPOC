@@ -77,9 +77,9 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
      * small blown streetlight; p1 sets a real black. Endpoints are EMA-smoothed across
      * frames so the mapping doesn't wobble frame-to-frame (the "breathing"), and the
      * span is floored so a flat/dim scene isn't blown up to full range (6x noise gain).*/
-    int hist[1024] = {0};
-    for (int i = 0; i < npx; i++) hist[sm[i]]++;
-    int lo_t = (int)(npx * 0.01), hi_t = (int)(npx * 0.99);
+    int hist[1024] = {0}, nh = 0;
+    for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* subsample: percentiles don't need every px */
+    int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
     int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
     for (int v = 0; v < 1024; v++) {
         a += hist[v];
