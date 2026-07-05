@@ -620,7 +620,7 @@
   $("rb-close").onclick = closeReplay;
   function pollReplayState() {
     fetch("/rec/replay/state").then(function (r) { return r.json(); }).then(function (st) {
-      var rs = st.replay_state || st; if (!rs) return;
+      var rs = st.replay_state || st.state || st; if (!rs) return;   /* /state nests as .state, /stats as .replay_state */
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
       $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
       $("tp-rate").textContent = rs.rate + "×";
