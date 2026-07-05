@@ -22,8 +22,17 @@ static unsigned char  *g_jpeg = NULL;      /* latest encoded frame */
 static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
-static double          g_wire_fps = 0.0;   /* MEASURED emit rate (frames actually served) */
-static double          g_wire_last = 0.0;  /* last publish time (under g_lock)            */
+
+/* Pipeline accounting — raw counters, so a stall shows WHERE frames vanish:
+ *   prod = mjpeg_publish calls (frames the producer delivered)
+ *   drop = producer frames skipped because the pool had no free slot
+ *   pub  = g_seq (frames actually encoded + published)
+ * Wire fps is computed from pub-count over a real time window (>=0.5 s), not from
+ * inter-arrival EMA — burstiness can't bias a count. */
+static uint64_t        g_ctr_prod = 0, g_ctr_drop = 0;   /* under E.lock */
+static double          g_wire_fps = 0.0;                 /* under g_lock */
+static double          g_win_t0   = 0.0;                 /* fps window start   */
+static uint64_t        g_win_pub0 = 0;                   /* pub count at start */
 
 static double now_s(void)
 {
@@ -161,12 +170,12 @@ static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *l
 void mjpeg_publish(const uint8_t *gray, int w, int h)
 {
     pthread_mutex_lock(&E.lock);
+    g_ctr_prod++;
     int fi = -1;
     for (int i = 0; i < ENC_SLOTS; i++) if (E.s[i].state == 0) { fi = i; break; }
-    if (fi < 0) { pthread_mutex_unlock(&E.lock); return; }   /* pool saturated: skip —
-        the wire-fps meter shows it; with 3 workers this doesn't happen when sized */
+    if (fi < 0) { g_ctr_drop++; pthread_mutex_unlock(&E.lock); return; }  /* pool full */
     if (!E.s[fi].buf) E.s[fi].buf = malloc((size_t)EO_WIDTH * EO_HEIGHT);
-    if (!E.s[fi].buf) { pthread_mutex_unlock(&E.lock); return; }
+    if (!E.s[fi].buf) { g_ctr_drop++; pthread_mutex_unlock(&E.lock); return; }
     memcpy(E.s[fi].buf, gray, (size_t)w * h);
     E.s[fi].w = w; E.s[fi].h = h;
     E.s[fi].seq = E.enq_seq++;
@@ -207,12 +216,15 @@ static void *enc_worker(void *arg)
 
         if (j) {
             pthread_mutex_lock(&g_lock);
-            double t = now_s();                              /* real emit rate, measured */
-            if (g_wire_last > 0.0) { double inst = 1.0 / (t - g_wire_last);
-                g_wire_fps = g_wire_fps > 0 ? 0.9 * g_wire_fps + 0.1 * inst : inst; }
-            g_wire_last = t;
             free(g_jpeg);
             g_jpeg = j; g_jpeg_len = len; g_seq++;
+            /* count-based wire fps over a >=0.5 s window — bursts can't bias a count */
+            double t = now_s();
+            if (g_win_t0 <= 0.0) { g_win_t0 = t; g_win_pub0 = g_seq; }
+            else if (t - g_win_t0 >= 0.5) {
+                g_wire_fps = (double)(g_seq - g_win_pub0) / (t - g_win_t0);
+                g_win_t0 = t; g_win_pub0 = g_seq;
+            }
             pthread_mutex_unlock(&g_lock);
         }
 
@@ -249,16 +261,24 @@ static void *client(void *arg)
          * to the crop regardless of the res button — that's sensor-limited, not a bug. */
         int cw = EO_WIDTH / z, ch = (EO_WIDTH * 3 / 4) / z;   /* native 4:3 crop at this zoom */
         int eff_w = dw < cw ? dw : cw, eff_h = dh < ch ? dh : ch;
-        char body[680];
+        pthread_mutex_lock(&E.lock);
+        uint64_t c_prod = g_ctr_prod, c_drop = g_ctr_drop;
+        pthread_mutex_unlock(&E.lock);
+        pthread_mutex_lock(&g_lock);
+        double wfps = g_wire_fps; uint64_t c_pub = g_seq;
+        pthread_mutex_unlock(&g_lock);
+        char body[760];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
+            "\"prod\":%llu,\"drop\":%llu,\"pub\":%llu,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
-            g_wire_fps, st.mean, st.exp_ms, st.duty_pct, st.gain,
+            wfps, st.mean, st.exp_ms, st.duty_pct, st.gain,
             st.sfps, st.sfps,
+            (unsigned long long)c_prod, (unsigned long long)c_drop, (unsigned long long)c_pub,
             z, hf, vf, st.focus,
             st.ae_on, st.gaincap, st.median, st.connected,
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
