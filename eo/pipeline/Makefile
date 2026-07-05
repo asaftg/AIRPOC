@@ -8,7 +8,7 @@
 ILLUM   = ../../illuminator/src
 CC      ?= cc
 CFLAGS  ?= -O3 -Wall -Wextra -pthread -I$(ILLUM)   # -O3: auto-vectorize the pixel loops
-LDLIBS   = -ljpeg -lpthread -lm
+LDLIBS   = -ljpeg -lpthread -lm -lrt   # -lrt: shm_open for the recorder taps
 
 # libeo = the frozen EO module: camera + capture + AE + ISP behind eo.h.
 LIBEO_SRC = libeo.c capture.c sensor.c ae.c isp.c

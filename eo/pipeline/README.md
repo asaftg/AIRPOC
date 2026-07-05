@@ -80,6 +80,17 @@ filter. The **detector always gets the raw linear frame**, never this tone-mappe
 
 Shrinking the operator view never costs a target.
 
+## Recorder taps (module outputs — protocol per `recorder/docs/TAP.md` v1)
+
+Published via the vendored `airpoc_tap.h` (shm slot rings, publisher never blocks).
+If the recorder/shm is absent, `tap_create` fails once at start and the pipeline runs
+**exactly as before** (heap buffers) — the fallback is part of the contract.
+
+| tap | slots × payload | what | `t_src_ns` | `meta[6]` |
+|---|---|---|---|---|
+| `airpoc.eo_y10` | 16 × `sizeimage` (3,133,440) | **raw pre-ISP native Y10**, every captured frame — the algorithm-replay stream. Zero added copies: the capture thread's one DMA memcpy lands directly in the tap slot; detector/AE/`eo_latest` read that same slot. | V4L2 buffer timestamp (CLOCK_MONOTONIC, exposure-referenced) | `{v4l2_seq, exp_lines, gain, vmax, mean×100, drops_cum}` — a `v4l2_seq` gap = driver drop; `drops_cum` accumulates them |
+| `airpoc.eo_jpeg` | 16 × 512 KiB | display JPEG **exactly as encoded** (replay serves these bytes verbatim, incl. mid-session res changes) | `tap_now_ns()` at publish | `{seq, dw, dh, zoom, res_idx, 0}` |
+
 ## Controls (preview `/ctl`, proxied by the GUI)
 
 Full contract in [`INTEGRATION.md`](INTEGRATION.md). Two bandwidth levers —

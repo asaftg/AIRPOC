@@ -60,6 +60,13 @@ const uint8_t *cap_dqbuf(Capture *c, int *index)
     struct v4l2_buffer b = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP };
     if (xioctl(c->fd, VIDIOC_DQBUF, &b) < 0) { perror("cap: DQBUF"); return NULL; }
     *index = b.index;
+    /* keep the driver's frame metadata: the timestamp is CLOCK_MONOTONIC and
+     * exposure-referenced (the recorded frame's t_src_ns); sequence is the driver's
+     * frame counter — a gap here is a DRIVER-level drop, distinct from any consumer
+     * or recorder drop downstream. */
+    c->last_ts_ns = (uint64_t)b.timestamp.tv_sec * 1000000000ull
+                  + (uint64_t)b.timestamp.tv_usec * 1000ull;
+    c->last_seq   = b.sequence;
     return (const uint8_t *)c->bufs[b.index];
 }
 

@@ -8,7 +8,9 @@
 #include "eo.h"
 #include "eo_bench.h"
 #include "pipeline.h"
+#include "airpoc_tap.h"     /* vendored copy of recorder/tap/airpoc_tap.h (protocol v1) */
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,13 +32,26 @@ static volatile int g_median   = 1;   /* ON by default (operator requirement). R
                                        * encode workers, so it parallelizes — 60 fps holds. */
 static double       g_focus    = 0.0;
 
-/* raw full-native frame -> consumer (triple buffer = zero-copy latest) */
+/* Recorder tap (airpoc.eo_y10): the raw pre-ISP native stream. Zero added copies —
+ * when the tap is up, the capture thread's one mandatory memcpy off the DMA buffer
+ * lands DIRECTLY in a tap slot (16-deep ring), and that same slot pointer is what
+ * consume_frame(), the AE metering, and eo_latest() read. If the recorder/shm is
+ * absent, tap_create fails once and we fall back to the heap triple buffer —
+ * behavior identical to a recorder-less system. */
+static AirTap   g_y10_tap;
+static uint32_t g_v4l2_drops = 0;   /* cumulative driver-level drops (v4l2 seq gaps) */
+
+/* raw full-native frame -> consumer (zero-copy latest).
+ * Tap mode: ptr = the committed tap slot (ring depth 16 = ~266 ms before reuse;
+ * an eo_latest holder keeps a pointer for <= one poll interval, so no race).
+ * Fallback:  ptr = one of 3 heap buffers with front/inuse rotation. */
 static struct {
     pthread_mutex_t lock;
-    uint8_t *buf[3];
+    const uint8_t *ptr;         /* newest published frame                */
+    uint8_t *buf[3];            /* fallback buffers (tap unavailable)    */
     int      w, h, stride;      /* stride = bytesperline (Y10 = 2 bytes/px) */
-    int      front;             /* newest ready buffer, -1 = none        */
-    int      inuse;             /* buffer currently held by a consumer   */
+    int      front;             /* fallback: newest ready buffer index   */
+    int      inuse;             /* fallback: buffer held by a consumer   */
     unsigned long seq;
 } F;
 
@@ -49,29 +64,41 @@ static void consume_frame(const uint8_t *y10, int bpl, int w, int h)
     (void)y10; (void)bpl; (void)w; (void)h;
 }
 
-/* ---- capture thread: sensor rate, native Y10 -> triple buffer ---- */
+/* ---- capture thread: sensor rate, native Y10 -> tap slot (or fallback buffer) ---- */
 static void *cap_thread(void *arg)
 {
     (void)arg;
     unsigned long n = 0;
+    uint32_t prev_seq = 0; int have_prev = 0;
     while (g_run) {
-        /* pick a buffer that isn't the published front or the one a consumer holds */
-        pthread_mutex_lock(&F.lock);
-        int wi = 0; while (wi == F.front || wi == F.inuse) wi++;
-        pthread_mutex_unlock(&F.lock);
+        /* destination for this frame: a tap slot (zero-copy publish) or a fallback
+         * heap buffer that isn't the published front / the one a consumer holds */
+        uint8_t *dst; int wi = -1;
+        if (g_y10_tap.ok) {
+            dst = tap_slot_begin(&g_y10_tap);
+        } else {
+            pthread_mutex_lock(&F.lock);
+            wi = 0; while (wi == F.front || wi == F.inuse) wi++;
+            pthread_mutex_unlock(&F.lock);
+            dst = F.buf[wi];
+        }
 
         int idx;
         const uint8_t *raw = cap_dqbuf(&g_cap, &idx);
         if (!raw) break;
-        memcpy(F.buf[wi], raw, g_cap.sizeimage);   /* one streaming copy off uncached DMA */
+        memcpy(dst, raw, g_cap.sizeimage);   /* the one streaming copy off uncached DMA */
         cap_requeue(&g_cap, idx);
         g_connected = 1;
+        uint64_t t_src = g_cap.last_ts_ns;   /* exposure-referenced driver timestamp */
+        uint32_t vseq  = g_cap.last_seq;
+        if (have_prev && vseq > prev_seq + 1) g_v4l2_drops += vseq - prev_seq - 1;
+        prev_seq = vseq; have_prev = 1;
 
         int bpl = g_cap.bytesperline, w = g_cap.width, h = g_cap.height;
-        consume_frame(F.buf[wi], bpl, w, h);        /* detector, raw Y10 (cached copy) */
+        consume_frame(dst, bpl, w, h);        /* detector, raw Y10 (cached copy) */
 
         if (++n % 4 == 0) {                          /* AE + focus @ ~15 Hz */
-            double mean = isp_mean10(F.buf[wi], bpl, w, h);
+            double mean = isp_mean10(dst, bpl, w, h);
             g_ae.vmax = g_man_vmax;                   /* fixed operating fps (never auto-changed) */
             if (g_ae_on) {
                 ae_update(&g_ae, mean, g_gaincap);
@@ -81,11 +108,22 @@ static void *cap_thread(void *arg)
                 g_ae.gain = g_man_gain; g_ae.mean = mean;
             }
             sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
-            g_focus = isp_sharpness(F.buf[wi], bpl, w, h);
+            g_focus = isp_sharpness(dst, bpl, w, h);
+        }
+
+        /* commit AFTER the AE step so the recorded meta is frame-current */
+        if (g_y10_tap.ok) {
+            uint32_t meta[TAP_META_WORDS] = {
+                vseq, (uint32_t)g_ae.exp_lines, (uint32_t)g_ae.gain,
+                (uint32_t)g_ae.vmax, (uint32_t)(g_ae.mean * 100.0), g_v4l2_drops
+            };
+            tap_slot_commit(&g_y10_tap, (uint32_t)g_cap.sizeimage, t_src, meta, 0);
         }
 
         pthread_mutex_lock(&F.lock);
-        F.w = w; F.h = h; F.stride = bpl; F.front = wi; F.seq++;
+        F.ptr = dst; F.w = w; F.h = h; F.stride = bpl;
+        if (wi >= 0) F.front = wi;
+        F.seq++;
         pthread_mutex_unlock(&F.lock);
     }
     return NULL;
@@ -103,9 +141,22 @@ int eo_start(const char *dev)
     sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
 
     pthread_mutex_init(&F.lock, NULL);
-    for (int i = 0; i < 3; i++) F.buf[i] = malloc((size_t)g_cap.sizeimage);
-    F.front = -1; F.inuse = -1; F.seq = 0;
-    if (!F.buf[0] || !F.buf[1] || !F.buf[2]) { eo_stop(); return -1; }
+    F.ptr = NULL; F.front = -1; F.inuse = -1; F.seq = 0;
+
+    /* Recorder tap: 16 slots x sizeimage. On failure (recorder never installed, shm
+     * permissions) log once and run exactly as before on the heap triple buffer. */
+    char mj[256];
+    snprintf(mj, sizeof mj,
+        "{\"name\":\"eo_y10\",\"fmt\":\"Y10 16-bit LE, px=(b[2x]|b[2x+1]<<8)>>6\","
+        "\"w\":%d,\"h\":%d,\"stride\":%d,"
+        "\"meta\":[\"v4l2_seq\",\"exp_lines\",\"gain\",\"vmax\",\"mean_x100\",\"drops_cum\"]}",
+        g_cap.width, g_cap.height, g_cap.bytesperline);
+    if (tap_create(&g_y10_tap, "airpoc.eo_y10", 16, (uint32_t)g_cap.sizeimage, mj) < 0)
+        fprintf(stderr, "libeo: eo_y10 tap unavailable — running without recording\n");
+    if (!g_y10_tap.ok) {
+        for (int i = 0; i < 3; i++) F.buf[i] = malloc((size_t)g_cap.sizeimage);
+        if (!F.buf[0] || !F.buf[1] || !F.buf[2]) { eo_stop(); return -1; }
+    }
 
     g_run = 1;
     pthread_create(&g_cap_th, NULL, cap_thread, NULL);
@@ -118,15 +169,16 @@ void eo_stop(void)
     g_connected = 0;
     cap_close(&g_cap);
     sensor_close(&g_sensor);
+    tap_destroy(&g_y10_tap);
     for (int i = 0; i < 3; i++) { free(F.buf[i]); F.buf[i] = NULL; }
 }
 
 int eo_latest(const uint8_t **buf, uint64_t *seq, int *w, int *h, int *stride, int *fmt)
 {
     pthread_mutex_lock(&F.lock);
-    if (F.front < 0) { pthread_mutex_unlock(&F.lock); return 0; }
-    F.inuse = F.front;
-    if (buf)    *buf    = F.buf[F.inuse];
+    if (!F.ptr) { pthread_mutex_unlock(&F.lock); return 0; }
+    F.inuse = F.front;              /* fallback-mode hold; -1 (harmless) in tap mode */
+    if (buf)    *buf    = F.ptr;
     if (seq)    *seq    = F.seq;
     if (w)      *w      = F.w;
     if (h)      *h      = F.h;

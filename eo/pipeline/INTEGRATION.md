@@ -124,3 +124,15 @@ zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`.
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.
+
+## Recorder taps (module outputs)
+
+Two shm tap rings, protocol per `recorder/docs/TAP.md` v1 (publisher never blocks;
+absent recorder → clean fallback, behavior unchanged):
+
+- **`airpoc.eo_y10`** — raw pre-ISP native Y10, every captured frame, 16 slots ×
+  `sizeimage`. `t_src_ns` = V4L2 exposure-referenced timestamp.
+  `meta = {v4l2_seq, exp_lines, gain, vmax, mean×100, drops_cum}`.
+- **`airpoc.eo_jpeg`** — the display JPEG verbatim, 16 slots × 512 KiB.
+  `meta = {seq, dw, dh, zoom, res_idx, 0}` (per-frame `dw/dh` so replay tracks
+  mid-session res changes).

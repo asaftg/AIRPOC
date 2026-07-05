@@ -91,6 +91,8 @@ typedef struct {
     void   **bufs;
     size_t  *buflen;
     int      nbufs;
+    uint64_t last_ts_ns;   /* dequeued buffer's CLOCK_MONOTONIC timestamp (exposure-referenced) */
+    uint32_t last_seq;     /* dequeued buffer's driver frame counter (gap = driver drop)        */
 } Capture;
 
 int  cap_open(Capture *c, const char *dev, int nbufs);

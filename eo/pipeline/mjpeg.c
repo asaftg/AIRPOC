@@ -6,6 +6,7 @@
 #include "pipeline.h"
 #include "eo.h"
 #include "eo_bench.h"
+#include "airpoc_tap.h"     /* recorder tap (vendored; protocol v1) */
 #include "illum.h"
 #include <arpa/inet.h>
 #include <math.h>
@@ -34,6 +35,13 @@ static uint64_t        g_ctr_prod = 0, g_ctr_drop = 0;   /* under E.lock */
 static double          g_wire_fps = 0.0;                 /* under g_lock */
 static double          g_win_t0   = 0.0;                 /* fps window start   */
 static uint64_t        g_win_pub0 = 0;                   /* pub count at start */
+
+/* Recorder tap (airpoc.eo_jpeg): tee of the display JPEG exactly as encoded — replay
+ * serves these bytes back verbatim, including mid-session display-res changes (hence
+ * per-frame dw/dh in the meta). One memcpy of the already-encoded JPEG; no-op if the
+ * recorder/shm is absent. Written inside the in-order publish window, so the three
+ * encode workers never write it concurrently. */
+static AirTap g_jpg_tap;
 
 static double now_s(void)
 {
@@ -232,6 +240,17 @@ static void *enc_worker(void *arg)
             }
             pthread_cond_broadcast(&g_pub);              /* wake every stream client */
             pthread_mutex_unlock(&g_lock);
+
+            /* recorder tee: the same bytes the operator sees, verbatim (j == the
+             * just-published buffer; it can't be freed until a later publish). Still
+             * inside the in-order window (pub_seq not bumped yet) => single writer. */
+            if (g_jpg_tap.ok) {
+                uint32_t meta[TAP_META_WORDS] = {
+                    (uint32_t)myseq, (uint32_t)w, (uint32_t)h,
+                    (uint32_t)g_zoom, (uint32_t)g_res, 0
+                };
+                tap_write(&g_jpg_tap, j, (uint32_t)len, tap_now_ns(), meta);
+            }
         }
 
         pthread_mutex_lock(&E.lock);
@@ -380,6 +399,12 @@ static void *server(void *arg)
 
 int mjpeg_start(int port)
 {
+    /* recorder tee of the display JPEG (16 x 512 KiB); no-op without a recorder */
+    if (tap_create(&g_jpg_tap, "airpoc.eo_jpeg", 16, 512 * 1024,
+                   "{\"name\":\"eo_jpeg\",\"fmt\":\"JPEG (grayscale), display stream verbatim\","
+                   "\"meta\":[\"seq\",\"dw\",\"dh\",\"zoom\",\"res_idx\",\"0\"]}") < 0)
+        fprintf(stderr, "mjpeg: eo_jpeg tap unavailable — running without recording\n");
+
     pthread_t t;
     for (int i = 0; i < ENC_WORKERS; i++) {              /* the 60fps-guarantee pool */
         if (pthread_create(&t, NULL, enc_worker, NULL)) return -1;
