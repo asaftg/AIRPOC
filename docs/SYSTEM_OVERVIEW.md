@@ -15,7 +15,8 @@ points the head at the target.
 ```
   EO camera            ─┐
   Thermal (optional)   ─┼─► detection ─┐
-  Radar                ─┘              ├─► fusion ─► tracking ─► gimbal pointing ─► guidance
+  Radar ───────────────┴──────────────┼─► fusion ─► tracking ─► gimbal pointing ─► guidance
+    └── EO-blind fallback: radar acquires → tracks → guides STANDALONE ──────────┘
   NIR illuminator ──(lights the EO scene, pulsed/synced)                 (effector)
 ```
 
@@ -23,6 +24,14 @@ Sensors produce detections; fusion merges them into one target picture; tracking
 maintains target state; the gimbal points the head at the track; guidance steers
 an effector. The NIR illuminator is a sensing aid for the EO camera, not a
 detection source.
+
+**Radar-only is a required capability, not just an input.** In haze, smoke, or
+with the EO camera dead, radar must **acquire, track, and guide on its own** —
+the chain `radar → tracking → gimbal → guidance` has to run with no EO and no
+fusion. That raises the bar on the radar module: it must deliver a *steerable*
+target — accurate, bias-free azimuth/elevation and a stable bounding box the
+gimbal can point at — not merely a cue for EO to refine. This is why box/angle
+quality (not just detection) is the radar module's open work item.
 
 The **operator console (`app/`) is the system's main process** and a **thin proxy**:
 it consumes each sensor module's served feed (EO video, radar frames), forwards

@@ -23,7 +23,7 @@ first**, then [`docs/SYSTEM_OVERVIEW.md`](docs/SYSTEM_OVERVIEW.md).
 - **EO camera** — visible mono global-shutter imaging (this repo's camera bring-up).
 - **NIR illuminator** — pulsed near-IR light so the EO camera can see and freeze
   motion in low light.
-- **Radar** — range/velocity detection, all-weather, day/night.
+- **Radar** — range/velocity detection, all-weather, day/night; the **EO-blind fallback**: must acquire/track/guide **standalone** when EO is hazed or dead (see [System Overview](docs/SYSTEM_OVERVIEW.md) dataflow).
 - **Detection** — find candidate targets in each sensor stream.
 - **Fusion** — combine EO + thermal + radar into one target picture.
 - **Tracking** — maintain target state over time.
