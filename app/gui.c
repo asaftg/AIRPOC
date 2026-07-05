@@ -27,6 +27,17 @@
 static volatile sig_atomic_t g_run = 1;
 static pthread_t g_srv_th;
 static int       g_listen_fd = -1;
+static char      g_rec_host[128] = "127.0.0.1";   /* recorder daemon for /rec/ pass-through */
+static int       g_rec_port = 8093;
+
+void gui_set_recorder(const char *hp)
+{
+    if (!hp || !*hp) return;
+    char tmp[120]; snprintf(tmp, sizeof tmp, "%s", hp);
+    char *c = strchr(tmp, ':');
+    if (c) { *c = 0; g_rec_port = atoi(c + 1); }
+    snprintf(g_rec_host, sizeof g_rec_host, "%s", tmp);
+}
 
 /* console state (not owned by a feed) */
 static volatile int g_track_man = 0;      /* tracking select: 0 auto / 1 manual */
@@ -209,6 +220,50 @@ static void handle_rstats(int fd)
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
 }
 
+/* generic recorder pass-through: GET /rec/<path> -> connect the recorder daemon, forward
+ * the request, splice bytes back to the client until EOF. Streams (never buffers) so the
+ * replay MJPEG works. On connect failure: 502 {"connected":false}. */
+static int rec_connect(void)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons((uint16_t)g_rec_port) };
+    if (inet_pton(AF_INET, g_rec_host, &a.sin_addr) != 1) { close(fd); return -1; }
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
+    return fd;
+}
+static void handle_rec(int cfd, const char *req)
+{
+    const char *p = strstr(req, "/rec");
+    if (!p) return;
+    p += 4;                                   /* strip "/rec" -> "/stats", "/replay/stream?…" */
+    char path[512]; int i = 0;
+    while (p[i] && p[i] != ' ' && p[i] != '\r' && p[i] != '\n' && i < (int)sizeof(path) - 1) { path[i] = p[i]; i++; }
+    path[i] = 0;
+    if (path[0] != '/') { path[0] = '/'; path[1] = 0; }
+
+    int rfd = rec_connect();
+    if (rfd < 0) {
+        const char *b = "{\"connected\":false}";
+        dprintf(cfd, "HTTP/1.0 502 Bad Gateway\r\nContent-Type: application/json\r\n"
+                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", (int)strlen(b), b);
+        return;
+    }
+    char rq[560];
+    int n = snprintf(rq, sizeof rq, "GET %s HTTP/1.0\r\nHost: rec\r\n\r\n", path);
+    if (write(rfd, rq, (size_t)n) < 0) { close(rfd); return; }
+    char buf[64 * 1024]; ssize_t r;
+    while (g_run && (r = read(rfd, buf, sizeof buf)) > 0) {
+        ssize_t off = 0;
+        while (off < r) {
+            ssize_t w = write(cfd, buf + off, (size_t)(r - off));
+            if (w <= 0) { close(rfd); return; }
+            off += w;
+        }
+    }
+    close(rfd);
+}
+
 static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "gain=",
                                  "expms=", "gaincap=", "median=", "fps=", "res=" };
 /* the daemon's six live controls; the GUI sends them namespaced as radar_<key>= */
@@ -277,7 +332,8 @@ static void *client(void *arg)
     if (n <= 0) { close(fd); return NULL; }
     req[n] = 0;
 
-    if (has(req, "/rstats"))         handle_rstats(fd);
+    if (has(req, "/rec/"))           handle_rec(fd, req);
+    else if (has(req, "/rstats"))    handle_rstats(fd);
     else if (has(req, "/stats"))     handle_stats(fd);
     else if (has(req, "/radar"))     handle_radar(fd);
     else if (has(req, "/ctl")) {

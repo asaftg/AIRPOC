@@ -23,13 +23,15 @@ static void on_sig(int s) { (void)s; g_run = 0; }
 
 int main(int argc, char **argv)
 {
-    const char *eo    = "127.0.0.1:8091";   /* EO module feed  */
-    const char *rport = "127.0.0.1:8092";   /* radar daemon    */
+    const char *eo    = "127.0.0.1:8091";   /* EO module feed   */
+    const char *rport = "127.0.0.1:8092";   /* radar daemon     */
+    const char *rec   = "127.0.0.1:8093";   /* recorder daemon  */
     int port = 8080, opt;
-    while ((opt = getopt(argc, argv, "p:e:r:")) != -1) {
+    while ((opt = getopt(argc, argv, "p:e:r:c:")) != -1) {
         if      (opt == 'p') port = atoi(optarg);
         else if (opt == 'e') eo = optarg;
         else if (opt == 'r') rport = optarg;
+        else if (opt == 'c') rec = optarg;
     }
 
     signal(SIGINT, on_sig);
@@ -38,6 +40,7 @@ int main(int argc, char **argv)
 
     eo_start(eo);          /* consume the EO feed; NOT CONNECTED if down */
     radar_start(rport);    /* consume the radar daemon; NOT CONNECTED if down */
+    gui_set_recorder(rec); /* recorder daemon address for the /rec/ pass-through */
 
     if (gui_start(port) != 0) {
         fprintf(stderr, "app: GUI server failed to start\n");

@@ -6,5 +6,6 @@
 
 int  gui_start(int port);   /* spawn encoder + HTTP threads; returns 0 on success */
 void gui_stop(void);
+void gui_set_recorder(const char *host_port);  /* recorder daemon addr for /rec/ pass-through */
 
 #endif /* AIRPOC_GUI_H */
