@@ -394,6 +394,7 @@
       var eoc = !!d.eo_connected || !!(eo && eo.connected);   /* live top-level, or replay's nested eo.connected */
       if (replaying && !replayHasEO) eoc = false;             /* this session recorded no video */
       $("eo-scrim").textContent = (replaying && !replayHasEO) ? "EO · NO VIDEO RECORDED" : "EO · NOT CONNECTED";
+      $("eo-tl").style.display = (replaying && !replayHasEO) ? "none" : "";   /* no video → hide the recorded EO status line */
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       /* link chip: signal bars (wifi) · type · live Mb/s · delivered fps */
@@ -630,11 +631,15 @@
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
       $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
       $("tp-rate").textContent = rs.rate + "×";
+      /* NATIVE/DISPLAY toggle — only when a native channel was recorded */
+      if (rs.has_native) { $("tp-video").hidden = false; $("tp-video").textContent = (rs.video_src === "native") ? "NATIVE" : "DISPLAY"; }
+      else $("tp-video").hidden = true;
       if (rs.t_wall_ms) { var d = new Date(rs.t_wall_ms); $("v-zulu").textContent = "REC " + ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2); }
     }).catch(function () { $("eo-scrim").hidden = false; });
   }
   $("tp-play").onclick = function () { rctl($("tp-play").textContent === "⏸" ? "pause=1" : "play=1"); };
   $("tp-rate").onclick = function () { var i = (RATES.indexOf(parseFloat($("tp-rate").textContent)) + 1) % RATES.length; rctl("rate=" + RATES[i]); };
+  $("tp-video").onclick = function () { rctl("video=" + ($("tp-video").textContent === "NATIVE" ? "display" : "native")); };
   $("tp-step-b").onclick = function () { rctl("step=-1"); };
   $("tp-step-f").onclick = function () { rctl("step=1"); };
   $("tp-scrub").oninput = function () {
