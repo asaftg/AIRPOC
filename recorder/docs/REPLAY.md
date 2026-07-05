@@ -5,6 +5,24 @@ already polls**, paced by a transport clock — the console renders a recording
 with the exact code that renders live. Zero decode/encode: display JPEGs and
 radar JSON come byte-verbatim off read-only mmaps. One session open at a time.
 
+## Video source: NATIVE by default
+
+Replay reconstructs the **full native 1440×1088** frame from the recorded
+`eo_y10` channel — decode packed 10-bit → per-frame percentile tonemap + gamma
+→ JPEG (`render.c`) — so a session recorded with the display at a low res
+still replays at full native detail. This is the default whenever the native
+channel is present.
+
+- Falls back to the recorded display JPEGs (`eo_jpeg`, byte-verbatim) when the
+  native channel is absent or has been dropped via `purge_native`.
+- Toggle per open session: `GET /replay/ctl?video=native|display`.
+- `/replay/state` reports `video_src`, `has_native`, `has_display`,
+  `native_w/native_h` so the GUI can show and switch the source.
+- Native frames are JPEG-encoded on demand at replay time (recorder runs at
+  `Nice=5`, so it yields to the live pipeline), with a shared one-frame cache so
+  concurrent viewers and pause/scrub don't re-encode. Zero cost when replaying
+  the display source (bytes served verbatim).
+
 ## Transport semantics
 
 - Clock: `t = t_ms + playing·(now−anchor)·rate`, clamped to [0, dur]; hitting
@@ -41,6 +59,7 @@ Replay:
 |---|---|
 | `GET /replay/ctl?open=<sid>` / `close=1` | mmap/teardown (open replaces; refuses `state=recording`) |
 | `GET /replay/ctl?play=1\|pause=1\|rate=<0.5..4>\|seek=<ms>\|step=1\|-1` | transport; step implies pause |
+| `GET /replay/ctl?video=native\|display` | choose the video source (default native when present) |
 | `GET /replay/stream` | paced MJPEG of the recorded display JPEGs |
 | `GET /replay/radar` | recorded radar frame JSON at ≤ clock (schema of radar/docs/INTEGRATION.md + `"replay":true`) |
 | `GET /replay/rstats` | recorded radar daemon /stats at ≤ clock |

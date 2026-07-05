@@ -30,6 +30,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "rec: pack10 selftest FAILED\n");
         return 1;
     }
+    if (render_selftest() != 0) {
+        fprintf(stderr, "rec: render selftest FAILED\n");
+        return 1;
+    }
 
     if (disk_present(g_rec.root) || !access(g_rec.root, F_OK)) {
         /* root exists (or its volume is mounted): ensure the directory */

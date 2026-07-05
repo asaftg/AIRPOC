@@ -46,11 +46,29 @@ static struct {
     int playing;
     uint64_t anchor_ns;
     /* data */
-    RChan jpeg, radar;
+    RChan jpeg, radar, y10;
+    int has_native, has_display, video_native;    /* video source selection */
+    int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
     char *evbuf;                         /* events channel, loaded whole */
     Ev evs[MAX_EVS];
     int n_evs;
 } g_rp = { .lk = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER, .rate = 1.0 };
+
+/* native-render cache: one encoded frame shared across pushers/viewers */
+static struct {
+    pthread_mutex_t lk;
+    long idx;                            /* eo_y10 row index cached, -1 = none */
+    uint8_t *jpg;
+    uint32_t len;
+} g_nat = { .lk = PTHREAD_MUTEX_INITIALIZER, .idx = -1 };
+
+#define NAT_JPG_CAP (1u << 20)          /* matches the http serve buffer */
+
+/* the channel driving the video timeline: native if selected+present, else display */
+static RChan *video_chan(void)
+{
+    return (g_rp.video_native && g_rp.has_native) ? &g_rp.y10 : &g_rp.jpeg;
+}
 
 /* ---- loading ---- */
 
@@ -212,14 +230,62 @@ static void clock_set(int64_t t, int playing)
 
 /* ---- open/close ---- */
 
+static void nat_cache_drop(void)
+{
+    pthread_mutex_lock(&g_nat.lk);
+    free(g_nat.jpg);
+    g_nat.jpg = NULL;
+    g_nat.idx = -1;
+    pthread_mutex_unlock(&g_nat.lk);
+}
+
+/* native JPEG for eo_y10 row i, shared 1-frame cache; encodes outside g_rp.lk.
+ * Returns bytes into buf (cap NAT_JPG_CAP) or -1. Caller must NOT hold g_rp.lk. */
+static int nat_jpeg(long i, uint8_t *buf, uint32_t *len)
+{
+    pthread_mutex_lock(&g_nat.lk);
+    if (g_nat.idx == i && g_nat.jpg) {
+        memcpy(buf, g_nat.jpg, g_nat.len);
+        *len = g_nat.len;
+        pthread_mutex_unlock(&g_nat.lk);
+        return 0;
+    }
+    pthread_mutex_unlock(&g_nat.lk);
+
+    /* copy the raw payload out from under g_rp.lk (mmap stable while open) */
+    static _Thread_local uint8_t *raw;      /* per-thread scratch */
+    static _Thread_local uint32_t raw_cap;
+    pthread_mutex_lock(&g_rp.lk);
+    if (!g_rp.open || i < 0 || i >= g_rp.y10.n) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    uint32_t plen;
+    const uint8_t *p = rchan_payload(&g_rp.y10, i, &plen, NULL);
+    int w = g_rp.nat_w, h = g_rp.nat_h, mode = g_rp.nat_mode;
+    if (!p) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    if (plen > raw_cap) { free(raw); raw = malloc(plen); raw_cap = raw ? plen : 0; }
+    if (!raw) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    memcpy(raw, p, plen);
+    pthread_mutex_unlock(&g_rp.lk);
+
+    if (render_y10_to_jpeg(raw, plen, w, h, mode, buf, NAT_JPG_CAP, len) != 0) return -1;
+
+    pthread_mutex_lock(&g_nat.lk);
+    if (!g_nat.jpg) g_nat.jpg = malloc(NAT_JPG_CAP);
+    if (g_nat.jpg && *len <= NAT_JPG_CAP) { memcpy(g_nat.jpg, buf, *len); g_nat.len = *len; g_nat.idx = i; }
+    pthread_mutex_unlock(&g_nat.lk);
+    return 0;
+}
+
 static void rp_unload(void)
 {
     rchan_free(&g_rp.jpeg);
     rchan_free(&g_rp.radar);
+    rchan_free(&g_rp.y10);
+    nat_cache_drop();
     free(g_rp.evbuf);
     g_rp.evbuf = NULL;
     g_rp.n_evs = 0;
     g_rp.open = 0;
+    g_rp.has_native = g_rp.has_display = g_rp.video_native = 0;
 }
 
 static int rp_open(const char *sid)
@@ -244,18 +310,42 @@ static int rp_open(const char *sid)
 
     /* every channel is optional — replay whatever the session really has
      * (a radar-only session replays scope + stats; video shows no frames) */
-    uint64_t t0_rd = 0;
+    uint64_t t0_rd = 0, t0_y10 = 0;
     int has_jpeg = rchan_load(dir, "eo_jpeg", &g_rp.jpeg, &g_rp.t0_mono) == 0;
+    int has_y10 = rchan_load(dir, "eo_y10", &g_rp.y10, &t0_y10) == 0;
     int has_radar = rchan_load(dir, "radar_wire", &g_rp.radar, &t0_rd) == 0;
-    if (!has_jpeg && has_radar) g_rp.t0_mono = t0_rd;
-    if (!has_jpeg && !has_radar) return -1;                  /* nothing to replay */
+    if (!has_jpeg && has_y10) g_rp.t0_mono = t0_y10;
+    else if (!has_jpeg && has_radar) g_rp.t0_mono = t0_rd;
+    if (!has_jpeg && !has_y10 && !has_radar) return -1;      /* nothing to replay */
     load_events(dir);
+
+    /* native geometry + encoding for reconstruction */
+    g_rp.has_native = has_y10;
+    g_rp.has_display = has_jpeg;
+    g_rp.video_native = has_y10;                             /* default to native when present */
+    g_rp.nat_w = 1440; g_rp.nat_h = 1088; g_rp.nat_mode = MODE_Y10P;
+    if (has_y10) {
+        char cj[512], v[24];
+        char cpath[700];
+        snprintf(cpath, sizeof cpath, "%s/eo_y10/channel.json", dir);
+        FILE *cf = fopen(cpath, "rb");
+        if (cf) {
+            size_t n = fread(cj, 1, sizeof cj - 1, cf); cj[n] = 0; fclose(cf);
+            if (store_manifest_field(cj, "w", v, sizeof v) == 0 && atoi(v) > 0) g_rp.nat_w = atoi(v);
+            if (store_manifest_field(cj, "h", v, sizeof v) == 0 && atoi(v) > 0) g_rp.nat_h = atoi(v);
+            if (store_manifest_field(cj, "encoding", v, sizeof v) == 0)
+                g_rp.nat_mode = !strcmp(v, "y16le") ? MODE_RAW16 : !strcmp(v, "y8") ? MODE_Y8 : MODE_Y10P;
+        }
+    }
+    nat_cache_drop();
 
     char v[64] = "";
     store_manifest_field(mf, "dur_ms", v, sizeof v);
     g_rp.dur_ms = atoll(v);
     if (g_rp.dur_ms <= 0 && g_rp.jpeg.n)
         g_rp.dur_ms = g_rp.jpeg.t_ms[g_rp.jpeg.n - 1];
+    if (g_rp.dur_ms <= 0 && g_rp.y10.n)
+        g_rp.dur_ms = g_rp.y10.t_ms[g_rp.y10.n - 1];
     if (g_rp.dur_ms <= 0 && g_rp.radar.n)
         g_rp.dur_ms = g_rp.radar.t_ms[g_rp.radar.n - 1];
     const char *rt = strstr(mf, "\"t_start\"");
@@ -323,9 +413,14 @@ void replay_ctl(const char *qs, char *resp, size_t rlen)
         clock_set(clock_now(), 0);
     } else if (query_get(qs, "seek", v, sizeof v) == 0) {
         clock_set(atoll(v), g_rp.playing);
+    } else if (query_get(qs, "video", v, sizeof v) == 0) {
+        int want_nat = !strcmp(v, "native");
+        g_rp.video_native = want_nat && g_rp.has_native;
+        pthread_cond_broadcast(&g_rp.cv);                 /* pushers re-pick source */
     } else if (query_get(qs, "step", v, sizeof v) == 0) {
-        /* step over the video frames when present, else radar frames */
-        const RChan *c = g_rp.jpeg.n ? &g_rp.jpeg : &g_rp.radar;
+        /* step over the active video channel, else radar frames */
+        RChan *vc = video_chan();
+        const RChan *c = vc->n ? vc : &g_rp.radar;
         if (c->n) {
             int dir = atoi(v) < 0 ? -1 : 1;
             long j = rchan_at(c, clock_now()) + dir;
@@ -342,14 +437,18 @@ void replay_ctl(const char *qs, char *resp, size_t rlen)
 
 static size_t rp_state_obj(char *buf, size_t len, int64_t t)
 {
-    long fi = rchan_at(&g_rp.jpeg, t);
+    RChan *vc = video_chan();
+    long fi = rchan_at(vc, t);
     return (size_t)snprintf(buf, len,
         "{\"sid\":\"%s\",\"name\":\"%s\",\"t_ms\":%lld,\"dur_ms\":%lld,"
-        "\"playing\":%d,\"rate\":%.2f,\"t_wall_ms\":%llu,\"frame_i\":%ld,\"frames\":%ld}",
+        "\"playing\":%d,\"rate\":%.2f,\"t_wall_ms\":%llu,\"frame_i\":%ld,\"frames\":%ld,"
+        "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
         (unsigned long long)((g_rp.t0_real + (uint64_t)t * 1000000ull) / 1000000ull),
-        fi, g_rp.jpeg.n);
+        fi, vc->n,
+        g_rp.video_native && g_rp.has_native ? "native" : "display",
+        g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h);
 }
 
 void replay_state_json(char *buf, size_t len)
@@ -429,11 +528,19 @@ int replay_rstats_json(char *buf, size_t len)
 int replay_frame_copy(int64_t t_ms, uint8_t *buf, uint32_t cap, uint32_t *len)
 {
     pthread_mutex_lock(&g_rp.lk);
-    if (!g_rp.open || !g_rp.jpeg.n) { pthread_mutex_unlock(&g_rp.lk); return -1; }
-    long i = rchan_at(&g_rp.jpeg, t_ms);
+    if (!g_rp.open) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    int native = g_rp.video_native && g_rp.has_native;
+    RChan *vc = video_chan();
+    if (!vc->n) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    long i = rchan_at(vc, t_ms);
     if (i < 0) i = 0;
+    if (native) {
+        pthread_mutex_unlock(&g_rp.lk);      /* nat_jpeg takes g_rp.lk itself */
+        if (cap < NAT_JPG_CAP) return -1;
+        return nat_jpeg(i, buf, len);
+    }
     uint32_t plen;
-    const uint8_t *p = rchan_payload(&g_rp.jpeg, i, &plen, NULL);
+    const uint8_t *p = rchan_payload(vc, i, &plen, NULL);
     if (!p || plen > cap) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     memcpy(buf, p, plen);                /* copy under lock: mmap can't vanish */
     *len = plen;
@@ -451,6 +558,8 @@ void replay_stream(int fd)
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
     if (write(fd, head, strlen(head)) < 0) return;
 
+    uint8_t *natbuf = malloc(NAT_JPG_CAP);   /* per-connection native scratch */
+
     pthread_mutex_lock(&g_rp.lk);
     unsigned gen = g_rp.gen;
     g_rp.pushers++;
@@ -458,25 +567,42 @@ void replay_stream(int fd)
 
     while (g_rp.open && g_rp.gen == gen) {
         int64_t t = clock_now();
-        long i = rchan_at(&g_rp.jpeg, t);
-        if (i < 0) i = g_rp.jpeg.n ? 0 : -1;
+        int native = g_rp.video_native && g_rp.has_native;
+        RChan *vc = video_chan();
+        long i = rchan_at(vc, t);
+        if (i < 0) i = vc->n ? 0 : -1;
 
         if (i >= 0 && i != last) {
-            uint32_t plen;
-            const uint8_t *p = rchan_payload(&g_rp.jpeg, i, &plen, NULL);
             last = i;
-            if (p) {
+            int bad = 0;
+            if (native && natbuf) {
                 pthread_mutex_unlock(&g_rp.lk);
-                char ph[128];
-                int hn = snprintf(ph, sizeof ph,
-                    "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", plen);
-                int bad = write(fd, ph, (size_t)hn) != hn ||
+                uint32_t jlen = 0;
+                if (nat_jpeg(i, natbuf, &jlen) == 0) {   /* decode+tonemap+encode, cached */
+                    char ph[128];
+                    int hn = snprintf(ph, sizeof ph,
+                        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", jlen);
+                    bad = write(fd, ph, (size_t)hn) != hn ||
+                          write(fd, natbuf, jlen) != (ssize_t)jlen ||
+                          write(fd, "\r\n", 2) != 2;
+                }
+                pthread_mutex_lock(&g_rp.lk);
+            } else {
+                uint32_t plen;
+                const uint8_t *p = rchan_payload(vc, i, &plen, NULL);
+                if (p) {
+                    pthread_mutex_unlock(&g_rp.lk);   /* pushers>0 keeps mmap valid */
+                    char ph[128];
+                    int hn = snprintf(ph, sizeof ph,
+                        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", plen);
+                    bad = write(fd, ph, (size_t)hn) != hn ||
                           write(fd, p, plen) != (ssize_t)plen ||
                           write(fd, "\r\n", 2) != 2;
-                pthread_mutex_lock(&g_rp.lk);
-                if (bad) break;
-                continue;
+                    pthread_mutex_lock(&g_rp.lk);
+                }
             }
+            if (bad) break;
+            continue;
         }
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -486,4 +612,5 @@ void replay_stream(int fd)
     }
     g_rp.pushers--;
     pthread_mutex_unlock(&g_rp.lk);
+    free(natbuf);
 }

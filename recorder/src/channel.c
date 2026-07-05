@@ -394,16 +394,26 @@ static void *housekeeper(void *arg)
 
 static void write_channel_json(Chan *c, const char *dir)
 {
-    char path[640], body[512];
+    char path[640], body[640];
     const char *enc = c->cfg->encoding;
+    char geom[48] = "";
     if (c->id == CH_EO_Y10) {
         VideoMode m = g_rec.mode;
         enc = m == MODE_Y10P ? "y10p" : m == MODE_Y8 ? "y8" : "y16le";
+        /* native geometry for replay reconstruction — from the EO tap's
+         * declared meta_json, default to the IMX296 native */
+        int w = 1440, h = 1088;
+        if (c->sub_ok && c->sub.t.h) {
+            char tmp[24];
+            if (store_manifest_field(c->sub.t.h->meta_json, "w", tmp, sizeof tmp) == 0 && atoi(tmp) > 0) w = atoi(tmp);
+            if (store_manifest_field(c->sub.t.h->meta_json, "h", tmp, sizeof tmp) == 0 && atoi(tmp) > 0) h = atoi(tmp);
+        }
+        snprintf(geom, sizeof geom, ",\"w\":%d,\"h\":%d", w, h);
     }
     snprintf(path, sizeof path, "%s/%s/channel.json", dir, c->cfg->name);
     int n = snprintf(body, sizeof body,
-        "{\"name\":\"%s\",\"encoding\":\"%s\",\"meta\":[%s],\"source\":\"%s%s\",\"airec\":%d}\n",
-        c->cfg->name, enc, c->cfg->meta_desc,
+        "{\"name\":\"%s\",\"encoding\":\"%s\"%s,\"meta\":[%s],\"source\":\"%s%s\",\"airec\":%d}\n",
+        c->cfg->name, enc, geom, c->cfg->meta_desc,
         c->cfg->tap ? "shm:" : "internal", c->cfg->tap ? c->cfg->tap : "", AIREC_VERSION);
     store_write_file_atomic(path, body, (size_t)n);
 }

@@ -64,6 +64,13 @@ relays the replay MJPEG stream). On connect failure: `502` with
   ZULU pill shows recorded wall clock (`replay_state.t_wall_ms`) labeled REC,
   `body.replay` hides/disables ALL live controls (LIGHT/ILLUM/TRACK/REC,
   zoombar, DEV inputs — show recorded values read-only; send no `/ctl`).
+- **Video source — NATIVE by default:** replay reconstructs the full native
+  1440×1088 frame from the raw channel, not the recorded display res, so low-res
+  display recordings still replay at full detail. `/rec/replay/state` exposes
+  `video_src` ("native"/"display"), `has_native`, `has_display`, `native_w/h`.
+  Add a `NATIVE / DISPLAY` toggle in the transport → `/rec/replay/ctl?video=native|display`
+  (hide when `has_native:false`, e.g. radar-only or purged-raw). The `<img>`
+  renders whatever res arrives; CSS `object-fit` keeps the layout stable on switch.
 - Transport bar under the video: play/pause → `/rec/replay/ctl?play=1|pause=1`;
   rate cycle 0.5/1/2/4× → `rate=`; frame step ⏮⏭ → `step=-1|1`; range-input
   timeline (`max=dur_ms`, `oninput` throttled ≥80 ms → `seek=<ms>`, suppress

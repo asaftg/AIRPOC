@@ -197,6 +197,11 @@ int  thumbs_serve_path(const char *sid, int n, char *path, size_t plen);
 /* thumbs.c */
 int  thumbs_generate(const char *dir);   /* 8 stills from eo_jpeg */
 
+/* render.c — reconstruct a native-res JPEG from a recorded eo_y10 frame */
+int  render_y10_to_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+                        uint8_t *out, uint32_t cap, uint32_t *outlen);
+int  render_selftest(void);
+
 /* replay.c */
 void replay_ctl(const char *qs, char *resp, size_t rlen);
 void replay_state_json(char *buf, size_t len);

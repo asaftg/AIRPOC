@@ -7,10 +7,10 @@ CFLAGS  ?= -O2 -Wall -Wextra -std=gnu99
 ifeq ($(ARCH),aarch64)
 CFLAGS  += -march=armv8.2-a+crc
 endif
-LDFLAGS := -pthread -lrt -ljpeg
+LDFLAGS := -pthread -lrt -ljpeg -lm
 
 SRC := main.c channel.c session.c store.c disk.c events.c http.c \
-       pack10.c library.c thumbs.c replay.c
+       pack10.c library.c thumbs.c replay.c render.c
 OBJ := $(SRC:.c=.o)
 
 all: airpoc_recorder tap_bench
