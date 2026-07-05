@@ -23,12 +23,16 @@ Single header: `recorder/tap/airpoc_tap.h` (vendored by producers; no link dep).
 
 ## Live rings
 
-| ring | payload cap | slots | note |
-|---|---|---|---|
-| `airpoc.eo_y10` | sizeimage (3,133,440) | 16 | 266 ms depth at 60 Hz |
-| `airpoc.eo_jpeg` | 512 KiB | 16 | display JPEG after encode |
-| `airpoc.radar_raw` | 8 KiB | 512 | every UART read() |
-| `airpoc.radar_wire` | 256 KiB | 16 | SSE frame JSON |
+| ring | payload cap | slots | state | note |
+|---|---|---|---|---|
+| `airpoc.eo_y10` | sizeimage (3,133,440) | 16 | pending WI-EO-2 | 266 ms depth at 60 Hz |
+| `airpoc.eo_jpeg` | 1 MiB | 16 | pending WI-EO-3 | display JPEG after encode; 1 MiB covers the NATIVE display res |
+| `airpoc.radar_raw` | 8 KiB | 512 | ✅ live | every UART read() |
+| `airpoc.radar_wire` | 256 KiB | 16 | ✅ live | SSE frame JSON |
+
+Producers vendor a copy of the header next to their code (`radar/tap/airpoc_tap.h`
+is the precedent); protocol drift is loud — the magic/version handshake fails
+at `tap_open`, it can't corrupt silently.
 
 ## Memory model (why readers can't see torn data)
 
@@ -40,9 +44,14 @@ re-check `seq_begin == S+1`; mismatch = lapped mid-read → drop + count.
 > Pitfall: readers must treat `payload_len > slot cap` (TRUNCATED flag) and lap
 > jumps as normal — both are counted, neither is an error.
 
-## Work orders — producer tees still to land
+## Work orders
 
-**EO owner (`eo/pipeline/`)**
+**Radar owner — DONE 2026-07-05.** Both taps live and HW-verified: 26.3 Hz
+byte-verbatim wire frames, every UART read captured, 0 drops / 0 gaps / 100%
+CRC on a 45 s session. Header vendored at `radar/tap/airpoc_tap.h`; taps
+declared in `radar/README.md` + `docs/INTEGRATION.md`.
+
+**EO owner (`eo/pipeline/`) — pending**
 - WI-EO-1: `capture.c cap_dqbuf` — stop discarding `b.timestamp`/`b.sequence`
   (add to the Capture struct; they are the eo_y10 `t_src_ns` and `meta[0]`).
 - WI-EO-2: `libeo.c` — `tap_create("airpoc.eo_y10", 16, sizeimage)` in
@@ -51,7 +60,8 @@ re-check `seq_begin == S+1`; mismatch = lapped mid-read → drop + count.
   {v4l2_seq, exp_lines, gain, vmax, mean×100, drops}. `consume_frame` and the
   tone handoff keep the same pointer; heap fallback if shm fails. `eo.h` frozen.
 - WI-EO-3: `mjpeg.c mjpeg_publish` — one `tap_write("airpoc.eo_jpeg", …)` of
-  the just-encoded JPEG with {seq, dw, dh, zoom, res_idx}.
+  the just-encoded JPEG with {seq, dw, dh, zoom, res_idx}. Slots 16 × 1 MiB —
+  sized for the NATIVE display res on noisy night frames.
 - WI-EO-4: declare both taps in `eo/pipeline/README.md` + `INTEGRATION.md`.
 
 **Radar owner (`radar/src/`)**

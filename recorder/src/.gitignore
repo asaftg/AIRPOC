@@ -1,0 +1,4 @@
+# build artifacts
+*.o
+airpoc_recorder
+tap_bench

@@ -7,11 +7,12 @@ any session through the operator console exactly as it looked live.
 ## I/O contract
 
 **Consumes**
-- shm taps (protocol v1, [docs/TAP.md](docs/TAP.md)): `airpoc.eo_y10` (native
-  Y10 frames + frame-synchronous AE meta), `airpoc.eo_jpeg` (the display JPEGs
-  the operator saw), `airpoc.radar_raw` (bit-perfect UART bytes),
-  `airpoc.radar_wire` (the exact SSE frame JSON). Absent taps degrade to
-  `connected:0` in `/stats` — nothing crashes.
+- shm taps (protocol v1, [docs/TAP.md](docs/TAP.md)): `airpoc.radar_raw`
+  (bit-perfect UART bytes, ✅ live) and `airpoc.radar_wire` (the exact SSE
+  frame JSON, ✅ live); `airpoc.eo_y10` (native Y10 + frame-synchronous AE
+  meta) and `airpoc.eo_jpeg` (the display JPEGs the operator saw) — pending
+  WI-EO in the EO pipeline. Absent taps degrade to `connected:0` in `/stats`;
+  a session records whatever channels exist and replays exactly that.
 - The modules' documented `/stats` surfaces (`:8091`, `:8092`, `:8080`),
   polled at 5 Hz into the events channel.
 

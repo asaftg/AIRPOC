@@ -154,7 +154,7 @@ static void handle_ctl(int fd, const char *qs)
 
 static void handle(int fd, const char *path, const char *qs)
 {
-    static char big[512 * 1024];         /* guarded below by g_big_lk */
+    static char big[1024 * 1024];        /* >= eo_jpeg slot cap; guarded by g_big_lk */
     static pthread_mutex_t g_big_lk = PTHREAD_MUTEX_INITIALIZER;
 
     if (!strcmp(path, "/stats")) {
