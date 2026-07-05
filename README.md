@@ -52,7 +52,7 @@ app/           the main process + operator console (field GUI)
 | EO camera | ✅ Y10 mono @ 60 fps, focused, auto-exposed; **production C pipeline + preview** (zoom/focus/illuminator controls) — see [`eo/`](eo/README.md) |
 | NIR illuminator | ✅ controller HW-verified **+ on/off·power·beam-FOV controls live in the EO reviewer**; camera-sync (NIR strobe) pending — see [`illuminator/`](illuminator/README.md) |
 | Operator console (`app/`) | 🟡 thin **proxy** console + main process: consumes the EO video feed + radar SSE, forwards controls, adds the **radar scope**, EO overlays, **tracking auto/manual**, **illuminator** (forwarded to the EO feed), bright day/night. No capture/ISP/AE/encode. NOT CONNECTED when a feed is down — see [`app/`](app/README.md) |
-| Radar | 🟨 AWR2944P (no DCA) **C daemon + PPI previewer** — builds clean, sim-verified end-to-end (`-s`); heavy DSP runs on-chip (mmw_demo), host does drop-free parse + clustering; on-hardware bring-up pending — see [`radar/`](radar/README.md) |
+| Radar | ✅ AWR2944P (no DCA) **C daemon + PPI previewer**, **HW-verified: 26 Hz, 0 dropped frames**, per-point SNR live; drop-free parse → range-adaptive DBSCAN → **class-less boxes** with 6 live `/ctl` knobs; **consumed by the console** (`app/radar_client.c` ← `:8092`); chip DSP timing in `/stats` (~1.9% CPU). Box/angle optimization for EO-blind **standalone guidance** = known future work — see [`radar/`](radar/README.md) |
 | Detection, fusion, tracking, gimbal, guidance | ⬜ not started |
 
 A per-item production readiness review lives in the System Overview.

@@ -47,7 +47,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
 | Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
-| Radar | — | 🟨 previewer + C daemon (builds clean, sim-verified; HW bring-up pending) | [`radar/`](../radar/README.md) |
+| Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -92,15 +92,19 @@ Serves over polled `/stats` + `/stream` + `/radar` + `GET /ctl` — no websocket
 A feed that is down shows **NOT CONNECTED** (no synthetic data). Detail + endpoints:
 [`app/README.md`](../app/README.md) · [`app/docs/GUI.md`](../app/docs/GUI.md).
 
-### Radar (previewer done; on-HW bring-up pending)
+### Radar (HW-verified; box/angle optimization is future work)
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA** — data is the mmw_demo TLV
 point cloud over UART. The C daemon (`radar/src/`) pushes the A/G long-range
 profile, parses the stream drop-free, clusters it into **class-less** target
 boxes (host DBSCAN + Kalman, until on-chip gtrack lands), and serves a PPI
 previewer over SSE on `:8092`. Detects vehicles/drones/humans out to max range
-(human baseline ~100 m). Builds clean and is verified end-to-end in a `-s`
-simulation mode (synthetic scene through the real pipeline) so the GUI can
-integrate with the board off; on-hardware bring-up pending. GUI contract:
+(human baseline ~100 m). **On-hardware verified: 26 Hz / 0 dropped frames,
+per-point SNR live, ~1.9% CPU**, consumed by the operator console
+(`app/radar_client.c` ← `:8092`). The profile is DSP-bound at ~17 ms/frame
+(measured, in `/stats`); 26 Hz is the zero-compromise shipped rate — see
+[`radar/docs/FRAMERATE.md`](../radar/docs/FRAMERATE.md). **Known future work:**
+tightening the bounding-box / angle quality so radar can acquire-track-guide
+**standalone, EO-blind** (root-caused; plan parked). GUI contract:
 [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md). Detail:
 [`radar/`](../radar/README.md).
 
