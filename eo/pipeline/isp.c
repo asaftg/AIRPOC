@@ -59,18 +59,26 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
 {
     if (!g_lut_ready) lut_init();
     int npx = ow * oh;
-    uint16_t *sm = malloc((size_t)npx * sizeof(uint16_t));   /* downscaled 10-bit */
-    if (!sm) return;
+    /* hot path (60 fps): cached work buffers, no per-frame malloc; the column map is
+     * precomputed once per frame — the naive form costs a per-PIXEL integer division
+     * (~1.5M/frame at native), which was exactly the producer's frame-budget overrun. */
+    static uint16_t *sm = NULL;  static int sm_cap = 0;
+    static int      *xs = NULL;  static int xs_cap = 0;
+    if (npx > sm_cap) { free(sm); sm = malloc((size_t)npx * sizeof(uint16_t)); sm_cap = sm ? npx : 0; }
+    if (ow + 1 > xs_cap) { free(xs); xs = malloc((size_t)(ow + 1) * sizeof(int)); xs_cap = xs ? ow + 1 : 0; }
+    if (!sm || !xs) return;
+    for (int ox = 0; ox <= ow; ox++) xs[ox] = cx + ox * cw / ow;   /* once, not per pixel */
     for (int oy = 0; oy < oh; oy++) {
         int sy0 = cy + oy * ch / oh, sy1 = cy + (oy + 1) * ch / oh; if (sy1 <= sy0) sy1 = sy0 + 1;
+        uint16_t *orow = sm + (size_t)oy * ow;
         for (int ox = 0; ox < ow; ox++) {
-            int sx0 = cx + ox * cw / ow, sx1 = cx + (ox + 1) * cw / ow; if (sx1 <= sx0) sx1 = sx0 + 1;
+            int sx0 = xs[ox], sx1 = xs[ox + 1]; if (sx1 <= sx0) sx1 = sx0 + 1;
             unsigned acc = 0, cnt = 0;
             for (int sy = sy0; sy < sy1; sy++) {
                 const uint8_t *row = y10 + (size_t)sy * bpl;
                 for (int sx = sx0; sx < sx1; sx++) { acc += (row[2*sx] | (row[2*sx+1] << 8)) >> 6; cnt++; }
             }
-            sm[oy * ow + ox] = (uint16_t)(cnt ? acc / cnt : 0);
+            orow[ox] = (uint16_t)(cnt ? acc / cnt : 0);
         }
     }
     /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
@@ -93,12 +101,15 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
     double lo = s_lo, hi = s_hi;
     if (hi - lo < EO_MIN_SPAN) hi = lo + EO_MIN_SPAN;
     double scale = 255.0 / (hi - lo);
-    for (int i = 0; i < npx; i++) {
-        double s = (sm[i] - lo) * scale;
+    /* 10-bit -> 8-bit via a per-frame 1024-entry LUT (folds the stretch + gamma into
+     * one table lookup per pixel instead of float math per pixel). */
+    uint8_t map[1024];
+    for (int v = 0; v < 1024; v++) {
+        double s = (v - lo) * scale;
         int q = (int)(s < 0 ? 0 : s > 255 ? 255 : s);
-        out8[i] = g_lut[q];
+        map[v] = g_lut[q];
     }
-    free(sm);
+    for (int i = 0; i < npx; i++) out8[i] = map[sm[i]];
 }
 
 /* 3x3 median (Devillard's optimal 9-element network), edge-preserving grain filter.
