@@ -40,6 +40,7 @@ static volatile int g_man_vmax = EO_VMAX_MIN;        /* 60 fps   */
 static volatile int g_gaincap  = EO_GAIN_CAP;
 static volatile int g_median   = 1;
 static double       g_focus    = 0.0;
+static double       g_emit_fps = 0.0;   /* ACTUAL finished-frame emit rate (= wire fps) */
 
 /* raw handoff: capture thread -> tone thread */
 static struct {
@@ -48,7 +49,7 @@ static struct {
     uint8_t *raw;
     int      bpl, w, h;
     unsigned long seq;
-    double   fps, mean;
+    double   mean;
     int      exp_lines, gain, vmax;
     int      stop;
 } R;
@@ -77,7 +78,6 @@ static void *cap_thread(void *arg)
     (void)arg;
     uint8_t *frame = malloc((size_t)g_cap.sizeimage);
     if (!frame) return NULL;
-    double fps = 0.0, t_last = now_s();
     unsigned long n = 0;
 
     while (g_run) {
@@ -103,18 +103,15 @@ static void *cap_thread(void *arg)
             sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
         }
 
-        double t = now_s(), dt = t - t_last; t_last = t;
-        if (dt > 0) { double inst = 1.0 / dt; fps = fps ? 0.85 * fps + 0.15 * inst : inst; }
-
-        if (n % 2 == 0) {                            /* hand the newest raw to tone thread */
-            pthread_mutex_lock(&R.lock);
-            memcpy(R.raw, frame, (size_t)g_cap.bytesperline * g_cap.height);
-            R.seq++;
-            R.fps = fps; R.mean = g_ae.mean;
-            R.exp_lines = g_ae.exp_lines; R.gain = g_ae.gain; R.vmax = g_ae.vmax;
-            pthread_cond_signal(&R.cond);
-            pthread_mutex_unlock(&R.lock);
-        }
+        /* Hand EVERY frame to the tone thread; it rate-caps to the operating fps.
+         * (Was gated to every 2nd frame — that hard-capped the emit at 30 fps.) */
+        pthread_mutex_lock(&R.lock);
+        memcpy(R.raw, frame, (size_t)g_cap.bytesperline * g_cap.height);
+        R.seq++;
+        R.mean = g_ae.mean;
+        R.exp_lines = g_ae.exp_lines; R.gain = g_ae.gain; R.vmax = g_ae.vmax;
+        pthread_cond_signal(&R.cond);
+        pthread_mutex_unlock(&R.lock);
     }
     free(frame);
     return NULL;
@@ -156,6 +153,9 @@ static void *tone_thread(void *arg)
         pthread_mutex_lock(&F.lock);
         F.w = w; F.h = h; F.stride = w; F.front = wi; F.seq++;
         pthread_mutex_unlock(&F.lock);
+        /* measure the ACTUAL emit rate (what's on the wire), not the capture-loop rate */
+        if (last > 0) { double inst = 1.0 / (t - last);
+                        g_emit_fps = g_emit_fps > 0 ? 0.9 * g_emit_fps + 0.1 * inst : inst; }
         last = t;
     }
     free(local);
@@ -227,7 +227,7 @@ void eo_stats(EoStats *o)
 {
     if (!o) return;
     int vm = g_ae.vmax < EO_VMAX_MIN ? EO_VMAX_MIN : g_ae.vmax;
-    o->fps = R.fps; o->sfps = EO_FPS_OF_VMAX(vm); o->mean = g_ae.mean;
+    o->fps = g_emit_fps; o->sfps = EO_FPS_OF_VMAX(vm); o->mean = g_ae.mean;
     o->exp_ms = EO_EXP_US(g_ae.exp_lines) / 1000.0; o->duty_pct = EO_DUTY_PCT(g_ae.exp_lines, vm);
     o->gain = g_ae.gain; o->vmax = vm; o->ae_on = g_ae_on; o->gaincap = g_gaincap;
     o->median = g_median; o->focus = g_focus; o->connected = g_connected;
