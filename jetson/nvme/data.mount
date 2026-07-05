@@ -1,0 +1,11 @@
+[Unit]
+Description=AIRPOC data volume (NVMe, label AIRPOC-DATA)
+
+[Mount]
+What=/dev/disk/by-label/AIRPOC-DATA
+Where=/data
+Type=ext4
+Options=noatime
+
+[Install]
+WantedBy=local-fs.target

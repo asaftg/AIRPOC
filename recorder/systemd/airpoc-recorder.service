@@ -1,0 +1,14 @@
+[Unit]
+Description=AIRPOC record & replay daemon (:8093)
+After=network.target data.mount
+
+[Service]
+Type=simple
+User=asaftg
+ExecStart=/home/asaftg/AIRPOC/recorder/src/airpoc_recorder -p 8093 -r /data/recordings
+Restart=always
+RestartSec=2
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -57,6 +57,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
 | Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
 | Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
+| Record & replay (`recorder/`) | — | 🟡 daemon HW-verified on the NVMe (native Y10 + display JPEGs + radar + metadata @ ~125 MB/s, 0 drops; library + replay API live). Pending: EO/radar tap tees (WI-EO/WI-RD), console UI | [`recorder/`](../recorder/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -116,6 +117,17 @@ tightening the bounding-box / angle quality so radar can acquire-track-guide
 **standalone, EO-blind** (root-caused; plan parked). GUI contract:
 [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md). Detail:
 [`radar/`](../radar/README.md).
+
+### Record & replay (`recorder/`) — daemon verified; taps + console UI pending
+Standalone C daemon (`:8093`) recording every channel to AIREC sessions on the
+NVMe (`/data/recordings`): native Y10 (10-bit packed, lossless), the display
+JPEGs the operator saw, bit-perfect radar UART bytes + frame JSON, and 5 Hz
+stats/events — ~125 MB/s, 0 drops, ≪1 core, producers never blocked (shm taps,
+overwrite-oldest). Replay re-serves recorded data through the same endpoint
+shapes the console already polls, with play/pause/rate/seek/frame-step.
+Remaining: the EO/radar tap tees (one call each, `recorder/docs/TAP.md`) and
+the console UI (`recorder/docs/GUI_INTEGRATION.md`). Detail:
+[`recorder/`](../recorder/README.md).
 
 ### Detection / Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
