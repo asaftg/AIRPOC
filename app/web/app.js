@@ -311,7 +311,7 @@
     ctx.strokeStyle = "rgba(150,157,168,0.5)"; ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - maxR); ctx.stroke(); ctx.lineWidth = dpr;
 
-    if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText("NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
+    if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText((replaying && !replayHasRadar) ? "NO RADAR RECORDED" : "NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
     radarGeom = { cx: cx, cy: cy, scale: scale, dpr: dpr };
 
     /* raw returns — already gated server-side by the daemon (snr/speed/fov). v = +approaching */
@@ -392,6 +392,8 @@
       lastStats = d;
       var eo = d.eo || {};                              /* the EO feed's own /stats */
       var eoc = !!d.eo_connected || !!(eo && eo.connected);   /* live top-level, or replay's nested eo.connected */
+      if (replaying && !replayHasEO) eoc = false;             /* this session recorded no video */
+      $("eo-scrim").textContent = (replaying && !replayHasEO) ? "EO · NO VIDEO RECORDED" : "EO · NOT CONNECTED";
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       /* link chip: signal bars (wifi) · type · live Mb/s · delivered fps */
@@ -475,6 +477,8 @@
   var TAGVOCAB = ["night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
   var recState = null, pendingSid = null, libSel = {}, libTagFilter = {};
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
+  var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
+  var BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
   var RATES = [0.5, 1, 2, 4];
 
   function esc(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, function (c) { return { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]; }); }
@@ -600,9 +604,11 @@
   function openReplay(s) {
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
+      replayHasEO = !!(s.thumbs && s.thumbs > 0);           /* thumbs:0 => no video was recorded */
+      replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
       document.body.classList.add("replay"); $("library").hidden = true;
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
-      $("video").src = API.stream + "?t=" + Date.now();
+      $("video").src = replayHasEO ? (API.stream + "?t=" + Date.now()) : BLANK;   /* no frozen live frame when EO wasn't recorded */
       $("rb-text").textContent = "REPLAY — " + (s.name || s.sid) + " — " + s.t0;
       $("tp-dur").textContent = fmtClockT(s.dur_ms); $("tp-scrub").max = s.dur_ms; $("tp-scrub").value = 0;
       if (replayStatePoll) clearInterval(replayStatePoll);
