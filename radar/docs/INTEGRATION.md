@@ -13,6 +13,23 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 | GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db, fov_half_deg, doppler_gate_mps, dsp_valid, dsp_proc_ms, dsp_margin_ms, active_cpu_pct, interframe_cpu_pct}` |
 | GET | `/ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` | set the host clustering live → `200 ok` |
 
+## Recorder taps (module outputs — protocol per `recorder/docs/TAP.md` v1)
+
+Full-rate data the recorder consumes over **shared memory** (HTTP can't carry it
+losslessly). One publisher (this daemon), overwrite-oldest ring, the daemon
+**never blocks** on the recorder — one `memcpy` per read/frame. Vendored header:
+`radar/tap/airpoc_tap.h`. Taps are best-effort: if shm creation fails the daemon
+logs once and runs unchanged (a recorder-less system is identical).
+
+| tap | slots × cap | payload | `meta[6]` |
+|---|---|---|---|
+| `airpoc.radar_raw` | 512 × 8 KiB | raw UART bytes **verbatim, before the parser** (both read sites) so capture is independent of parse health | — (none) |
+| `airpoc.radar_wire` | 16 × 256 KiB | the `/stream` frame JSON **byte-verbatim** (replay serves these bytes straight back to the GUI) | `{frameNumber, n_points, n_targets, 0, 0, 0}` |
+
+`t_src_ns` = `CLOCK_MONOTONIC` at the UART `read()` return (raw) / frame publish
+(wire). Not part of the GUI contract — the GUI consumes `/stream`; these taps are
+for the recorder only.
+
 ## Live controls — `/ctl` (the 6 tuning knobs)
 
 `GET /ctl?...` sets the host-side clustering **live** (no restart, applies on

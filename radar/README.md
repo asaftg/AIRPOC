@@ -23,6 +23,15 @@ labelling is **not** done here — that is the fusion module's job.
   clustering live (`200 ok`). Six knobs; see
   [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for ranges/defaults.
 
+**Produces** — recorder taps (shared memory; protocol per
+[`recorder/docs/TAP.md`](../recorder/docs/TAP.md) v1; vendored header
+`tap/airpoc_tap.h`; never blocks the daemon, one `memcpy` per read/frame;
+best-effort — logs once and runs unchanged if shm creation fails):
+- `airpoc.radar_raw` — **512 × 8 KiB**, raw UART bytes verbatim *before* the
+  parser (both read sites). No `meta`.
+- `airpoc.radar_wire` — **16 × 256 KiB**, the `/stream` frame JSON byte-verbatim.
+  `meta[6] = {frameNumber, n_points, n_targets, 0, 0, 0}`.
+
 Frame JSON (stable — the GUI/fusion consume this unchanged):
 ```
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,

@@ -19,6 +19,7 @@
 #include "wire.h"
 #include "http.h"
 #include "sim.h"
+#include "airpoc_tap.h"   /* vendored from recorder/tap (protocol v1) — recorder taps */
 #include <getopt.h>
 #include <math.h>
 #include <signal.h>
@@ -64,6 +65,8 @@ typedef struct {
                                     frameNumber discontinuity is the connect
                                     gap, not a real dropped frame */
     unsigned long   drops;
+    AirTap          raw_tap;     /* airpoc.radar_raw — every UART read(), pre-parse */
+    AirTap          wire_tap;    /* airpoc.radar_wire — SSE frame JSON, verbatim */
 } Ctx;
 
 /* Called once per complete radar frame by the parser. */
@@ -99,6 +102,11 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
     double fov = cluster_fov(c->clust);   /* live azimuth gate → wedge */
     int len = wire_frame_json(c->json, JSON_CAP, &c->frame, t,
                               AG_MAX_RANGE_M, fov, c->profile);
+    /* Recorder tap (WI-RD-2): byte-verbatim SSE JSON. No-op if the tap failed
+     * to create. meta = {frameNumber, n_points, n_targets, 0,0,0}. */
+    uint32_t wire_meta[TAP_META_WORDS] = {
+        frame_no, (uint32_t)c->frame.n_points, (uint32_t)c->frame.n_targets, 0, 0, 0 };
+    tap_write(&c->wire_tap, c->json, (uint32_t)len, tap_now_ns(), wire_meta);
     http_publish(c->json, (size_t)len);
     http_set_stats(c->fps, c->drops, c->frame.n_points, c->frame.n_targets,
                    1, c->profile, AG_MAX_RANGE_M, fov);
@@ -174,6 +182,16 @@ int main(int argc, char **argv) {
     TLVStream *stream = tlv_stream_new();
     if (!stream) { perror("tlv_stream_new"); return 1; }
 
+    /* Recorder taps (WI-RD-1/2). Create once; failure logs once and leaves the
+     * handle a no-op — a recorder-less system runs unchanged. radar_raw: every
+     * UART read (512 slots x 8 KiB); radar_wire: SSE JSON (16 slots x 256 KiB). */
+    if (tap_create(&ctx.raw_tap, "airpoc.radar_raw", 512, 8192,
+                   "{\"name\":\"radar_raw\"}") < 0)
+        fprintf(stderr, "radar_preview: radar_raw tap unavailable — recording disabled for it\n");
+    if (tap_create(&ctx.wire_tap, "airpoc.radar_wire", 16, 256 * 1024,
+                   "{\"name\":\"radar_wire\"}") < 0)
+        fprintf(stderr, "radar_preview: radar_wire tap unavailable — recording disabled for it\n");
+
     /* We push the cfg AT MOST ONCE, and only if the chip is silent. Re-pushing
      * against a live chip sends `sensorStop`, and this firmware won't restart
      * the sensor without a power-cycle — so a blind re-push on daemon restart
@@ -198,7 +216,8 @@ int main(int argc, char **argv) {
             double t_end = now_s() + 2.5;
             while (g_run && now_s() < t_end) {
                 ssize_t n = read(fd, buf, sizeof(buf));
-                if (n > 0) { tlv_stream_feed(stream, buf, (size_t)n, on_frame, &ctx);
+                if (n > 0) { tap_write(&ctx.raw_tap, buf, (uint32_t)n, tap_now_ns(), NULL);
+                             tlv_stream_feed(stream, buf, (size_t)n, on_frame, &ctx);
                              saw = 1; last_rx = now_s(); break; }
                 if (n < 0) break;
             }
@@ -221,6 +240,9 @@ int main(int argc, char **argv) {
         while (g_run) {
             ssize_t n = read(fd, buf, sizeof(buf));
             if (n > 0) {
+                /* Recorder tap (WI-RD-1): raw bytes BEFORE the parser, so capture
+                 * is independent of parse health. No-op if the tap is disabled. */
+                tap_write(&ctx.raw_tap, buf, (uint32_t)n, tap_now_ns(), NULL);
                 tlv_stream_feed(stream, buf, (size_t)n, on_frame, &ctx);
                 last_rx = now_s();
             } else if (n < 0) {
@@ -236,6 +258,8 @@ int main(int argc, char **argv) {
     }
 
     fprintf(stderr, "radar_preview: shutting down\n");
+    tap_destroy(&ctx.raw_tap);
+    tap_destroy(&ctx.wire_tap);
     tlv_stream_free(stream);
     cluster_free(ctx.clust);
     free(ctx.json);
