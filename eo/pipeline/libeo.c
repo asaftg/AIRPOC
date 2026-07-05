@@ -1,166 +1,92 @@
-/* libeo — the EO module core. Owns the camera and the capture -> AE -> ISP datapath
- * and produces finished, display-ready 8-bit mono frames behind the frozen eo.h API.
+/* libeo — the EO module core. Owns the camera and the capture -> AE loop, and hands the
+ * RAW full-native Y10 frame to consumers (the detector) via the frozen eo.h API.
  *
- * Two internal threads (so a consumer's pull rate can never throttle capture or the
- * detector):
- *   capture thread  — 60 fps: dqbuf -> memcpy out of uncached DMA -> requeue ->
- *                     consume_frame() detector -> AE every 4th -> publish raw Y10.
- *   tone thread     — rate-capped: tone-map + median the newest raw -> a triple-
- *                     buffered FINISHED frame that eo_latest() hands out zero-copy.
- *
- * eo.h is frozen; everything in here may change. Bench controls live in eo_bench.h. */
+ * ONE thread. Display processing — tone-map, downscale, median — is the DISPLAY
+ * consumer's job, done at the DISPLAY resolution (see main.c). So we never tone-map
+ * 1.5M pixels just to shrink them; the cost scales with what's shown, not the sensor.
+ * The detector gets the raw frame untouched. Bench controls live in eo_bench.h. */
 #include "eo.h"
 #include "eo_bench.h"
 #include "pipeline.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-static double now_s(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return t.tv_sec + t.tv_nsec / 1e9;
-}
 
 /* ---- module state ---- */
 static Sensor    g_sensor;
 static Capture   g_cap;
 static AE        g_ae;
-static pthread_t g_cap_th, g_tone_th;
+static pthread_t g_cap_th;
 static volatile int g_run = 0;
 static volatile int g_connected = 0;
 
 /* exposure/gain override (bench). Defaults = auto. */
-static volatile int g_ae_on   = 1;
+static volatile int g_ae_on    = 1;
 static volatile int g_man_gain = 40;
 static volatile int g_man_exp  = EO_MAX_EXP_LINES;   /* ~16.5 ms */
 static volatile int g_man_vmax = EO_VMAX_MIN;        /* 60 fps   */
 static volatile int g_gaincap  = EO_GAIN_CAP;
 static volatile int g_median   = 1;
 static double       g_focus    = 0.0;
-static double       g_emit_fps = 0.0;   /* ACTUAL finished-frame emit rate (= wire fps) */
 
-/* raw handoff: capture thread -> tone thread */
-static struct {
-    pthread_mutex_t lock;
-    pthread_cond_t  cond;
-    uint8_t *raw;
-    int      bpl, w, h;
-    unsigned long seq;
-    double   mean;
-    int      exp_lines, gain, vmax;
-    int      stop;
-} R;
-
-/* finished handoff: tone thread -> consumer (triple buffer = zero-copy latest) */
+/* raw full-native frame -> consumer (triple buffer = zero-copy latest) */
 static struct {
     pthread_mutex_t lock;
     uint8_t *buf[3];
-    int      w, h, stride;
-    int      front;              /* newest ready buffer, -1 = none        */
-    int      inuse;              /* buffer currently held by a consumer   */
+    int      w, h, stride;      /* stride = bytesperline (Y10 = 2 bytes/px) */
+    int      front;             /* newest ready buffer, -1 = none        */
+    int      inuse;             /* buffer currently held by a consumer   */
     unsigned long seq;
 } F;
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-/* Detector hook — receives the linear Y10 frame. Stub; a real detector copies here. */
+/* Detector hook — receives the linear Y10 frame (stride = bpl). Stub; a real detector
+ * copies out here without blocking capture. */
 static void consume_frame(const uint8_t *y10, int bpl, int w, int h)
 {
     (void)y10; (void)bpl; (void)w; (void)h;
 }
 
-/* ---- capture thread: sensor rate, native Y10 ---- */
+/* ---- capture thread: sensor rate, native Y10 -> triple buffer ---- */
 static void *cap_thread(void *arg)
 {
     (void)arg;
-    uint8_t *frame = malloc((size_t)g_cap.sizeimage);
-    if (!frame) return NULL;
     unsigned long n = 0;
-
     while (g_run) {
+        /* pick a buffer that isn't the published front or the one a consumer holds */
+        pthread_mutex_lock(&F.lock);
+        int wi = 0; while (wi == F.front || wi == F.inuse) wi++;
+        pthread_mutex_unlock(&F.lock);
+
         int idx;
         const uint8_t *raw = cap_dqbuf(&g_cap, &idx);
         if (!raw) break;
-        memcpy(frame, raw, g_cap.sizeimage);        /* one streaming copy off uncached DMA */
+        memcpy(F.buf[wi], raw, g_cap.sizeimage);   /* one streaming copy off uncached DMA */
         cap_requeue(&g_cap, idx);
         g_connected = 1;
 
-        consume_frame(frame, g_cap.bytesperline, g_cap.width, g_cap.height);
+        int bpl = g_cap.bytesperline, w = g_cap.width, h = g_cap.height;
+        consume_frame(F.buf[wi], bpl, w, h);        /* detector, raw Y10 (cached copy) */
 
-        if (++n % 4 == 0) {                          /* AE @ ~15 Hz */
-            double mean = isp_mean10(frame, g_cap.bytesperline, g_cap.width, g_cap.height);
+        if (++n % 4 == 0) {                          /* AE + focus @ ~15 Hz */
+            double mean = isp_mean10(F.buf[wi], bpl, w, h);
             g_ae.vmax = g_man_vmax;                   /* fixed operating fps (never auto-changed) */
             if (g_ae_on) {
-                ae_update(&g_ae, mean, g_gaincap);    /* fills exp/gain within the fps ceiling */
+                ae_update(&g_ae, mean, g_gaincap);
             } else {
                 int cap = g_man_vmax - EO_SHS1_MIN;
                 g_ae.exp_lines = g_man_exp > cap ? cap : g_man_exp;
                 g_ae.gain = g_man_gain; g_ae.mean = mean;
             }
             sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
+            g_focus = isp_sharpness(F.buf[wi], bpl, w, h);
         }
 
-        /* Hand EVERY frame to the tone thread; it rate-caps to the operating fps.
-         * (Was gated to every 2nd frame — that hard-capped the emit at 30 fps.) */
-        pthread_mutex_lock(&R.lock);
-        memcpy(R.raw, frame, (size_t)g_cap.bytesperline * g_cap.height);
-        R.seq++;
-        R.mean = g_ae.mean;
-        R.exp_lines = g_ae.exp_lines; R.gain = g_ae.gain; R.vmax = g_ae.vmax;
-        pthread_cond_signal(&R.cond);
-        pthread_mutex_unlock(&R.lock);
-    }
-    free(frame);
-    return NULL;
-}
-
-/* ---- tone thread: rate-capped tone-map + median -> finished triple buffer ---- */
-static void *tone_thread(void *arg)
-{
-    (void)arg;
-    uint8_t *local = malloc((size_t)R.w * R.h * 2 + 64);   /* private Y10 copy */
-    if (!local) return NULL;
-    unsigned long seen = 0, tc = 0;
-    double last = 0.0;
-
-    for (;;) {
-        pthread_mutex_lock(&R.lock);
-        while (R.seq == seen && !R.stop) pthread_cond_wait(&R.cond, &R.lock);
-        if (R.stop) { pthread_mutex_unlock(&R.lock); break; }
-        /* Finish (and thus stream) at the operating fps — fps is a real bandwidth lever. */
-        double opfps = EO_FPS_OF_VMAX(g_man_vmax), t = now_s();
-        double min_dt = opfps > 0 ? 1.0 / opfps : 0.0;
-        if (last > 0 && (t - last) < min_dt) { seen = R.seq; pthread_mutex_unlock(&R.lock); continue; }
-        int bpl = R.bpl, w = R.w, h = R.h;
-        memcpy(local, R.raw, (size_t)R.bpl * R.h);
-        seen = R.seq;
-        pthread_mutex_unlock(&R.lock);
-
-        if (tc++ % 4 == 0)                            /* focus metric @ ~15 Hz is plenty */
-            g_focus = isp_sharpness(local, bpl, w, h);
-
-        /* choose a write buffer that isn't the front or the one a consumer holds */
         pthread_mutex_lock(&F.lock);
-        int wi = 0;
-        while (wi == F.front || wi == F.inuse) wi++;
+        F.w = w; F.h = h; F.stride = bpl; F.front = wi; F.seq++;
         pthread_mutex_unlock(&F.lock);
-
-        isp_scale_tonemap(local, bpl, 0, 0, w, h, F.buf[wi], w, h);   /* full-frame finish */
-        /* median moved to the display path (main.c) — on the small downscaled frame it's
-         * ~5x cheaper and keeps this thread free to emit at the full operating fps. */
-
-        pthread_mutex_lock(&F.lock);
-        F.w = w; F.h = h; F.stride = w; F.front = wi; F.seq++;
-        pthread_mutex_unlock(&F.lock);
-        /* measure the ACTUAL emit rate (what's on the wire), not the capture-loop rate */
-        if (last > 0) { double inst = 1.0 / (t - last);
-                        g_emit_fps = g_emit_fps > 0 ? 0.9 * g_emit_fps + 0.1 * inst : inst; }
-        last = t;
     }
-    free(local);
     return NULL;
 }
 
@@ -175,33 +101,22 @@ int eo_start(const char *dev)
     ae_init(&g_ae);
     sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
 
-    pthread_mutex_init(&R.lock, NULL); pthread_cond_init(&R.cond, NULL);
     pthread_mutex_init(&F.lock, NULL);
-    R.raw = malloc((size_t)g_cap.sizeimage);
-    R.bpl = g_cap.bytesperline; R.w = g_cap.width; R.h = g_cap.height;
-    R.seq = 0; R.stop = 0;
-    for (int i = 0; i < 3; i++) F.buf[i] = malloc((size_t)g_cap.width * g_cap.height);
+    for (int i = 0; i < 3; i++) F.buf[i] = malloc((size_t)g_cap.sizeimage);
     F.front = -1; F.inuse = -1; F.seq = 0;
-    if (!R.raw || !F.buf[0] || !F.buf[1] || !F.buf[2]) { eo_stop(); return -1; }
+    if (!F.buf[0] || !F.buf[1] || !F.buf[2]) { eo_stop(); return -1; }
 
     g_run = 1;
     pthread_create(&g_cap_th, NULL, cap_thread, NULL);
-    pthread_create(&g_tone_th, NULL, tone_thread, NULL);
     return 0;
 }
 
 void eo_stop(void)
 {
-    if (g_run) {
-        g_run = 0;
-        pthread_mutex_lock(&R.lock); R.stop = 1; pthread_cond_signal(&R.cond); pthread_mutex_unlock(&R.lock);
-        pthread_join(g_cap_th, NULL);
-        pthread_join(g_tone_th, NULL);
-    }
+    if (g_run) { g_run = 0; pthread_join(g_cap_th, NULL); }
     g_connected = 0;
     cap_close(&g_cap);
     sensor_close(&g_sensor);
-    free(R.raw); R.raw = NULL;
     for (int i = 0; i < 3; i++) { free(F.buf[i]); F.buf[i] = NULL; }
 }
 
@@ -215,7 +130,7 @@ int eo_latest(const uint8_t **buf, uint64_t *seq, int *w, int *h, int *stride, i
     if (w)      *w      = F.w;
     if (h)      *h      = F.h;
     if (stride) *stride = F.stride;
-    if (fmt)    *fmt    = EO_FMT_GRAY8;
+    if (fmt)    *fmt    = EO_FMT_Y10;
     pthread_mutex_unlock(&F.lock);
     return 1;
 }
@@ -229,7 +144,8 @@ void eo_stats(EoStats *o)
 {
     if (!o) return;
     int vm = g_ae.vmax < EO_VMAX_MIN ? EO_VMAX_MIN : g_ae.vmax;
-    o->fps = g_emit_fps; o->sfps = EO_FPS_OF_VMAX(vm); o->mean = g_ae.mean;
+    o->fps = 0.0;   /* wire fps is measured by the emitter (mjpeg.c) */
+    o->sfps = EO_FPS_OF_VMAX(vm); o->mean = g_ae.mean;
     o->exp_ms = EO_EXP_US(g_ae.exp_lines) / 1000.0; o->duty_pct = EO_DUTY_PCT(g_ae.exp_lines, vm);
     o->gain = g_ae.gain; o->vmax = vm; o->ae_on = g_ae_on; o->gaincap = g_gaincap;
     o->median = g_median; o->focus = g_focus; o->connected = g_connected;
@@ -242,13 +158,13 @@ void eo_set_median(int on)   { g_median = on ? 1 : 0; }
 int  eo_median_on(void)      { return g_median; }
 
 /* Operating frame rate — the FIXED fps that caps exposure. The AE never changes it;
- * lowering it is how the operator buys exposure headroom for dark scenes. */
+ * lowering it is how the operator buys exposure headroom for dark scenes. The sensor
+ * runs at this rate, so it also sets the emit/stream rate. */
 void eo_set_fps(double fps)
 {
     if (fps < 1.0) fps = 1.0;
     g_man_vmax = clampi(EO_VMAX_OF_FPS(fps), EO_VMAX_MIN, EO_VMAX_MAX);
-    /* keep any manual exposure within the new fps ceiling */
-    int cap = g_man_vmax - EO_SHS1_MIN;
+    int cap = g_man_vmax - EO_SHS1_MIN;              /* keep manual exposure within it */
     if (g_man_exp > cap) g_man_exp = cap;
 }
 

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <jpeglib.h>
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -21,6 +22,13 @@ static unsigned char  *g_jpeg = NULL;      /* latest encoded frame */
 static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
 static volatile int    g_zoom = 1;         /* digital zoom 1/2/4/8 (set via /ctl) */
+static double          g_wire_fps = 0.0;   /* MEASURED emit rate (frames actually served) */
+
+static double now_s(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
 
 /* Operator-selectable display size — all 4:3 so the GUI's video box never changes.
  * Detection is unaffected (the detector keeps the full-native frame in libeo). */
@@ -134,6 +142,11 @@ void mjpeg_publish(const uint8_t *gray, int w, int h)
     unsigned long len = 0;
     unsigned char *j = encode(gray, w, h, &len);
     if (!j) return;
+    static double last = 0.0;                 /* measure the real emit rate here */
+    double t = now_s();
+    if (last > 0.0) { double inst = 1.0 / (t - last);
+                      g_wire_fps = g_wire_fps > 0 ? 0.9 * g_wire_fps + 0.1 * inst : inst; }
+    last = t;
     pthread_mutex_lock(&g_lock);
     free(g_jpeg);
     g_jpeg = j; g_jpeg_len = len; g_seq++;
@@ -171,7 +184,7 @@ static void *client(void *arg)
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
-            st.fps, st.mean, st.exp_ms, st.duty_pct, st.gain,
+            g_wire_fps, st.mean, st.exp_ms, st.duty_pct, st.gain,
             st.sfps, st.sfps,
             z, hf, vf, st.focus,
             st.ae_on, st.gaincap, st.median, st.connected,

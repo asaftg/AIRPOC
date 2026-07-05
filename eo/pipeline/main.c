@@ -20,32 +20,17 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
-/* Zoom + 4:3 crop + area-average scale, in one pass: take the centred zoom region
- * (sw/z x sh/z) of the finished 8-bit frame, crop it to the output's 4:3 aspect, then
- * box-average it down (or nearest-up) to the selected display size dw x dh. All four
- * display sizes are 4:3, so the GUI's video box never changes shape. The area-average
- * on downscale also knocks noise down; z=1 native is a near-1:1 copy. */
-static void display_scale8(const uint8_t *in, int sw, int sh, int z,
-                           uint8_t *out, int dw, int dh)
+/* The zoom crop (centred sw/z x sh/z of the raw), forced to the output's 4:3 aspect.
+ * Passed to isp_scale_tonemap, which crops + downscales + tone-maps in one pass at the
+ * DISPLAY size — so the expensive work scales with what's shown, not the sensor. */
+static void zoom_crop_43(int sw, int sh, int z, int dw, int dh,
+                         int *cx, int *cy, int *cw, int *ch)
 {
     if (z < 1) z = 1;
-    int rw = sw / z, rh = sh / z;              /* zoom crop region */
-    int rh43 = rw * dh / dw;                   /* force region to the 4:3 output aspect */
+    int rw = sw / z, rh = sh / z;
+    int rh43 = rw * dh / dw;                    /* force region to the 4:3 output aspect */
     if (rh43 > rh) { rh43 = rh; rw = rh43 * dw / dh; }
-    int cx = (sw - rw) / 2, cy = (sh - rh43) / 2;
-    for (int oy = 0; oy < dh; oy++) {
-        int sy0 = cy + oy * rh43 / dh, sy1 = cy + (oy + 1) * rh43 / dh; if (sy1 <= sy0) sy1 = sy0 + 1;
-        uint8_t *o = out + (size_t)oy * dw;
-        for (int ox = 0; ox < dw; ox++) {
-            int sx0 = cx + ox * rw / dw, sx1 = cx + (ox + 1) * rw / dw; if (sx1 <= sx0) sx1 = sx0 + 1;
-            unsigned acc = 0, cnt = 0;
-            for (int sy = sy0; sy < sy1; sy++) {
-                const uint8_t *row = in + (size_t)sy * sw;
-                for (int sx = sx0; sx < sx1; sx++) { acc += row[sx]; cnt++; }
-            }
-            o[ox] = (uint8_t)(cnt ? acc / cnt : 0);
-        }
-    }
+    *cw = rw; *ch = rh43; *cx = (sw - rw) / 2; *cy = (sh - rh43) / 2;
 }
 
 int main(int argc, char **argv)
@@ -78,12 +63,16 @@ int main(int argc, char **argv)
             int tw, th; mjpeg_res_dims(&tw, &th);          /* operator-selected display size */
             if (!disp || tw != dw || th != dh) { free(disp); disp = malloc((size_t)tw * th); dw = tw; dh = th; }
             if (disp) {
-                display_scale8(buf, w, h, mjpeg_zoom(), disp, dw, dh);
-                if (eo_median_on()) isp_median3(disp, dw, dh);   /* grain filter on the small frame */
+                /* crop(zoom, 4:3) + downscale + tone-map the RAW straight to display res —
+                 * one pass, no full-native intermediate. Then median on the small frame. */
+                int cx, cy, cw, ch;
+                zoom_crop_43(w, h, mjpeg_zoom(), dw, dh, &cx, &cy, &cw, &ch);
+                isp_scale_tonemap(buf, stride, cx, cy, cw, ch, disp, dw, dh);
+                if (eo_median_on()) isp_median3(disp, dw, dh);
                 mjpeg_publish(disp, dw, dh);
             }
         } else {
-            usleep(4000);                      /* poll; libeo produces at the operating fps */
+            usleep(2000);                      /* poll; sensor emits at the operating fps */
         }
     }
 

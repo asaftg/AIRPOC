@@ -17,11 +17,13 @@ double eo_focal_mm(void);
 double eo_pixel_um(void);
 ```
 
-- **`eo_latest`** hands the newest **finished, display-ready 8-bit mono** frame
-  (`fmt == EO_FMT_GRAY8`), already tone-mapped + denoised at **full sensor resolution**
-  (1440×1088, `stride == w`). The pointer is **stable until your next `eo_latest()`
-  call on the same thread** — triple-buffered, **no copy**. `*seq` is a monotonic frame
-  id; an unchanged `seq` means no new frame yet, so you can skip re-processing.
+- **`eo_latest`** hands the newest **raw, full-native Y10** frame (`fmt == EO_FMT_Y10`:
+  linear 10-bit in a 16-bit LE word, read a pixel as `(p[2*x] | p[2*x+1]<<8) >> 6`),
+  at **1440×1088**, `stride` bytes/row. The **detector** uses it directly; **display**
+  consumers tone-map + downscale it to their chosen size themselves (see the preview,
+  `main.c`) — the module doesn't tone-map 1.5M pixels just to shrink them. The pointer is
+  **stable until your next `eo_latest()` on the same thread** — triple-buffered, **no
+  copy**. `*seq` is a monotonic frame id; unchanged means no new frame yet.
 - Any out-param may be `NULL`. Returns `0` (not an error) while the camera warms up.
 - Frozen: if this surface ever must change, `EO_API_VERSION` bumps and this doc says so.
 
@@ -34,7 +36,7 @@ const uint8_t *buf; uint64_t seq, last = 0; int w, h, stride, fmt;
 for (;;) {
     if (eo_latest(&buf, &seq, &w, &h, &stride, &fmt) && seq != last) {
         last = seq;
-        // buf = w*h GRAY8, valid until the next eo_latest() — encode/display/detect it
+        // buf = raw Y10 (2 B/px, >>6 for the value), valid until the next eo_latest()
     }
 }
 eo_stop();
