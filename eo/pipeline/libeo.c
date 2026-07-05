@@ -123,7 +123,7 @@ static void *tone_thread(void *arg)
     (void)arg;
     uint8_t *local = malloc((size_t)R.w * R.h * 2 + 64);   /* private Y10 copy */
     if (!local) return NULL;
-    unsigned long seen = 0;
+    unsigned long seen = 0, tc = 0;
     double last = 0.0;
 
     for (;;) {
@@ -139,7 +139,8 @@ static void *tone_thread(void *arg)
         seen = R.seq;
         pthread_mutex_unlock(&R.lock);
 
-        g_focus = isp_sharpness(local, bpl, w, h);
+        if (tc++ % 4 == 0)                            /* focus metric @ ~15 Hz is plenty */
+            g_focus = isp_sharpness(local, bpl, w, h);
 
         /* choose a write buffer that isn't the front or the one a consumer holds */
         pthread_mutex_lock(&F.lock);
