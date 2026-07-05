@@ -18,6 +18,7 @@
 #include <jpeglib.h>
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_pub  = PTHREAD_COND_INITIALIZER;  /* broadcast on publish */
 static unsigned char  *g_jpeg = NULL;      /* latest encoded frame */
 static unsigned long   g_jpeg_len = 0;
 static uint64_t        g_seq = 0;          /* increments per publish */
@@ -59,12 +60,16 @@ static struct {
         PTHREAD_COND_INITIALIZER, {{0}}, 0, 0 };
 
 /* Operator-selectable display size — all 4:3 so the GUI's video box never changes.
- * Detection is unaffected (the detector keeps the full-native frame in libeo). */
+ * Detection is unaffected (the detector keeps the full-native frame in libeo).
+ * Ladder is weak-link-oriented (GUI request): three tight low tiers to hold a feed on
+ * a marginal downlink, native reserved for USB / a strong link. */
 static const struct { const char *name; int w, h; } RES[4] = {
-    { "low",    640, 480 }, { "med",   960, 720 },
-    { "high",  1280, 960 }, { "native", 1440, 1080 },
+    { "low",    320, 240 },   /* panic — minimum bandwidth       */
+    { "med",    480, 360 },   /* fast                            */
+    { "high",   640, 480 },   /* default                         */
+    { "native",1440,1080 },   /* full detail                     */
 };
-static volatile int g_res = 1;             /* med default */
+static volatile int g_res = 2;             /* boot at high (640x480) — light by default */
 
 int mjpeg_zoom(void) { return g_zoom; }
 void mjpeg_res_dims(int *w, int *h) { int r = g_res; if (w) *w = RES[r].w; if (h) *h = RES[r].h; }
@@ -99,9 +104,9 @@ static const char *PAGE =
 "&nbsp;exp <button onclick=E(0.77)>exp-</button><button onclick=E(1.3)>exp+</button>"
 "&nbsp;auto-cap <button onclick=C(-20)>cap-</button><button onclick=C(20)>cap+</button>"
 "&nbsp;<button onclick=M() id=mdb>median</button>"
-"&nbsp;&nbsp;quality <button onclick=R('low') id=rlow>480</button>"
-"<button onclick=R('med') id=rmed>720</button><button onclick=R('high') id=rhigh>960</button>"
-"<button onclick=R('native') id=rnative>1080</button></div>"
+"&nbsp;&nbsp;quality <button onclick=R('low') id=rlow>320</button>"
+"<button onclick=R('med') id=rmed>480</button><button onclick=R('high') id=rhigh>640</button>"
+"<button onclick=R('native') id=rnative>1440</button></div>"
 "<div id=wrap><img src=/stream><div id=roi></div><div id=ov></div></div><script>"
 "var foc=false,peak=0,lpow=64,lfov=70,S={};"
 "function z(v){fetch('/ctl?zoom='+v)}"
@@ -225,6 +230,7 @@ static void *enc_worker(void *arg)
                 g_wire_fps = (double)(g_seq - g_win_pub0) / (t - g_win_t0);
                 g_win_t0 = t; g_win_pub0 = g_seq;
             }
+            pthread_cond_broadcast(&g_pub);              /* wake every stream client */
             pthread_mutex_unlock(&g_lock);
         }
 
@@ -325,10 +331,14 @@ static void *client(void *arg)
                       "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
     if (write(fd, hdr, strlen(hdr)) < 0) { close(fd); return NULL; }
 
+    /* Event-driven: woken by the publish broadcast, so EVERY published frame is sent.
+     * (The old 2 ms poll + latest-wins silently skipped frames when the encode workers
+     * published in bursts — the client saw ~half the published rate.) If this client
+     * is slower than the wire (weak link), it naturally falls back to latest-wins. */
     uint64_t last = 0;
     for (;;) {
         pthread_mutex_lock(&g_lock);
-        if (g_seq == last || !g_jpeg) { pthread_mutex_unlock(&g_lock); usleep(2000); continue; }
+        while (g_seq == last || !g_jpeg) pthread_cond_wait(&g_pub, &g_lock);
         last = g_seq;
         unsigned long len = g_jpeg_len;
         unsigned char *copy = malloc(len);

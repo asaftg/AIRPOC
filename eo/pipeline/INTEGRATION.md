@@ -84,7 +84,7 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 **Bandwidth levers**
 | `/ctl` | Values | Effect |
 |---|---|---|
-| `?res=` | `low`(640×480) · `med`(960×720, default) · `high`(1280×960) · `native`(1440×1080) | display size — all **4:3**, so the GUI video box never changes shape |
+| `?res=` | `low`(320×240 panic) · `med`(480×360) · `high`(640×480, **boot default**) · `native`(1440×1080) | display size — all **4:3**. Weak-link ladder: three tight low tiers hold a feed on a marginal downlink; `native` for USB/strong link |
 | `?fps=` | 12…60 | **fixed** operating fps — caps exposure AND the stream rate |
 
 > **`res` at zoom — it's a bandwidth lever, not always a detail lever.** The feed
