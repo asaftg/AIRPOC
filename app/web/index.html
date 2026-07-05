@@ -52,18 +52,19 @@
         <button class="big" id="rec">REC</button>
       </nav>
 
-      <!-- replay transport bar (shown under body.replay) -->
-      <div id="transport">
-        <button id="tp-step-b" title="frame back">⏮</button>
-        <button id="tp-play" title="play/pause">⏵</button>
-        <button id="tp-step-f" title="frame fwd">⏭</button>
-        <button id="tp-rate" title="rate">1×</button>
-        <span id="tp-cur" class="tp-time">0:00.0</span>
-        <input id="tp-scrub" type="range" min="0" max="1000" value="0" step="1">
-        <span id="tp-dur" class="tp-time">0:00.0</span>
-        <img id="tp-hover" alt="">
-      </div>
     </section>
+
+    <!-- replay transport: a child of #stage (not #eo) so it stays put when EO/radar flip -->
+    <div id="transport">
+      <button id="tp-step-b" title="frame back">⏮</button>
+      <button id="tp-play" title="play/pause">⏵</button>
+      <button id="tp-step-f" title="frame fwd">⏭</button>
+      <button id="tp-rate" title="rate">1×</button>
+      <span id="tp-cur" class="tp-time">0:00.0</span>
+      <input id="tp-scrub" type="range" min="0" max="1000" value="0" step="1">
+      <span id="tp-dur" class="tp-time">0:00.0</span>
+      <img id="tp-hover" alt="">
+    </div>
 
     <!-- right column: target list on top, radar scope on the bottom -->
     <aside id="right">
