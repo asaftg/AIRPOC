@@ -133,6 +133,6 @@ absent recorder → clean fallback, behavior unchanged):
 - **`airpoc.eo_y10`** — raw pre-ISP native Y10, every captured frame, 16 slots ×
   `sizeimage`. `t_src_ns` = V4L2 exposure-referenced timestamp.
   `meta = {v4l2_seq, exp_lines, gain, vmax, mean×100, drops_cum}`.
-- **`airpoc.eo_jpeg`** — the display JPEG verbatim, 16 slots × 512 KiB.
-  `meta = {seq, dw, dh, zoom, res_idx, 0}` (per-frame `dw/dh` so replay tracks
-  mid-session res changes).
+- **`airpoc.eo_jpeg`** — the display JPEG verbatim, 16 slots × 1 MiB (covers noisy
+  NATIVE-mode night frames past 512 KiB). `meta = {seq, dw, dh, zoom, res_idx, 0}`
+  (per-frame `dw/dh` so replay tracks mid-session res changes).

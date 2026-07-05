@@ -399,8 +399,10 @@ static void *server(void *arg)
 
 int mjpeg_start(int port)
 {
-    /* recorder tee of the display JPEG (16 x 512 KiB); no-op without a recorder */
-    if (tap_create(&g_jpg_tap, "airpoc.eo_jpeg", 16, 512 * 1024,
+    /* recorder tee of the display JPEG (16 x 1 MiB — NATIVE-mode night frames can
+     * exceed 512 KiB when noisy; a slot over-run is TRUNCATED-flagged, not lost);
+     * no-op without a recorder */
+    if (tap_create(&g_jpg_tap, "airpoc.eo_jpeg", 16, 1024 * 1024,
                    "{\"name\":\"eo_jpeg\",\"fmt\":\"JPEG (grayscale), display stream verbatim\","
                    "\"meta\":[\"seq\",\"dw\",\"dh\",\"zoom\",\"res_idx\",\"0\"]}") < 0)
         fprintf(stderr, "mjpeg: eo_jpeg tap unavailable — running without recording\n");
