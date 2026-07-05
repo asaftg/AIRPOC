@@ -47,7 +47,6 @@
 
       <nav id="cluster">
         <button class="big" id="light">LIGHT<small id="light-s">OFF</small></button>
-        <button class="big" id="illum">ILLUM<small id="illum-s">AUTO</small></button>
         <button class="big" id="track">TRACK<small id="track-s">AUTO</small></button>
         <button class="big" id="rec">REC</button>
       </nav>
@@ -102,7 +101,8 @@
       <div class="srow"><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
       <div class="srow"><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
 
-      <div class="sec">ILLUMINATOR <span class="tag" id="illum-tag">AUTO</span></div>
+      <div class="sec">ILLUMINATOR</div>
+      <div class="srow"><label>MODE</label><div class="btns" id="illum-btns"><button data-illum="auto" class="on">AUTO</button><button data-illum="man">MANUAL</button></div></div>
       <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
       <div class="srow"><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
 

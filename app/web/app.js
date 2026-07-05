@@ -58,9 +58,7 @@
   /* ── illuminator mode + fire ── */
   function setIllum(m) {
     illumMode = m;
-    var b = $("illum"); $("illum-s").textContent = m.toUpperCase();
-    b.classList.toggle("auto", m === "auto"); b.classList.toggle("man", m === "man");
-    var tag = $("illum-tag"); tag.textContent = m.toUpperCase(); tag.classList.toggle("man", m === "man");
+    var b = document.querySelector('#illum-btns [data-illum="' + m + '"]'); if (b) setSeg("illum-btns", b);
     $("s-pow").disabled = (m === "auto"); $("s-fov").disabled = (m === "auto");
     /* On entering MANUAL, seed the sliders ONCE from the feed's current illuminator
      * state. After that the sliders are the source of truth — poll() must NOT write them
@@ -71,7 +69,7 @@
       if (typeof eo.lfov === "number") { $("s-fov").value = Math.round(eo.lfov); $("o-fov").textContent = Math.round(eo.lfov) + "°"; }
     }
   }
-  $("illum").onclick = function () { setIllum(illumMode === "auto" ? "man" : "auto"); };
+  document.querySelectorAll("#illum-btns [data-illum]").forEach(function (b) { b.onclick = function () { setIllum(b.dataset.illum); }; });
 
   /* LIGHT: fire the 850 nm IR illuminator. No confirm dialog. Optimistic toggle off the
    * button's own shown state so it responds instantly and reverses reliably; poll()
