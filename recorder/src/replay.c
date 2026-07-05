@@ -175,11 +175,13 @@ static void load_events(const char *dir)
 
 static const Ev *ev_at(int type, int64_t t)
 {
-    const Ev *best = NULL;
-    for (int i = 0; i < g_rp.n_evs; i++)
-        if (g_rp.evs[i].type == type && g_rp.evs[i].t_ms <= t) best = &g_rp.evs[i];
-        else if (g_rp.evs[i].t_ms > t) break;
-    return best;
+    const Ev *best = NULL, *first = NULL;
+    for (int i = 0; i < g_rp.n_evs; i++) {
+        if (g_rp.evs[i].type != type) continue;
+        if (!first) first = &g_rp.evs[i];       /* earliest of this type */
+        if (g_rp.evs[i].t_ms <= t) best = &g_rp.evs[i];
+    }
+    return best ? best : first;                  /* before first snapshot: hold it */
 }
 
 /* ---- transport clock (call with lk held) ---- */
@@ -392,6 +394,7 @@ int replay_radar_json(char *buf, size_t len)
     if (!g_rp.open) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     int64_t t = clock_now();
     long i = rchan_at(&g_rp.radar, t);
+    if (i < 0) i = g_rp.radar.n ? 0 : -1;   /* before first frame: hold the first */
     if (i < 0) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     uint32_t plen;
     const uint8_t *p = rchan_payload(&g_rp.radar, i, &plen, NULL);
