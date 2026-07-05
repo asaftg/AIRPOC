@@ -17,9 +17,13 @@
       <span class="pill">ALT <b id="v-alt">—</b></span>
       <span class="pill"><b id="v-zulu">--:--</b> Z</span>
       <button class="icb" id="theme">NIGHT</button>
+      <button class="icb" id="libbtn">LIBRARY</button>
       <button class="icb" id="devbtn">DEV</button>
     </div>
   </header>
+
+  <!-- replay banner (striped amber; shown only under body.replay) -->
+  <div id="replay-banner"><span id="rb-text">REPLAY</span><button id="rb-close">✕ EXIT</button></div>
 
   <main id="stage">
 
@@ -47,6 +51,18 @@
         <button class="big" id="track">TRACK<small id="track-s">AUTO</small></button>
         <button class="big" id="rec">REC</button>
       </nav>
+
+      <!-- replay transport bar (shown under body.replay) -->
+      <div id="transport">
+        <button id="tp-step-b" title="frame back">⏮</button>
+        <button id="tp-play" title="play/pause">⏵</button>
+        <button id="tp-step-f" title="frame fwd">⏭</button>
+        <button id="tp-rate" title="rate">1×</button>
+        <span id="tp-cur" class="tp-time">0:00.0</span>
+        <input id="tp-scrub" type="range" min="0" max="1000" value="0" step="1">
+        <span id="tp-dur" class="tp-time">0:00.0</span>
+        <img id="tp-hover" alt="">
+      </div>
     </section>
 
     <!-- right column: target list on top, radar scope on the bottom -->
@@ -102,6 +118,40 @@
     </div></aside>
 
   </main>
+
+  <!-- LIBRARY view (full-screen overlay) -->
+  <section id="library" hidden>
+    <div class="lib-head">
+      <span class="panel-title">SESSION LIBRARY</span>
+      <input id="lib-q" type="text" placeholder="search name / note…">
+      <div id="lib-tagfilter" class="lib-tags"></div>
+      <span class="lib-spacer"></span>
+      <button id="lib-del" class="lib-del" hidden>DELETE (0)</button>
+      <div id="lib-disk" class="lib-disk"><div id="lib-diskbar"></div><span id="lib-disktext"></span></div>
+      <button class="icb" id="lib-close">✕ CLOSE</button>
+    </div>
+    <div id="lib-grid" class="lib-grid"></div>
+    <div id="lib-empty" class="lib-empty" hidden>No sessions match.</div>
+  </section>
+
+  <!-- Save dialog (modal) -->
+  <div id="recdlg" hidden>
+    <div class="dlg-card">
+      <div class="dlg-head"><b>SAVE SESSION</b><button id="dlg-x">✕</button></div>
+      <label class="dlg-l">NAME</label>
+      <input id="dlg-name" type="text">
+      <label class="dlg-l">TAGS</label>
+      <div id="dlg-tags" class="dlg-tags"></div>
+      <label class="dlg-l">NOTE</label>
+      <textarea id="dlg-note" rows="2"></textarea>
+      <div class="dlg-btns">
+        <button id="dlg-discard" class="dlg-discard">DISCARD</button>
+        <span class="dlg-spacer"></span>
+        <button id="dlg-annot" class="dlg-annot" disabled title="v2">AI-ANNOTATE</button>
+        <button id="dlg-save" class="dlg-save">SAVE</button>
+      </div>
+    </div>
+  </div>
 </div>
 <script src="/app.js"></script>
 </body>

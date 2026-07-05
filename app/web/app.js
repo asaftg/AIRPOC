@@ -6,7 +6,7 @@
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  var ctl = function (qs) { fetch("/ctl?" + qs).catch(function () {}); };
+  var ctl = function (qs) { if (replaying) return; fetch("/ctl?" + qs).catch(function () {}); };  /* zero live /ctl in replay */
   var ZOOMS = [1, 2, 4, 8];
   var css = function (n) { return getComputedStyle(document.body).getPropertyValue(n).trim(); };
 
@@ -15,6 +15,9 @@
   var illumMode = "auto";
   var lastStats = {}, lastRadar = null;
   var rHz = 0, rLastFid = null, rLastTs = 0;   /* radar frame-rate (Hz) from frame_id/timestamp deltas */
+  /* poll endpoints — swapped to /rec/replay/* in replay so the same renderers show recordings */
+  var API = { stream: "/stream", radar: "/radar", stats: "/stats", rstats: "/rstats" };
+  var replaying = false;
 
   /* ── theme / dev / swap ── */
   var theme = localStorage.getItem("airpoc-theme") || "night";
@@ -137,7 +140,7 @@
     $("rd-" + c.key).oninput = function () { $("rv-" + c.key).textContent = c.fmt(parseFloat(this.value)); rcTouch = Date.now(); ctl("radar_" + c.key + "=" + this.value); };
   });
   function pollRstats() {
-    fetch("/rstats").then(function (r) { return r.json(); }).then(function (d) {
+    fetch(API.rstats).then(function (r) { return r.json(); }).then(function (d) {
       if (Date.now() - rcTouch < 1500) return;   /* don't fight an active drag */
       RADARC.forEach(function (c) {
         var v = d[c.stat];
@@ -147,7 +150,6 @@
   }
 
   /* ── reserved ── */
-  $("rec").onclick = function () { $("rec").classList.toggle("active"); };
   $("restart").onclick = function () { if (confirm("Restart AIRPOC service?")) ctl("restart=1"); };
   $("logs").onclick = function () { var l = $("logs"); l.textContent = "reserved"; setTimeout(function () { l.textContent = "LOGS"; }, 900); };
 
@@ -368,7 +370,7 @@
   });
 
   /* ── ZULU ── */
-  function zulu() { var d = new Date(), p = function (n) { return (n < 10 ? "0" : "") + n; }; $("v-zulu").textContent = p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()); }
+  function zulu() { if (replaying) return; var d = new Date(), p = function (n) { return (n < 10 ? "0" : "") + n; }; $("v-zulu").textContent = p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()); }
   setInterval(zulu, 1000); zulu();
 
   /* ── polls ── */
@@ -386,10 +388,10 @@
   }
 
   function poll() {
-    fetch("/stats").then(function (r) { return r.json(); }).then(function (d) {
+    fetch(API.stats).then(function (r) { return r.json(); }).then(function (d) {
       lastStats = d;
       var eo = d.eo || {};                              /* the EO feed's own /stats */
-      var eoc = !!d.eo_connected;                        /* EO feed up + delivering? */
+      var eoc = !!d.eo_connected || !!(eo && eo.connected);   /* live top-level, or replay's nested eo.connected */
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
       /* link chip: signal bars (wifi) · type · live Mb/s · delivered fps */
@@ -431,7 +433,7 @@
   }
 
   function pollRadar() {
-    fetch("/radar").then(function (r) { return r.json(); }).then(function (d) {
+    fetch(API.radar).then(function (r) { return r.json(); }).then(function (d) {
       lastRadar = d;
       /* radar Hz from the daemon's own frame_id + timestamp (accurate regardless of our poll rate) */
       if (d.connected && typeof d.frame_id === "number" && typeof d.timestamp === "number") {
@@ -469,8 +471,192 @@
     if (typeof eo.median === "number") { var m = document.querySelector('#md-btns [data-md="' + (eo.median ? 1 : 0) + '"]'); if (m) setSeg("md-btns", m); }
   }
 
+  /* ═══════════════════════ RECORDER / REPLAY ═══════════════════════ */
+  var TAGVOCAB = ["night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
+  var recState = null, pendingSid = null, libSel = {}, libTagFilter = {};
+  var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
+  var RATES = [0.5, 1, 2, 4];
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, function (c) { return { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]; }); }
+  function fmtClock(ms) { var s = Math.floor(Math.max(0, ms || 0) / 1000); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
+  function fmtClockT(ms) { var s = Math.max(0, ms || 0) / 1000; return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2) + "." + Math.floor((s * 10) % 10); }
+  function localStamp() { var d = new Date(), p = function (n) { return ("0" + n).slice(-2); }; return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()); }
+  function debounce(fn, ms) { var t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
+  function rctl(q) { fetch("/rec/replay/ctl?" + q).catch(function () {}); }
+
+  /* ── REC button + recorder health ── */
+  function pollRec() {
+    fetch("/rec/stats").then(function (r) { return r.json(); }).then(function (d) {
+      recState = d;
+      var rec = $("rec");
+      if (!d || d.connected === false) { rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; return; }
+      rec.classList.remove("rec-off"); rec.title = "";
+      if (d.state === "recording") { rec.classList.add("rec-on"); rec.textContent = fmtClock(d.rec_elapsed_s * 1000); }
+      else {
+        rec.classList.remove("rec-on"); rec.textContent = "REC";
+        if (d.pending_sid && !pendingSid && $("recdlg").hidden && !replaying) openSaveDialog(d.pending_sid);
+      }
+    }).catch(function () { var rec = $("rec"); rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; });
+  }
+  $("rec").onclick = function () {
+    if (replaying || $("rec").classList.contains("rec-off")) return;
+    if (recState && recState.state === "recording")
+      fetch("/rec/ctl?rec=stop").then(function (r) { return r.json(); }).then(function (d) { if (d && d.sid) openSaveDialog(d.sid); }).catch(function () {});
+    else fetch("/rec/ctl?rec=start").catch(function () {});
+  };
+
+  /* ── save dialog ── */
+  function openSaveDialog(sid) {
+    pendingSid = sid;
+    $("dlg-name").value = "REC " + localStamp();
+    $("dlg-note").value = "";
+    var tw = $("dlg-tags"); tw.innerHTML = "";
+    TAGVOCAB.forEach(function (t) { var c = document.createElement("span"); c.className = "tagchip"; c.textContent = t; c.onclick = function () { c.classList.toggle("on"); }; tw.appendChild(c); });
+    $("recdlg").hidden = false; $("dlg-name").focus();
+  }
+  function closeSaveDialog() { $("recdlg").hidden = true; pendingSid = null; }
+  $("dlg-x").onclick = closeSaveDialog;   /* dismiss leaves the session pending */
+  $("dlg-save").onclick = function () {
+    if (!pendingSid) return;
+    var tags = [].slice.call(document.querySelectorAll("#dlg-tags .tagchip.on")).map(function (c) { return c.textContent; }).join(",");
+    fetch("/rec/ctl?save=" + encodeURIComponent(pendingSid) + "&name=" + encodeURIComponent($("dlg-name").value) + "&tags=" + encodeURIComponent(tags) + "&note=" + encodeURIComponent($("dlg-note").value)).catch(function () {});
+    closeSaveDialog(); if (!$("library").hidden) loadLibrary();
+  };
+  $("dlg-discard").onclick = function () {
+    if (!pendingSid) return;
+    if (!confirm("Discard this recording? It can't be recovered.")) return;
+    fetch("/rec/ctl?discard=" + encodeURIComponent(pendingSid)).catch(function () {}); closeSaveDialog();
+  };
+
+  /* ── LIBRARY ── */
+  $("libbtn").onclick = function () { $("library").hidden = false; buildTagFilter(); loadLibrary(); };
+  $("lib-close").onclick = function () { $("library").hidden = true; libSel = {}; };
+  $("lib-q").oninput = debounce(loadLibrary, 250);
+  function buildTagFilter() {
+    var w = $("lib-tagfilter"); if (w.childElementCount) return;
+    TAGVOCAB.forEach(function (t) { var c = document.createElement("span"); c.className = "tagchip"; c.textContent = t; c.onclick = function () { c.classList.toggle("on"); libTagFilter[t] = c.classList.contains("on"); loadLibrary(); }; w.appendChild(c); });
+  }
+  function loadLibrary() {
+    var tags = Object.keys(libTagFilter).filter(function (t) { return libTagFilter[t]; }).join(",");
+    fetch("/rec/library?q=" + encodeURIComponent($("lib-q").value || "") + (tags ? "&tags=" + encodeURIComponent(tags) : ""))
+      .then(function (r) { return r.json(); }).then(renderLibrary)
+      .catch(function () { $("lib-grid").innerHTML = ""; $("lib-empty").hidden = false; $("lib-empty").textContent = "RECORDER NOT CONNECTED"; });
+  }
+  function renderLibrary(d) {
+    if (d.disk_total_gb) {
+      $("lib-diskbar").style.setProperty("--used", (100 * (1 - d.disk_free_gb / d.disk_total_gb)).toFixed(0) + "%");
+      $("lib-disktext").textContent = Math.round(d.disk_free_gb) + " GB free" + (recState && recState.est_min_remaining ? " · ~" + recState.est_min_remaining + " min" : "");
+    }
+    var g = $("lib-grid"); g.innerHTML = "";
+    var sessions = d.sessions || [];
+    $("lib-empty").hidden = sessions.length > 0; $("lib-empty").textContent = "No sessions match.";
+    sessions.forEach(function (s) { g.appendChild(libCard(s)); });
+    updateDelBtn();
+  }
+  function sizeBadge(b) {
+    if (!b) return "";
+    var disp = ((b.display || 0) + (b.meta || 0)) / 1e6;
+    var s = "<b>" + (disp >= 1000 ? (disp / 1000).toFixed(1) + " GB" : disp.toFixed(0) + " MB") + "</b>";
+    if (b.native > 0) s += ' <span class="raw">+ raw ' + (b.native / 1e9).toFixed(1) + " GB</span>";
+    return s;
+  }
+  function libDate(t0) { try { var d = new Date(t0); return d.toLocaleDateString() + " " + ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); } catch (e) { return t0; } }
+  function libCard(s) {
+    var card = document.createElement("div"); card.className = "lib-card" + (libSel[s.sid] ? " sel" : ""); card.dataset.sid = s.sid;
+    var hasThumbs = s.thumbs && s.thumbs > 0, poster;
+    if (hasThumbs) {
+      poster = document.createElement("img"); poster.className = "lib-poster"; poster.src = "/rec/thumbs/" + s.sid + "/2.jpg";
+      var timer = null, i = 0;
+      card.onmouseenter = function () { timer = setInterval(function () { i = (i + 1) % 8; poster.src = "/rec/thumbs/" + s.sid + "/" + i + ".jpg"; }, 166); };
+      card.onmouseleave = function () { if (timer) clearInterval(timer); timer = null; poster.src = "/rec/thumbs/" + s.sid + "/2.jpg"; };
+    } else { poster = document.createElement("div"); poster.className = "lib-poster radaronly"; poster.textContent = "◟ RADAR ONLY ◞"; }
+    card.appendChild(poster);
+    if (s.state !== "saved") { var rib = document.createElement("div"); rib.className = "lib-pending"; rib.textContent = "PENDING"; card.appendChild(rib); }
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "lib-cb"; cb.checked = !!libSel[s.sid];
+    cb.onclick = function (e) { e.stopPropagation(); libSel[s.sid] = cb.checked; card.classList.toggle("sel", cb.checked); updateDelBtn(); };
+    card.appendChild(cb);
+    if (s.bytes && s.bytes.native > 0) {
+      var free = document.createElement("button"); free.className = "lib-free"; free.textContent = "FREE — drop raw";
+      free.onclick = function (e) { e.stopPropagation(); if (confirm("Drop the raw native channel? Display + radar are kept.")) fetch("/rec/ctl?purge_native=" + encodeURIComponent(s.sid)).then(loadLibrary); };
+      card.appendChild(free);
+    }
+    var body = document.createElement("div"); body.className = "lib-cardbody";
+    body.innerHTML = '<div class="lib-name">' + esc(s.name || s.sid) + "</div>"
+      + '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
+      + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
+      + '<div class="lib-cardtags">' + (s.tags || []).map(function (t) { return '<span class="tagchip">' + esc(t) + "</span>"; }).join("") + "</div>";
+    card.appendChild(body);
+    card.onclick = function () { openReplay(s); };
+    return card;
+  }
+  function updateDelBtn() { var n = Object.keys(libSel).filter(function (k) { return libSel[k]; }).length; var b = $("lib-del"); b.hidden = n === 0; b.textContent = "DELETE (" + n + ")"; }
+  $("lib-del").onclick = function () {
+    var sids = Object.keys(libSel).filter(function (k) { return libSel[k]; });
+    if (!sids.length || !confirm("Delete " + sids.length + " session(s)? Cannot be undone.")) return;
+    fetch("/rec/ctl?delete=" + sids.map(encodeURIComponent).join(",")).then(function () { libSel = {}; loadLibrary(); }).catch(function () {});
+  };
+
+  /* ── REPLAY ── */
+  function openReplay(s) {
+    fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
+      replaySession = s; replaying = true;
+      document.body.classList.add("replay"); $("library").hidden = true;
+      API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
+      $("video").src = API.stream + "?t=" + Date.now();
+      $("rb-text").textContent = "REPLAY — " + (s.name || s.sid) + " — " + s.t0;
+      $("tp-dur").textContent = fmtClockT(s.dur_ms); $("tp-scrub").max = s.dur_ms; $("tp-scrub").value = 0;
+      if (replayStatePoll) clearInterval(replayStatePoll);
+      replayStatePoll = setInterval(pollReplayState, 150); pollReplayState();
+    }).catch(function () {});
+  }
+  function closeReplay() {
+    fetch("/rec/replay/ctl?close=1").catch(function () {});
+    replaying = false; replaySession = null; document.body.classList.remove("replay");
+    if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
+    API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
+    $("video").src = API.stream + "?t=" + Date.now();
+    $("library").hidden = false; loadLibrary();
+  }
+  $("rb-close").onclick = closeReplay;
+  function pollReplayState() {
+    fetch("/rec/replay/state").then(function (r) { return r.json(); }).then(function (st) {
+      var rs = st.replay_state || st; if (!rs) return;
+      if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
+      $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
+      $("tp-rate").textContent = rs.rate + "×";
+      if (rs.t_wall_ms) { var d = new Date(rs.t_wall_ms); $("v-zulu").textContent = "REC " + ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2); }
+    }).catch(function () { $("eo-scrim").hidden = false; });
+  }
+  $("tp-play").onclick = function () { rctl($("tp-play").textContent === "⏸" ? "pause=1" : "play=1"); };
+  $("tp-rate").onclick = function () { var i = (RATES.indexOf(parseFloat($("tp-rate").textContent)) + 1) % RATES.length; rctl("rate=" + RATES[i]); };
+  $("tp-step-b").onclick = function () { rctl("step=-1"); };
+  $("tp-step-f").onclick = function () { rctl("step=1"); };
+  $("tp-scrub").oninput = function () {
+    scrubbing = true; $("tp-cur").textContent = fmtClockT(+this.value);
+    var now = Date.now(); if (now - scrubThrottle >= 80) { scrubThrottle = now; rctl("seek=" + Math.round(this.value)); }
+  };
+  $("tp-scrub").onchange = function () { rctl("seek=" + Math.round(this.value)); setTimeout(function () { scrubbing = false; }, 150); };
+  $("tp-scrub").onmousemove = function (e) {
+    if (!replaySession) return;
+    var r = this.getBoundingClientRect(), t = Math.round((e.clientX - r.left) / r.width * replaySession.dur_ms);
+    var h = $("tp-hover"); h.onerror = function () { h.style.display = "none"; }; h.src = "/rec/replay/frame?t=" + t;
+    h.style.display = "block"; h.style.left = Math.max(4, e.clientX - r.left - 40) + "px";
+  };
+  $("tp-scrub").onmouseleave = function () { $("tp-hover").style.display = "none"; };
+  document.addEventListener("keydown", function (e) {
+    if (!replaying || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    var cur = parseFloat($("tp-rate").textContent), i;
+    if (e.key === "ArrowRight") { rctl("step=1"); e.preventDefault(); }
+    else if (e.key === "ArrowLeft") { rctl("step=-1"); e.preventDefault(); }
+    else if (e.key === " ") { $("tp-play").onclick(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { i = Math.min(RATES.length - 1, RATES.indexOf(cur) + 1); rctl("rate=" + RATES[i]); e.preventDefault(); }
+    else if (e.key === "ArrowDown") { i = Math.max(0, RATES.indexOf(cur) - 1); rctl("rate=" + RATES[i]); e.preventDefault(); }
+    else if (e.key === "Escape") { closeReplay(); }
+  });
+
   setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); pollRadar();
   setInterval(pollRstats, 400); pollRstats();
+  setInterval(pollRec, 400); pollRec();
 })();
