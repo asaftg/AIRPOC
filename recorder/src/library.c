@@ -12,6 +12,12 @@
 static uint64_t dir_bytes(const char *dir, const char *sub)
 {
     char path[720];
+    /* a channel with zero records is absent, not "a few header bytes" —
+     * keeps the GUI's bytes>0 checks (e.g. the drop-raw button) honest */
+    struct stat ist;
+    snprintf(path, sizeof path, "%s/%s/index.bin", dir, sub);
+    if (stat(path, &ist) != 0 || ist.st_size < (off_t)sizeof(AirecIdxRow)) return 0;
+
     snprintf(path, sizeof path, "%s/%s", dir, sub);
     DIR *d = opendir(path);
     if (!d) return 0;
