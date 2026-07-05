@@ -43,6 +43,7 @@ body.day{
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;font-size:11px;
   letter-spacing:1px;border-radius:2px;background:var(--sub);color:var(--muted);border:1px solid var(--bd2)}
 .pill b{color:var(--fg);font-weight:600}
+.pill .rssi{color:var(--muted);font-size:10px;letter-spacing:.5px}
 .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
 .pill.on{background:#1a3d24;color:var(--on);border-color:#2e6b3f}
 .pill.on .dot{background:var(--on);box-shadow:0 0 6px rgba(108,223,138,.6)}

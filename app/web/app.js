@@ -382,7 +382,11 @@
       var eoc = !!d.eo_connected;                        /* EO feed up + delivering? */
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
-      $("v-link").textContent = num(d.mbps, 1); $("p-link").classList.toggle("on", d.mbps > 0.05);
+      /* link chip: type · current/ceiling Mb/s · RSSI (wifi only). ceiling = negotiated PHY rate */
+      $("v-ltype").textContent = d.link_type ? d.link_type.toUpperCase() : "LINK";
+      $("v-link").textContent = num(d.mbps, 1) + (d.link_mbps > 0 ? "/" + Math.round(d.link_mbps) : "") + " Mb/s";
+      $("v-rssi").textContent = (d.rssi_dbm != null) ? (d.rssi_dbm + " dBm") : "";
+      $("p-link").classList.toggle("on", d.mbps > 0.05);
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
       /* live EO telemetry on the EO display: EFFECTIVE resolution (real sensor detail in
        * view) + zoom + FOV on line 1; sensor fps/exposure/gain on line 2. Prefer the feed's

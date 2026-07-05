@@ -15,6 +15,7 @@
 #include "radar.h"
 #include "web_assets.h"
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -31,6 +32,10 @@ static int       g_listen_fd = -1;
 static volatile int g_track_man = 0;      /* tracking select: 0 auto / 1 manual */
 static volatile int g_engage    = -1;     /* engaged target tid, -1 = none       */
 static volatile unsigned long long g_stream_bytes = 0;  /* total video bytes relayed → true Mb/s meter */
+static char            g_wifi_if[32] = "";              /* WiFi iface name, or "" if none associated */
+static volatile double g_rssi = 0, g_link_mbps = -1;    /* RSSI dBm + negotiated PHY rate (Mb/s) */
+static pthread_t       g_net_th;
+static int             g_net_ok = 0;
 
 static double read_temp_c(const char *path)
 {
@@ -53,6 +58,60 @@ static double stream_mbps(void)
     double mbps = (prevt > 0 && now > prevt) ? (double)(cur - prev) * 8.0 / ((now - prevt) * 1e6) : 0.0;
     prev = cur; prevt = now;
     return mbps;
+}
+
+/* --- link status: wired vs WiFi, RSSI, and the negotiated PHY rate (the ceiling) --- */
+static int read_wifi(char *ifn, size_t n, double *rssi)
+{
+    FILE *f = fopen("/proc/net/wireless", "r");
+    if (!f) return 0;
+    char l[256]; int got = 0;
+    while (fgets(l, sizeof l, f)) {                         /* skip the two header rows */
+        char name[32]; unsigned st; double q, lvl, noise;
+        if (sscanf(l, " %31[^:]: %x %lf %lf %lf", name, &st, &q, &lvl, &noise) == 5) {
+            snprintf(ifn, n, "%s", name); if (rssi) *rssi = lvl; got = 1; break;
+        }
+    }
+    fclose(f); return got;
+}
+static double read_link_rate(const char *ifn)              /* negotiated tx bitrate, Mb/s */
+{
+    if (!ifn || !*ifn) return -1.0;
+    char cmd[96]; snprintf(cmd, sizeof cmd, "iw dev %s link 2>/dev/null", ifn);
+    FILE *p = popen(cmd, "r");
+    if (!p) return -1.0;
+    char l[256]; double r = -1.0;
+    while (fgets(l, sizeof l, p)) { char *b = strstr(l, "tx bitrate:"); if (b) { r = atof(b + 11); break; } }
+    pclose(p); return r;
+}
+/* refresh RSSI + rate ~1 Hz (popen(iw) is too heavy to run per /stats request) */
+static void *net_poller(void *a)
+{
+    (void)a;
+    while (g_run) {
+        char ifn[32] = ""; double rssi = 0;
+        if (read_wifi(ifn, sizeof ifn, &rssi)) {
+            double lr = read_link_rate(ifn);
+            snprintf(g_wifi_if, sizeof g_wifi_if, "%s", ifn); g_rssi = rssi; g_link_mbps = lr;
+        } else { g_wifi_if[0] = 0; g_link_mbps = -1.0; }
+        for (int i = 0; i < 10 && g_run; i++) usleep(100000);
+    }
+    return NULL;
+}
+/* which interface owns a local IPv4 — lets us tell the operator's actual path apart */
+static void iface_for_ip(const char *ip, char *name, size_t len)
+{
+    name[0] = 0;
+    struct ifaddrs *ifa, *p;
+    if (getifaddrs(&ifa) != 0) return;
+    for (p = ifa; p; p = p->ifa_next) {
+        if (p->ifa_addr && p->ifa_addr->sa_family == AF_INET) {
+            char b[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &((struct sockaddr_in *)p->ifa_addr)->sin_addr, b, sizeof b);
+            if (!strcmp(b, ip)) { snprintf(name, len, "%s", p->ifa_name); break; }
+        }
+    }
+    freeifaddrs(ifa);
 }
 
 /* ---------------------------------------------------------------- http -------- */
@@ -84,13 +143,26 @@ static void handle_stats(int fd)
     double cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
     char cpu_s[16]; if (cpu < 0) snprintf(cpu_s, sizeof cpu_s, "null"); else snprintf(cpu_s, sizeof cpu_s, "%.0f", cpu);
 
-    char body[900];
+    /* link type from the interface the operator's browser actually connected through */
+    char lip[INET_ADDRSTRLEN] = "", lif[32] = "";
+    struct sockaddr_in sa; socklen_t sl = sizeof sa;
+    if (getsockname(fd, (struct sockaddr *)&sa, &sl) == 0) inet_ntop(AF_INET, &sa.sin_addr, lip, sizeof lip);
+    iface_for_ip(lip, lif, sizeof lif);
+    const char *ltype = "wired"; char rssi_s[16] = "null", lrate_s[16] = "null";
+    if (g_wifi_if[0] && !strcmp(lif, g_wifi_if)) {
+        ltype = "wifi"; snprintf(rssi_s, sizeof rssi_s, "%.0f", g_rssi);
+        if (g_link_mbps > 0) snprintf(lrate_s, sizeof lrate_s, "%.0f", g_link_mbps);
+    } else if (!strncmp(lip, "192.168.55.", 11) || !strncmp(lif, "usb", 3) || !strncmp(lif, "l4tbr", 5)) {
+        ltype = "usb";
+    }
+
+    char body[960];
     int bl = snprintf(body, sizeof body,
         "{\"eo_connected\":%d,\"mbps\":%.2f,\"track\":\"%s\",\"engage\":%d,"
-        "\"tracks\":%s,\"cpu_c\":%s,"
+        "\"tracks\":%s,\"cpu_c\":%s,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
         eoc, mbps, g_track_man ? "man" : "auto", g_engage,
-        tracks_s, cpu_s,
+        tracks_s, cpu_s, ltype, rssi_s, lrate_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
@@ -230,6 +302,7 @@ int gui_start(int port)
 {
     g_run = 1;
     if (pthread_create(&g_srv_th, NULL, server, (void *)(long)port) != 0) return -1;
+    g_net_ok = (pthread_create(&g_net_th, NULL, net_poller, NULL) == 0);
     return 0;
 }
 
@@ -238,4 +311,5 @@ void gui_stop(void)
     g_run = 0;
     if (g_listen_fd >= 0) shutdown(g_listen_fd, SHUT_RDWR);
     pthread_join(g_srv_th, NULL);
+    if (g_net_ok) pthread_join(g_net_th, NULL);
 }
