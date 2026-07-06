@@ -262,3 +262,31 @@ body.replay #dev input,body.replay #dev button{pointer-events:none;opacity:.6}
 .dlg-annot{background:var(--sub);color:var(--dim);border:1px solid var(--bd2);border-radius:3px;padding:9px 14px;font:inherit;font-size:11px;cursor:not-allowed}
 
 @media (max-height:560px){.topbar{height:40px}.big{height:50px}}
+
+/* ── Phone / narrow portrait: the desktop side-by-side (EO | 30% radar column | DEV
+ * drawer) doesn't fit, so stack it: EO on top, targets + radar below, and make the DEV
+ * and LIBRARY panels full-screen overlays. ── */
+@media (max-width:720px){
+  .topbar{height:auto;flex-wrap:wrap;gap:8px 10px;padding:8px 10px}
+  .pills{margin-left:0;width:100%;justify-content:flex-start;flex-wrap:wrap;gap:5px}
+
+  #stage{flex-direction:column}
+  #eo{flex:0 0 auto;height:46vh;width:100%}
+  #right{flex:1 1 auto;width:100%;max-width:100%;min-width:0;flex-direction:column;
+    border-left:0;border-top:1px solid var(--bd)}
+  #targets{flex:0 0 auto;max-height:20vh;overflow-y:auto}
+  #radar{flex:1 1 auto;margin-top:0;min-height:26vh}
+
+  /* transport spans full width — there's no radar column beside it on mobile */
+  #transport{left:8px;right:8px}
+
+  /* controls sized for touch, tucked so they don't bury the EO */
+  #cluster{bottom:8px;gap:6px;padding:6px}
+  .big{min-width:62px;height:48px;font-size:11px}
+  #zoombar{left:8px;bottom:8px}
+
+  /* DEV panel: full-screen overlay instead of a 400px side drawer */
+  #dev{position:fixed;inset:0;z-index:30;width:0}
+  #dev.open{width:100vw}
+  #dev-body{width:100vw}
+}
