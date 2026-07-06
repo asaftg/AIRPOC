@@ -141,16 +141,25 @@ static int valid_sid(const char *s)
 
 static void handle_export(int fd, const char *qs)
 {
-    char sids[4096] = "", tier[16] = "";
+    char sids[8192] = "", tier[16] = "";
     query_get(qs, "sids", sids, sizeof sids);
     query_get(qs, "tier", tier, sizeof tier);
-    if (!sids[0]) { send_json(fd, 400, "{\"err\":\"sids= required\"}"); return; }
+    if (!sids[0]) { send_json(fd, 400, "{\"err\":\"sids= required (or sids=all)\"}"); return; }
+
+    /* sids=all -> every saved/pending session on disk */
+    if (!strcmp(sids, "all")) {
+        static char all[256][SID_LEN + 1];
+        int na = store_list_sids(g_rec.root, all, 256);
+        size_t o = 0;
+        for (int i = 0; i < na; i++) o += (size_t)snprintf(sids + o, sizeof sids - o, "%s%s", i ? "," : "", all[i]);
+        if (!sids[0]) { send_json(fd, 404, "{\"err\":\"no sessions\"}"); return; }
+    }
 
     /* validate every sid (charset-checked -> safe to pass to the shell) + exists */
-    char list[4096]; size_t lo = 0; int nsid = 0;
-    char work[4096]; snprintf(work, sizeof work, "%s", sids);
+    char list[8192]; size_t lo = 0; int nsid = 0;
+    char work[8192]; snprintf(work, sizeof work, "%s", sids);
     char *save = NULL;
-    for (char *tok = strtok_r(work, ",", &save); tok && nsid < 200; tok = strtok_r(NULL, ",", &save)) {
+    for (char *tok = strtok_r(work, ",", &save); tok && nsid < 256; tok = strtok_r(NULL, ",", &save)) {
         if (!valid_sid(tok)) { send_json(fd, 400, "{\"err\":\"bad sid\"}"); return; }
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
