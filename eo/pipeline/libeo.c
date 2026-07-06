@@ -9,6 +9,7 @@
 #include "eo_bench.h"
 #include "pipeline.h"
 #include "airpoc_tap.h"     /* vendored copy of recorder/tap/airpoc_tap.h (protocol v1) */
+#include "illum.h"          /* illum_snapshot() for the per-frame illuminator stamp     */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,9 +114,18 @@ static void *cap_thread(void *arg)
 
         /* commit AFTER the AE step so the recorded meta is frame-current */
         if (g_y10_tap.ok) {
+            /* meta[4] = per-frame illuminator state (recorder gates on "illum":1 in
+             * meta_json). Packing: bit0=laser_on, bit1=present, [15:8]=power 0..255,
+             * [25:16]=fov_deg*10 (0..102.3). One cached read (no serial). mean10 dropped
+             * from the per-frame slot — it's in the 5 Hz /stats and recomputable from raw. */
+            int lon, lpw, lpr; double lfov;
+            illum_snapshot(&lon, &lpw, &lfov, &lpr);
+            uint32_t illum = (lon ? 1u : 0u) | (lpr ? 2u : 0u)
+                           | (((uint32_t)lpw & 0xFFu) << 8)
+                           | ((((uint32_t)(lfov * 10.0)) & 0x3FFu) << 16);
             uint32_t meta[TAP_META_WORDS] = {
                 vseq, (uint32_t)g_ae.exp_lines, (uint32_t)g_ae.gain,
-                (uint32_t)g_ae.vmax, (uint32_t)(g_ae.mean * 100.0), g_v4l2_drops
+                (uint32_t)g_ae.vmax, illum, g_v4l2_drops
             };
             tap_slot_commit(&g_y10_tap, (uint32_t)g_cap.sizeimage, t_src, meta, 0);
         }
@@ -145,11 +155,12 @@ int eo_start(const char *dev)
 
     /* Recorder tap: 16 slots x sizeimage. On failure (recorder never installed, shm
      * permissions) log once and run exactly as before on the heap triple buffer. */
-    char mj[256];
+    char mj[320];
     snprintf(mj, sizeof mj,
         "{\"name\":\"eo_y10\",\"fmt\":\"Y10 16-bit LE, px=(b[2x]|b[2x+1]<<8)>>6\","
-        "\"w\":%d,\"h\":%d,\"stride\":%d,"
-        "\"meta\":[\"v4l2_seq\",\"exp_lines\",\"gain\",\"vmax\",\"mean_x100\",\"drops_cum\"]}",
+        "\"w\":%d,\"h\":%d,\"stride\":%d,\"illum\":1,"
+        "\"meta\":[\"v4l2_seq\",\"exp_lines\",\"gain\",\"vmax\","
+        "\"illum:on|present<<1|power<<8|fov10<<16\",\"drops_cum\"]}",
         g_cap.width, g_cap.height, g_cap.bytesperline);
     if (tap_create(&g_y10_tap, "airpoc.eo_y10", 16, (uint32_t)g_cap.sizeimage, mj) < 0)
         fprintf(stderr, "libeo: eo_y10 tap unavailable — running without recording\n");
