@@ -1,0 +1,13 @@
+[Unit]
+Description=AIRPOC WiFi failover — join home WiFi if present, else raise the open AIRPOC AP
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/airpoc-autoap.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
