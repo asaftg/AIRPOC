@@ -1,58 +1,78 @@
 #!/bin/bash
 # Start the AIRPOC stack — EO preview (:8091), radar daemon (:8092), operator console
-# (:8080). Idempotent: skips anything already listening. Detaches each child (setsid) so
-# it outlives this script and the launcher. Waits for USB devices that enumerate late.
-#
-# Overridable via env: AIRPOC_BASE, EO_VIDEO, EO_ILLUM.
+# (:8080). Detaches each child (setsid) so it outlives this script. Waits for USB devices
+# that enumerate late. Overridable via env: AIRPOC_BASE, EO_VIDEO, EO_ILLUM.
 BASE="${AIRPOC_BASE:-$HOME/AIRPOC}"
 EO_VIDEO="${EO_VIDEO:-/dev/video0}"
 EO_ILLUM="${EO_ILLUM:-/dev/ttyUSB0}"
 
 up()       { ss -ltn 2>/dev/null | grep -q ":$1 "; }              # is a TCP port bound?
 wait_dev() { local d="$1" n="${2:-15}"; for _ in $(seq 1 "$n"); do [ -e "$d" ] && return 0; sleep 1; done; return 1; }
-start()  { # port  dir  cmd...
+
+# A producer is HEALTHY only if its port is bound AND its shared-memory tap exists. If the
+# tap was unlinked out from under a still-running producer (the restart race), it's
+# up-but-tap-less: the recorder can't attach and recordings come out empty — so we treat it
+# as unhealthy and cleanly restart it.
+healthy() { up "$1" && [ -e "$2" ]; }                            # port  tapfile
+
+# Kill any instance matching $1 and WAIT for it to fully exit, so its shm_unlink() on
+# shutdown finishes BEFORE we launch a fresh producer — otherwise the dying old process
+# unlinks the shm name the new one just created, and the recorder loses the feed.
+ensure_gone() {
+  pgrep -f "$1" >/dev/null 2>&1 || return 0
+  echo "clearing stale $1 ..."
+  pkill -f "$1" 2>/dev/null
+  for _ in $(seq 1 25); do pgrep -f "$1" >/dev/null 2>&1 || { sleep 0.3; return 0; }; sleep 0.2; done
+  pkill -9 -f "$1" 2>/dev/null; sleep 0.5
+}
+
+launch() { # port  dir  cmd...
   local port="$1" dir="$2"; shift 2
-  if up "$port"; then echo ":$port already up — skip"; return; fi
-  if [ ! -d "$dir" ]; then echo ":$port SKIP — missing $dir"; return; fi
+  [ -d "$dir" ] || { echo ":$port SKIP — missing $dir"; return 1; }
   echo "starting :$port  ($*)"
   ( cd "$dir" && setsid "$@" >"/tmp/airpoc-$port.log" 2>&1 </dev/null & )
 }
 
-# EO preview — links libeo, serves MJPEG + /stats + /ctl on :8091. Illuminator (-i) is
-# optional; if the serial node is absent, EO still comes up for video.
-wait_dev "$EO_VIDEO" 10 || echo "warn: $EO_VIDEO absent — EO may not stream"
-EO_ARGS=(-d "$EO_VIDEO" -p 8091)
-[ -e "$EO_ILLUM" ] && EO_ARGS+=(-i "$EO_ILLUM")
-start 8091 "$BASE/eo/pipeline" ./eo_pipeline "${EO_ARGS[@]}"
+restarted=0
 
-# Radar daemon — serves SSE on :8092. The daemon defaults to /dev/radar-cli|radar-data
-# (udev symlinks that aren't installed here), so resolve the AWR's XDS110 UARTs by their
-# stable by-id path: if00 = CLI/config UART, if03 = high-speed data. The cfg lives in
-# radar/cfg (not radar/src), so pass it explicitly. The board enumerates a few seconds
-# after boot — wait for the CLI port before starting, else it gets ENOENT and gives up.
-# were the feeds already up? (if we (re)start one, the recorder must re-attach — below)
-up 8091; eo_was_up=$?
-up 8092; radar_was_up=$?
-
-RCLI=$(ls /dev/serial/by-id/*XDS110*if00* 2>/dev/null | head -1); RCLI="${RCLI:-/dev/ttyACM0}"
-RDAT=$(ls /dev/serial/by-id/*XDS110*if03* 2>/dev/null | head -1); RDAT="${RDAT:-/dev/ttyACM1}"
-if wait_dev "$RCLI" 15; then
-  start 8092 "$BASE/radar/src" ./radar_preview -C "$RCLI" -D "$RDAT" -c ../cfg/awr2944P_ag.cfg -w ../web
+# --- EO producer (shm tap: airpoc.eo_y10) ---
+if healthy 8091 /dev/shm/airpoc.eo_y10; then
+  echo ":8091 healthy — skip"
 else
-  echo ":8092 SKIP — radar board not on USB (no XDS110 CLI port)"
+  ensure_gone "eo_pipeline"
+  wait_dev "$EO_VIDEO" 10 || echo "warn: $EO_VIDEO absent — EO may not stream"
+  EO_ARGS=(-d "$EO_VIDEO" -p 8091); [ -e "$EO_ILLUM" ] && EO_ARGS+=(-i "$EO_ILLUM")
+  launch 8091 "$BASE/eo/pipeline" ./eo_pipeline "${EO_ARGS[@]}" && restarted=1
+fi
+
+# --- Radar producer (shm tap: airpoc.radar_raw). Daemon defaults to /dev/radar-cli|data
+# udev symlinks that aren't installed here, so resolve the AWR XDS110 UARTs by stable
+# by-id path (if00=CLI, if03=data) and pass the cfg (it lives in radar/cfg). Board
+# enumerates a few seconds after boot — wait for the CLI port. ---
+if healthy 8092 /dev/shm/airpoc.radar_raw; then
+  echo ":8092 healthy — skip"
+else
+  ensure_gone "radar_preview"
+  RCLI=$(ls /dev/serial/by-id/*XDS110*if00* 2>/dev/null | head -1); RCLI="${RCLI:-/dev/ttyACM0}"
+  RDAT=$(ls /dev/serial/by-id/*XDS110*if03* 2>/dev/null | head -1); RDAT="${RDAT:-/dev/ttyACM1}"
+  if wait_dev "$RCLI" 15; then
+    launch 8092 "$BASE/radar/src" ./radar_preview -C "$RCLI" -D "$RDAT" -c ../cfg/awr2944P_ag.cfg -w ../web && restarted=1
+  else
+    echo ":8092 SKIP — radar board not on USB (no XDS110 CLI port)"
+  fi
 fi
 
 sleep 2   # let the feeds bind before the console dials into them
 
-# Operator console — pure proxy over EO (:8091) + radar (:8092) + recorder (:8093).
-start 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093
+# --- Operator console (consumer; no shm tap) ---
+if up 8080; then echo ":8080 already up — skip"
+else launch 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093; fi
 
-# Recorder re-attach: the always-on recorder taps the EO/radar shared memory. When a feed
-# is (re)started it gets NEW shm, and the recorder keeps stale handles -> records 0 bytes.
-# So if we just brought a feed up, bounce the recorder so its taps bind to the live feeds.
-# (Only on a fresh feed start, so an in-progress recording during a redundant START is
-# never interrupted.) Needs the scoped NOPASSWD rule from app/launcher/install.sh.
-if [ "$eo_was_up" -ne 0 ] || [ "$radar_was_up" -ne 0 ]; then
+# Recorder re-attach: if we (re)started a producer, its shm is fresh; bounce the always-on
+# recorder so its taps bind to the live feeds (else it records 0 bytes). Only on a real
+# (re)start, so a redundant START never interrupts an in-progress recording. Scoped
+# NOPASSWD rule from app/launcher/install.sh.
+if [ "$restarted" -ne 0 ]; then
   sleep 3   # let the feeds create + populate their shm first
   echo "feeds (re)started -> restarting recorder so its taps re-attach"
   sudo -n systemctl restart airpoc-recorder 2>/dev/null || echo "warn: recorder not restarted (missing NOPASSWD sudoers rule)"
