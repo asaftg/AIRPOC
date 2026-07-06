@@ -141,7 +141,11 @@ static void frame_commit(Chan *c, AirecRecHdr *h, uint32_t payload_len,
     h->flags = flags;
     memcpy(h->meta, meta, sizeof h->meta);
 
-    AirecIdxRow row = { seq, t_src, k->seg_no,
+    /* index timeline = t_pub (recorder's CLOCK_MONOTONIC, common to every
+     * channel), NOT t_src: eo_y10's t_src is the camera's V4L2 clock, offset by
+     * tens of seconds, so a source-clock timeline wouldn't align across channels.
+     * The true source timestamp stays in the record header for algorithm use. */
+    AirecIdxRow row = { seq, t_pub, k->seg_no,
                         (uint32_t)(k->seg_off + k->used), payload_len, flags };
     fwrite(&row, sizeof row, 1, c->idx_f);
 
@@ -323,7 +327,7 @@ void chan_submit(ChanId id, const void *payload, uint32_t len,
                           { meta[0], meta[1], meta[2], meta[3], meta[4], meta[5] } };
         uint32_t padded = (len + 7u) & ~7u;
         static const uint8_t zpad[8];
-        AirecIdxRow row = { h.seq, t_src_ns, 0, (uint32_t)c->seg_used, len, 0 };
+        AirecIdxRow row = { h.seq, h.t_pub_ns, 0, (uint32_t)c->seg_used, len, 0 };  /* timeline = t_pub */
         if (write(c->small_fd, &h, sizeof h) == sizeof h &&
             write(c->small_fd, payload, len) == (ssize_t)len &&
             (padded == len || write(c->small_fd, zpad, padded - len) == (ssize_t)(padded - len))) {

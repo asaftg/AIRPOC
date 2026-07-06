@@ -34,8 +34,11 @@ Record: header + payload + zero-pad to 8:
 Flags: `1` TRUNCATED · `2` GAP_BEFORE (drops precede this record) · `4` PAD
 (alignment pseudo-record — skip; the index never points at one).
 
-Index row: `u64 seq · u64 t_src_ns · u32 segment_no · u32 offset · u32 payload_len · u32 flags`
-— binary-search by `t_src_ns`; rebuildable by scanning segments.
+Index row: `u64 seq · u64 t_ns · u32 segment_no · u32 offset · u32 payload_len · u32 flags`
+— `t_ns` is the record's `t_pub` (recorder CLOCK_MONOTONIC, common to every
+channel — so the replay timeline aligns across channels even though `eo_y10`'s
+source `t_src_ns` is the camera's own V4L2 clock). Binary-search by `t_ns`;
+rebuildable by scanning segments.
 
 ## Per-channel meta[6] and payloads
 

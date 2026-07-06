@@ -131,7 +131,7 @@ static int rchan_load(const char *dir, const char *name, RChan *c, uint64_t *t0_
     uint64_t t0 = ((AirecSegHdr *)c->segs[0].map)->session_t0_mono_ns;
     if (t0_out) *t0_out = t0;
     for (long i = 0; i < c->n; i++)
-        c->t_ms[i] = (int64_t)((c->rows[i].t_src_ns - t0) / 1000000ull);
+        c->t_ms[i] = (int64_t)((c->rows[i].t_ns - t0) / 1000000ull);
     return 0;
 }
 

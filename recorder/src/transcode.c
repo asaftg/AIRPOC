@@ -87,7 +87,7 @@ static void *build_thread(void *arg)
     /* average fps from the frame timestamps (native is ~constant) */
     double fps = 30.0;
     if (n > 1) {
-        double dur = (rows[n - 1].t_src_ns - rows[0].t_src_ns) / 1e9;
+        double dur = (rows[n - 1].t_ns - rows[0].t_ns) / 1e9;
         if (dur > 0) fps = (n - 1) / dur;
         if (fps < 1) fps = 1;
         if (fps > 120) fps = 120;

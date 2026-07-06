@@ -57,7 +57,9 @@ typedef struct {
 
 typedef struct {
     uint64_t seq;
-    uint64_t t_src_ns;
+    uint64_t t_ns;                        /* timeline clock = record t_pub (recorder
+                                            CLOCK_MONOTONIC, common to all channels);
+                                            NOT the camera's V4L2 source clock */
     uint32_t segment_no;
     uint32_t offset;                      /* of AirecRecHdr within segment */
     uint32_t payload_len;
