@@ -100,6 +100,7 @@ Recording / library:
 | `GET /library?tags=a,b&q=text&state=saved` | summaries: sid,name,state,t0,dur_ms,tags,note,mode,thumbs,bytes{native,display,radar,meta} (tags AND-match, q case-insensitive on name+note) |
 | `GET /session/<sid>` | full manifest |
 | `GET /thumbs/<sid>/<n>.jpg` | preview stills n=0..7 (lazy-regenerated) |
+| `GET /export?sids=<a,b,..>&tier=meta\|display\|full` | stream the selected sessions as one `.tar` download (meta = no video; display = + display JPEGs; full = + native raw). Sids validated; regenerable `native.mp4` never included |
 
 Replay:
 

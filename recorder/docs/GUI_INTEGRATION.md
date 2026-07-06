@@ -48,6 +48,12 @@ relays the replay MJPEG stream). On connect failure: `502` with
 - Selection mode: checkboxes → `DELETE (n)` (confirm →
   `/rec/ctl?delete=a,b,c`), per-card "FREE SPACE — drop raw" →
   `/rec/ctl?purge_native=<sid>` (confirm).
+- **OFFLOAD (n)** — download the selected sessions: a tier picker (meta =
+  annotations+thumbs+radar · display = + the video · full = + native raw) then
+  `window.location = "/rec/export?sids=a,b,c&tier=display"`. The recorder streams
+  one `.tar`; the browser saves it — no progress endpoint, it's a normal
+  download. (For very large `full` pulls, the workstation
+  `offload_pull.sh`/`airpoc-offload.ps1` scripts stay the resumable option.)
 - Disk bar from `/rec/stats` `disk_free_gb`/`disk_total_gb` +
   `est_min_remaining`.
 

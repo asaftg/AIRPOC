@@ -126,6 +126,68 @@ static void send_file_range(int fd, const char *path, const char *ctype, const c
     fclose(f);
 }
 
+/* ---- /export: stream selected sessions as a .tar download ---- */
+
+static int valid_sid(const char *s)
+{
+    if (strlen(s) != SID_LEN) return 0;
+    for (int i = 0; i < SID_LEN; i++) {
+        char c = s[i];
+        int ok = (i == 8) ? c == 'T' : (i == SID_LEN - 1) ? c == 'Z' : (c >= '0' && c <= '9');
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
+static void handle_export(int fd, const char *qs)
+{
+    char sids[4096] = "", tier[16] = "";
+    query_get(qs, "sids", sids, sizeof sids);
+    query_get(qs, "tier", tier, sizeof tier);
+    if (!sids[0]) { send_json(fd, 400, "{\"err\":\"sids= required\"}"); return; }
+
+    /* validate every sid (charset-checked -> safe to pass to the shell) + exists */
+    char list[4096]; size_t lo = 0; int nsid = 0;
+    char work[4096]; snprintf(work, sizeof work, "%s", sids);
+    char *save = NULL;
+    for (char *tok = strtok_r(work, ",", &save); tok && nsid < 200; tok = strtok_r(NULL, ",", &save)) {
+        if (!valid_sid(tok)) { send_json(fd, 400, "{\"err\":\"bad sid\"}"); return; }
+        char probe[700];
+        snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
+        if (access(probe, F_OK) != 0) continue;
+        lo += (size_t)snprintf(list + lo, sizeof list - lo, " '%s'", tok);
+        nsid++;
+    }
+    if (!nsid) { send_json(fd, 404, "{\"err\":\"no such sessions\"}"); return; }
+
+    /* tier excludes; native.mp4 is a regenerable cache — never ship it */
+    const char *excl;
+    if (!strcmp(tier, "meta"))      excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*/native.mp4";
+    else if (!strcmp(tier, "full")) excl = "--exclude=*/native.mp4";
+    else { snprintf(tier, sizeof tier, "display");   /* default */
+           excl = "--exclude=*/eo_y10 --exclude=*/native.mp4"; }
+
+    char cmd[8192];
+    int cn = snprintf(cmd, sizeof cmd, "tar -C '%s' -cf - %s%s", g_rec.root, excl, list);
+    if (cn <= 0 || cn >= (int)sizeof cmd) { send_json(fd, 500, "{\"err\":\"cmd\"}"); return; }
+
+    char h[256];
+    int hn = snprintf(h, sizeof h,
+        "HTTP/1.0 200 OK\r\nContent-Type: application/x-tar\r\n"
+        "Content-Disposition: attachment; filename=\"airpoc-%s-%dsession%s.tar\"\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        tier, nsid, nsid == 1 ? "" : "s");
+    if (write(fd, h, (size_t)hn) != hn) return;
+
+    FILE *p = popen(cmd, "r");
+    if (!p) return;
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, p)) > 0)
+        if (write(fd, buf, n) != (ssize_t)n) break;
+    pclose(p);
+}
+
 /* ---- /ctl ---- */
 
 static void handle_ctl(int fd, const char *qs)
@@ -280,6 +342,8 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
             transcode_request(sid);                       /* kick it, tell client to wait */
             send_json(fd, 202, "{\"building\":true,\"pct\":0}");
         }
+    } else if (!strcmp(path, "/export")) {
+        handle_export(fd, qs);                            /* selected sessions -> .tar download */
     } else if (!strcmp(path, "/replay/stream")) {
         replay_stream(fd);                                /* blocks for connection life */
     } else {
