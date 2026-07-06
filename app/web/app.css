@@ -211,7 +211,8 @@ body.replay #cluster,body.replay #eo-exp,body.replay .eo-exp,body.replay #zoomba
 /* replay disables all live controls (shown read-only) — but keep the panel's own nav
  * (close ✕ and RETURN TO CONTROL) live so DEV can still be minimized during replay */
 body.replay #dev input,body.replay #dev button{pointer-events:none;opacity:.6}
-body.replay #devclose,body.replay #to-control{pointer-events:auto;opacity:1}
+/* out-specify 'body.replay #dev button' (1,1,2) — add #dev so the id count wins (2,1,1) */
+body.replay #dev #devclose,body.replay #dev #to-control{pointer-events:auto;opacity:1}
 
 /* ── LIBRARY ── */
 #library{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column}
