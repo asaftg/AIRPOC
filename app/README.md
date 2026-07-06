@@ -31,7 +31,7 @@ CONNECTED** — there is no synthetic data.
 | `web/` | front-end (`index.html`, `app.css`, `app.js`) — embedded at build |
 | `gen_assets.sh` | `xxd`-embeds `web/` into `web_assets.h` (single self-contained binary) |
 | `systemd/` | `airpoc-app.service.in` + `install.sh` |
-| `launcher/` | laptop desktop start/stop buttons (Windows `.ps1`/`.bat`, Linux `.sh`) |
+| `launcher/` | always-on web START/STOP control (`:8088`) — bring the whole stack up/down from any device's browser ([README](launcher/README.md)) |
 
 ## Build & run (on the Jetson)
 ```bash

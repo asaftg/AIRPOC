@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AIRPOC Control
+Comment=Start/stop the AIRPOC operator stack from the browser
+Exec=xdg-open http://orin-nano.lan:8088/
+Terminal=false
+Icon=applications-system
+Categories=Utility;
