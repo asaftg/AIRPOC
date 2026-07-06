@@ -12,6 +12,8 @@ Restart=always
 RestartSec=2
 # children spawned by start.sh (EO camera + illuminator/radar serial) need these
 SupplementaryGroups=video dialout
+# lets the unprivileged service bind :80 for the captive-portal helper (Android internet check)
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target

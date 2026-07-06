@@ -31,6 +31,11 @@ sudo install -d -o "$WIFI_USER" -g "$WIFI_USER" /var/lib/airpoc
 if [ ! -f /var/lib/airpoc/wifi-mode ]; then echo auto | sudo tee /var/lib/airpoc/wifi-mode >/dev/null; fi
 sudo chown "$WIFI_USER":"$WIFI_USER" /var/lib/airpoc/wifi-mode
 
+# captive-portal DNS: point OS connectivity-check domains at the AP so phones treat it
+# as a real (internet-having) network and don't shove traffic to cellular.
+sudo install -d /etc/NetworkManager/dnsmasq-shared.d
+sudo install -m 0644 "$DIR/dnsmasq-shared.d/airpoc-captive.conf" /etc/NetworkManager/dnsmasq-shared.d/airpoc-captive.conf
+
 sudo install -m 0755 "$DIR/airpoc-autoap.sh" /usr/local/bin/airpoc-autoap.sh
 sudo cp "$DIR/airpoc-autoap.service" /etc/systemd/system/airpoc-autoap.service
 sudo systemctl daemon-reload

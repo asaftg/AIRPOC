@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -100,6 +101,61 @@ static void reply(int fd, const char *ctype, const char *body)
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\nCache-Control: no-cache\r\n"
                 "Content-Length: %zu\r\nConnection: close\r\n\r\n%s", ctype, strlen(body), body);
 }
+static void reply204(int fd)   /* what Android's captivity check wants: no internet != dead */
+{
+    dprintf(fd, "HTTP/1.0 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+}
+
+static void handle_conn(int fd)
+{
+    char req[512];
+    ssize_t n = read(fd, req, sizeof req - 1);
+    if (n <= 0) return;
+    req[n] = 0;
+
+    /* Captive-portal / connectivity checks: make the phone treat this open AP as a real
+     * network so it stops preferring cellular. Android wants a 204; Apple wants "Success". */
+    if (strstr(req, "generate_204") || strstr(req, "gen_204")) {
+        reply204(fd);
+    } else if (strstr(req, "hotspot-detect") || strstr(req, "ncsi.txt") || strstr(req, "connecttest")) {
+        reply(fd, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+    } else if (!strncmp(req, "GET /status", 11)) {
+        char b[128];
+        snprintf(b, sizeof b, "{\"app\":%s,\"eo\":%s,\"radar\":%s}",
+                 port_up(8080) ? "true" : "false", port_up(8091) ? "true" : "false", port_up(8092) ? "true" : "false");
+        reply(fd, "application/json", b);
+    } else if (!strncmp(req, "GET /start", 10)) {
+        if (system("bash ./start.sh >/tmp/airpoc-start.log 2>&1 &") == -1) {}
+        reply(fd, "application/json", "{\"ok\":1}");
+    } else if (!strncmp(req, "GET /stop", 9)) {
+        if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
+        reply(fd, "application/json", "{\"ok\":1}");
+    } else if (!strncmp(req, "GET /wifi/status", 16)) {
+        char b[256];
+        if (read_file(WIFI_STATUS_FILE, b, sizeof b) <= 0)
+            snprintf(b, sizeof b, "{\"mode\":\"auto\",\"ap\":false,\"net\":\"\",\"ip\":\"\",\"clients\":0}");
+        reply(fd, "application/json", b);
+    } else if (!strncmp(req, "GET /wifi", 9)) {
+        const char *m = strstr(req, "mode="), *set = "auto";
+        if (m) { m += 5; if (!strncmp(m, "ap", 2)) set = "ap"; else if (!strncmp(m, "home", 4)) set = "home"; }
+        set_wifi_mode(set);
+        char b[64]; snprintf(b, sizeof b, "{\"ok\":1,\"mode\":\"%s\"}", set);
+        reply(fd, "application/json", b);
+    } else {
+        reply(fd, "text/html", PAGE);
+    }
+}
+
+static int make_listener(int port)   /* -> listening fd, or -1 */
+{
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return -1;
+    int one = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY, .sin_port = htons((uint16_t)port) };
+    if (bind(s, (struct sockaddr *)&a, sizeof a) < 0) { close(s); return -1; }
+    listen(s, 16);
+    return s;
+}
 
 int main(int argc, char **argv)
 {
@@ -107,46 +163,26 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
     signal(SIGCHLD, SIG_IGN);                   /* auto-reap start.sh/stop.sh */
 
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY, .sin_port = htons((uint16_t)port) };
-    if (bind(s, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind"); return 1; }
-    listen(s, 8);
-    fprintf(stderr, "airpoc-launcher: control page http://0.0.0.0:%d/\n", port);
+    int sctl = make_listener(port);
+    if (sctl < 0) { perror("bind control"); return 1; }
+    int s80 = make_listener(80);                /* captive-portal helper; needs CAP_NET_BIND_SERVICE */
+    fprintf(stderr, "airpoc-launcher: control http://0.0.0.0:%d/  captive-portal:%s\n",
+            port, s80 >= 0 ? "on :80" : "off (no :80 bind)");
+
+    struct pollfd pfds[2];
+    pfds[0].fd = sctl; pfds[0].events = POLLIN;
+    int nf = 1;
+    if (s80 >= 0) { pfds[1].fd = s80; pfds[1].events = POLLIN; nf = 2; }
 
     for (;;) {
-        int fd = accept(s, NULL, NULL);
-        if (fd < 0) continue;
-        char req[512]; ssize_t n = read(fd, req, sizeof req - 1);
-        if (n <= 0) { close(fd); continue; }
-        req[n] = 0;
-
-        if (!strncmp(req, "GET /status", 11)) {
-            char b[128];
-            snprintf(b, sizeof b, "{\"app\":%s,\"eo\":%s,\"radar\":%s}",
-                     port_up(8080) ? "true" : "false", port_up(8091) ? "true" : "false", port_up(8092) ? "true" : "false");
-            reply(fd, "application/json", b);
-        } else if (!strncmp(req, "GET /start", 10)) {
-            if (system("bash ./start.sh >/tmp/airpoc-start.log 2>&1 &") == -1) {}
-            reply(fd, "application/json", "{\"ok\":1}");
-        } else if (!strncmp(req, "GET /stop", 9)) {
-            if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
-            reply(fd, "application/json", "{\"ok\":1}");
-        } else if (!strncmp(req, "GET /wifi/status", 16)) {
-            char b[256];
-            if (read_file(WIFI_STATUS_FILE, b, sizeof b) <= 0)
-                snprintf(b, sizeof b, "{\"mode\":\"auto\",\"ap\":false,\"net\":\"\",\"ip\":\"\",\"clients\":0}");
-            reply(fd, "application/json", b);
-        } else if (!strncmp(req, "GET /wifi", 9)) {
-            const char *m = strstr(req, "mode="), *set = "auto";
-            if (m) { m += 5; if (!strncmp(m, "ap", 2)) set = "ap"; else if (!strncmp(m, "home", 4)) set = "home"; }
-            set_wifi_mode(set);
-            char b[64]; snprintf(b, sizeof b, "{\"ok\":1,\"mode\":\"%s\"}", set);
-            reply(fd, "application/json", b);
-        } else {
-            reply(fd, "text/html", PAGE);
+        if (poll(pfds, nf, -1) <= 0) continue;
+        for (int i = 0; i < nf; i++) {
+            if (!(pfds[i].revents & POLLIN)) continue;
+            int fd = accept(pfds[i].fd, NULL, NULL);
+            if (fd < 0) continue;
+            handle_conn(fd);
+            close(fd);
         }
-        close(fd);
     }
     return 0;
 }
