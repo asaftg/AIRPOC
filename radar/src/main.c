@@ -21,6 +21,7 @@
 #include "sim.h"
 #include "airpoc_tap.h"   /* vendored from recorder/tap (protocol v1) — recorder taps */
 #include <getopt.h>
+#include <limits.h>
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
@@ -115,11 +116,32 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
                         stats->active_cpu_pct, stats->interframe_cpu_pct);
 }
 
+/* Resolve `rel` against the directory of THIS executable, so the default cfg and
+ * web paths work no matter what CWD the daemon is launched from (the binary lives
+ * in radar/src/, its cfg in ../cfg, its web page in ../web). Returns a malloc'd
+ * absolute path, or a copy of `rel` if /proc/self/exe can't be read. */
+static char *exe_relative(const char *rel) {
+    char exe[PATH_MAX];
+    ssize_t k = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (k <= 0) return strdup(rel);
+    exe[k] = 0;
+    char *slash = strrchr(exe, '/');
+    if (!slash) return strdup(rel);
+    *slash = 0;                                  /* exe -> directory of the binary */
+    size_t n = strlen(exe) + 1 + strlen(rel) + 1;
+    char *out = malloc(n);
+    if (out) snprintf(out, n, "%s/%s", exe, rel);
+    return out ? out : strdup(rel);
+}
+
 int main(int argc, char **argv) {
+    /* Device defaults are the udev symlinks (radar/udev/70-radar.rules creates
+     * them, stable across ACM renumbering). Without that rule, pass the raw
+     * nodes: -C /dev/ttyACM0 (XDS110 if00, CLI) -D /dev/ttyACM1 (if03, data). */
     const char *cli_dev  = "/dev/radar-cli";
     const char *data_dev = "/dev/radar-data";
-    const char *cfg      = "cfg/awr2944P_ag.cfg";
-    const char *webroot  = "web";
+    const char *cfg      = NULL;   /* NULL => exe-relative ../cfg/awr2944P_ag.cfg */
+    const char *webroot  = NULL;   /* NULL => exe-relative ../web                 */
     int http_port = 8092, data_baud = 3125000, cli_baud = 115200, skip_cfg = 0, sim = 0, opt;
 
     while ((opt = getopt(argc, argv, "C:D:c:b:p:w:ns")) != -1) {
@@ -138,6 +160,14 @@ int main(int argc, char **argv) {
                 return 2;
         }
     }
+
+    /* Resolve default cfg/web relative to the binary so `./radar_preview` works
+     * from any directory (a common bring-up mistake was running from radar/src,
+     * where the CWD-relative "cfg/…" and "web" don't exist). An explicit -c/-w
+     * is honoured verbatim. */
+    char *cfg_owned = NULL, *web_owned = NULL;
+    if (!cfg)     cfg     = cfg_owned = exe_relative("../cfg/awr2944P_ag.cfg");
+    if (!webroot) webroot = web_owned = exe_relative("../web");
 
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
@@ -176,6 +206,7 @@ int main(int argc, char **argv) {
         }
         tlv_stream_free(st);
         cluster_free(ctx.clust); free(ctx.json);
+        free(cfg_owned); free(web_owned);
         return 0;
     }
 
@@ -225,13 +256,24 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "radar_preview: chip already streaming — not pushing cfg\n");
             } else {
                 fprintf(stderr, "radar_preview: port silent — pushing cfg over CLI\n");
-                int cli = serial_open(cli_dev, cli_baud);
+                /* Wait for the CLI node: the board can enumerate a few seconds
+                 * after boot, and both ACM ports may appear late. Retry ~10 s
+                 * before giving up rather than skipping the push outright. */
+                int cli = -1;
+                for (int a = 0; a < 20 && g_run; a++) {
+                    cli = serial_open(cli_dev, cli_baud);
+                    if (cli >= 0) break;
+                    if (a == 0)
+                        fprintf(stderr, "radar_preview: CLI %s not ready — waiting…\n", cli_dev);
+                    usleep(500 * 1000);
+                }
                 if (cli >= 0) {
                     if (cfg_push(cli, cfg) < 0)
                         fprintf(stderr, "radar_preview: cfg push had errors — continuing\n");
                     close(cli);
                 } else {
-                    fprintf(stderr, "radar_preview: CLI %s unavailable — assuming chip configured\n", cli_dev);
+                    fprintf(stderr, "radar_preview: CLI %s unavailable after retries — "
+                            "chip may be unconfigured (pass -C for the right node)\n", cli_dev);
                 }
             }
             cfg_settled = 1;
@@ -263,5 +305,6 @@ int main(int argc, char **argv) {
     tlv_stream_free(stream);
     cluster_free(ctx.clust);
     free(ctx.json);
+    free(cfg_owned); free(web_owned);
     return 0;
 }

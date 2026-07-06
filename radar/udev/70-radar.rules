@@ -1,0 +1,18 @@
+# AIRPOC radar — stable device names for the AWR2944PEVM's on-board XDS110 UART
+# bridge, so the daemon's defaults (/dev/radar-cli, /dev/radar-data) exist and
+# survive ACM renumbering (ttyACM0/1 order is not guaranteed across reboots).
+#
+# The XDS110 (TI, VID 0451 / PID bef3) exposes two CDC-ACM interfaces:
+#   interface 00 = CLI / config UART   (115200)       -> /dev/radar-cli
+#   interface 03 = data / TLV cloud    (3,125,000 baud) -> /dev/radar-data
+# Verified interface mapping on the AIRPOC unit 2026-07-05: ttyACM0 = if00 (CLI),
+# ttyACM1 = if03 (data).
+#
+# Install (Jetson):
+#   sudo cp radar/udev/70-radar.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+# Confirm the IDs on your unit first (PID can vary by XDS110 rev):
+#   udevadm info -q property -n /dev/ttyACM0 | grep -E 'ID_VENDOR_ID|ID_MODEL_ID|ID_USB_INTERFACE_NUM'
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="bef3", ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="radar-cli"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="bef3", ENV{ID_USB_INTERFACE_NUM}=="03", SYMLINK+="radar-data"

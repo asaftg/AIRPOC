@@ -6,21 +6,26 @@
   - **CLI** — 115200 baud. Profile push, `sensorStart`/`sensorStop`.
   - **Data** — **3,125,000 baud**. The TLV point-cloud stream.
 
-## udev symlinks (stable names)
+## udev symlinks (stable names) — shipped rule
 
-The two ACM nodes enumerate in an unstable order. Pin them by the XDS110
-interface number so `/dev/radar-cli` and `/dev/radar-data` are deterministic,
-e.g. `/etc/udev/rules.d/70-radar.rules`:
+The two ACM nodes enumerate in an unstable order, so pin them by XDS110
+interface number. The rule is **shipped in the repo** at
+[`radar/udev/70-radar.rules`](../udev/70-radar.rules); install it:
 ```
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="bef3", \
-  ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="radar-cli"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="bef3", \
-  ENV{ID_USB_INTERFACE_NUM}=="03", SYMLINK+="radar-data"
+sudo cp radar/udev/70-radar.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
 ```
-> Pitfall: confirm the vendor/product and which interface number is CLI vs
-> data **on the actual board** (`udevadm info -a /dev/ttyACM*`) before trusting
-> the mapping — the numbers above are the expected XDS110 layout, not verified
-> on this unit. The daemon takes `-C`/`-D` overrides meanwhile.
+This creates `/dev/radar-cli` (XDS110 interface **00**, CLI) and
+`/dev/radar-data` (interface **03**, data) — the daemon's defaults. **Interface
+mapping verified on the AIRPOC unit 2026-07-05** (ttyACM0 = if00 = CLI,
+ttyACM1 = if03 = data).
+
+> Without the rule, pass the raw nodes: `-C /dev/ttyACM0 -D /dev/ttyACM1`. The
+> daemon resolves cfg/web relative to its own binary and waits/retries for the
+> ports + CLI console, so a cold boot (board enumerates a few seconds late) is
+> fine. Confirm the exact `idProduct` on your unit if the symlinks don't appear
+> (`udevadm info -q property -n /dev/ttyACM0 | grep ID_MODEL_ID`) — the XDS110
+> PID can vary by revision.
 
 ## ModemManager MUST be off (verified 2026-07-03)
 

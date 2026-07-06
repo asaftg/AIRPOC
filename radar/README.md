@@ -50,12 +50,31 @@ the future tracking module's jobs, not the radar's.
 ## Build & run (on the Jetson, native aarch64)
 
 ```
-cd radar/src && make            # pure C + pthreads + libm, no external deps
-./radar_preview -w ../web       # push cfg/awr2944P_ag.cfg, stream, serve :8092
-./radar_preview -s -w ../web    # SIMULATION: full pipeline, no board (see below)
+cd radar/src && make            # pure C + pthreads + libm + librt, no external deps
 ```
-Options: `-C` cli dev, `-D` data dev, `-c` cfg, `-b` data baud, `-p` port,
-`-w` webroot, `-n` skip cfg push (chip already configured), `-s` simulate.
+
+**With the udev rule installed** (recommended — see below), the defaults just work
+from anywhere; cfg/web are resolved relative to the binary, not the CWD:
+```
+./src/radar_preview             # /dev/radar-cli + /dev/radar-data, ../cfg, ../web
+```
+
+**Without the udev rule**, name the raw XDS110 nodes explicitly (`ttyACM0` = CLI
+interface 00, `ttyACM1` = data interface 03):
+```
+./src/radar_preview -C /dev/ttyACM0 -D /dev/ttyACM1
+```
+Either way the daemon **waits/retries** for the ports and the CLI console — the
+board enumerates a few seconds after boot, so a cold start is fine.
+
+Install the stable device names once (survives ACM renumbering):
+```
+sudo cp udev/70-radar.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+```
+
+Options: `-C` cli dev, `-D` data dev, `-c` cfg (default: `../cfg/awr2944P_ag.cfg`
+relative to the binary), `-b` data baud, `-p` port, `-w` webroot (default:
+`../web` relative to the binary), `-n` skip cfg push, `-s` simulate.
 
 **Develop without hardware.** `-s` feeds a synthetic scene (walking person +
 receding vehicle + static clutter) through the real parser/clusterer/wire path
