@@ -81,11 +81,12 @@ relays the replay MJPEG stream). On connect failure: `502` with
     `<video>`'s own timeline/seek can drive the transport, or keep your transport
     bar and map it to the video element. Range requests are supported (206).
     Use the MJPEG `<img>` stream for the DISPLAY source and for radar-only sessions.
-  - **Tone-map integrity:** `/rec/replay/state` has `tonemap_match` (bool). It's
-    normally true (native replay renders with the exact live tone map). If ever
-    `false`, this session was recorded under different tone-map math than the
-    running build — show a small caveat badge ("tone map differs from recording")
-    rather than presenting it as an exact match.
+  - **Tone-map integrity:** `/rec/replay/state` has `tonemap_match` (bool) and
+    `tonemap_vs_eo` (`ok`|`drift`|`unchecked`). Normally `ok`/true — native
+    replay renders with the exact live tone map. If `tonemap_vs_eo:"drift"` (the
+    recorder auto-detected its tone map diverging from the EO feed), show a small
+    caveat badge ("tone map differs from live feed") instead of presenting it as
+    exact. `unchecked` just means no comparable frame existed — no badge needed.
 - Transport bar under the video: play/pause → `/rec/replay/ctl?play=1|pause=1`;
   rate cycle 0.5/1/2/4× → `rate=`; frame step ⏮⏭ → `step=-1|1`; range-input
   timeline (`max=dur_ms`, `oninput` throttled ≥80 ms → `seek=<ms>`, suppress

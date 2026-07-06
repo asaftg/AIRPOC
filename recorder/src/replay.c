@@ -51,6 +51,8 @@ static struct {
     int has_native, has_display, video_native;    /* video source selection */
     int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
     int tonemap_match;                             /* replay tone map == record-time tone map */
+    int tm_vs_eo;                                  /* 0 not checked, 1 matches EO, -1 drift */
+    double tm_vs_eo_diff;                          /* mean abs pixel diff of the check */
     int play_q;                                    /* native JPEG quality while playing */
     double play_fps;                               /* native frame cap while playing */
     char *evbuf;                         /* events channel, loaded whole */
@@ -241,6 +243,72 @@ static void clock_set(int64_t t, int playing)
     pthread_cond_broadcast(&g_rp.cv);
 }
 
+/* Auto drift check: does the recorder's native tone map still match the LIVE EO
+ * feed? Compare one native frame (my tone map) against the operator's recorded
+ * display JPEG (EO's real tone map) at a zoom=1 frame, downscaled to match.
+ * ~10 ms, once at open. Sets tm_vs_eo: 1 match, -1 drift, 0 couldn't check. */
+#define TM_DRIFT_THRESH 8.0                 /* mean abs 8-bit diff above JPEG noise */
+
+static void tonemap_verify_vs_display(void)
+{
+    g_rp.tm_vs_eo = 0;
+    g_rp.tm_vs_eo_diff = 0;
+    if (!g_rp.has_native || !g_rp.has_display || g_rp.jpeg.n == 0) return;
+
+    /* pick a zoom=1 display frame ~1/4 into the session */
+    long start = g_rp.jpeg.n / 4, pick = -1;
+    int dw = 0, dh = 0;
+    const uint8_t *djpg = NULL; uint32_t djlen = 0;
+    for (long k = 0; k < g_rp.jpeg.n; k++) {
+        long i = (start + k) % g_rp.jpeg.n;
+        const AirecRecHdr *h;
+        uint32_t l;
+        const uint8_t *p = rchan_payload(&g_rp.jpeg, i, &l, &h);
+        if (p && h && h->meta[3] == 1 && h->meta[1] > 0 && h->meta[2] > 0) {  /* zoom==1 */
+            pick = i; dw = (int)h->meta[1]; dh = (int)h->meta[2]; djpg = p; djlen = l; break;
+        }
+    }
+    if (pick < 0) return;                             /* always zoomed: skip */
+
+    /* native frame at the same instant */
+    long ni = rchan_at(&g_rp.y10, g_rp.jpeg.t_ms[pick]);
+    if (ni < 0) ni = 0;
+    uint32_t npl;
+    const uint8_t *nraw = rchan_payload(&g_rp.y10, ni, &npl, NULL);
+    if (!nraw) return;
+
+    int nw = g_rp.nat_w, nh = g_rp.nat_h;
+    uint8_t *disp = malloc((size_t)dw * dh);
+    uint8_t *nat  = malloc((size_t)nw * nh);
+    uint8_t *nds  = malloc((size_t)dw * dh);
+    EoToneState st = { 0, 0, 0 };
+    int ddw = 0, ddh = 0;
+    if (disp && nat && nds &&
+        render_decode_jpeg_gray(djpg, djlen, disp, (uint32_t)dw * dh, &ddw, &ddh) == 0 &&
+        ddw == dw && ddh == dh &&
+        render_native_gray8(nraw, npl, nw, nh, g_rp.nat_mode, 0, &st, 1, nat) == 0) {
+        /* box-average downscale native -> display res (matches EO at zoom=1) */
+        double sum = 0;
+        for (int oy = 0; oy < dh; oy++) {
+            int sy0 = oy * nh / dh, sy1 = (oy + 1) * nh / dh; if (sy1 <= sy0) sy1 = sy0 + 1;
+            for (int ox = 0; ox < dw; ox++) {
+                int sx0 = ox * nw / dw, sx1 = (ox + 1) * nw / dw; if (sx1 <= sx0) sx1 = sx0 + 1;
+                unsigned acc = 0, cnt = 0;
+                for (int sy = sy0; sy < sy1; sy++)
+                    for (int sx = sx0; sx < sx1; sx++) { acc += nat[(size_t)sy * nw + sx]; cnt++; }
+                int v = cnt ? (int)(acc / cnt) : 0;
+                sum += abs(v - disp[(size_t)oy * dw + ox]);
+            }
+        }
+        double mean = sum / ((double)dw * dh);
+        g_rp.tm_vs_eo_diff = mean;
+        g_rp.tm_vs_eo = mean > TM_DRIFT_THRESH ? -1 : 1;
+        if (g_rp.tm_vs_eo < 0)
+            fprintf(stderr, "replay: tone map DRIFT vs EO feed (mean diff %.1f) — mirror eo_tonemap.c\n", mean);
+    }
+    free(disp); free(nat); free(nds);
+}
+
 /* ---- open/close ---- */
 
 static void nat_cache_drop(void)
@@ -400,6 +468,9 @@ static int rp_open(const char *sid)
         const char *r2 = strstr(rt, "\"realtime_ns\":");
         if (r2) g_rp.t0_real = strtoull(r2 + 14, NULL, 10);
     }
+    tonemap_verify_vs_display();                 /* ~10ms: does my tone map still match EO? */
+    if (g_rp.tm_vs_eo < 0) g_rp.tonemap_match = 0;   /* drift vs the live feed */
+
     snprintf(g_rp.sid, sizeof g_rp.sid, "%s", sid);
     snprintf(g_rp.name, sizeof g_rp.name, "%s", name);
     if (has_y10) transcode_request(sid);        /* start the smooth-play MP4 now */
@@ -503,6 +574,7 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         "\"playing\":%d,\"rate\":%.2f,\"t_wall_ms\":%llu,\"frame_i\":%ld,\"frames\":%ld,"
         "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d,"
         "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d,"
+        "\"tonemap_vs_eo\":\"%s\",\"tonemap_vs_eo_diff\":%.1f,"
         "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
@@ -511,7 +583,8 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         g_rp.video_native && g_rp.has_native ? "native" : "display",
         g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h,
         g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match,
-        mp4_state, mp4_pct);
+        g_rp.tm_vs_eo == 1 ? "ok" : g_rp.tm_vs_eo < 0 ? "drift" : "unchecked",
+        g_rp.tm_vs_eo_diff, mp4_state, mp4_pct);
 }
 
 void replay_state_json(char *buf, size_t len)

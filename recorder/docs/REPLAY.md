@@ -23,19 +23,25 @@ seek/jump.
 
 ### Keeping replay identical to the live feed — and knowing if it isn't
 
-Two layers, so a divergence can never pass unnoticed:
-1. **Device drift signature.** At record time the recorder stamps
-   `tonemap_version` + `tonemap_hash` (a hash of the tone map's output on a
-   canonical frame, computed on that device) into `eo_y10/channel.json`. At
-   replay open it recomputes the hash and reports `tonemap_match` in
-   `/replay/state`. If a session was recorded under different tone-map math than
-   the current build (e.g. the EO feed's tone map changed and this copy wasn't
-   mirrored), `tonemap_match:false` — the GUI shows a caveat instead of silently
-   rendering it wrong. **If it's ever false, we know.**
-2. **Empirical check.** `tools/verify_replay_match.py` records-then-compares the
-   native replay frame against the operator's recorded display frame (at native
-   display res) pixel-by-pixel; a drift shows as a jump in mean pixel difference.
-   Run it as part of EO/recorder acceptance whenever the tone map is touched.
+Three layers, so a divergence can never pass unnoticed:
+1. **Automatic EO comparison (catches EO changing its process).** At replay
+   open (~10 ms, once) the recorder compares one native frame — rendered through
+   its own tone map — against the operator's recorded display JPEG, which came
+   from the EO feed's *real* tone map, at a zoom=1 frame downscaled to match. If
+   they diverge beyond JPEG noise, `/replay/state` reports
+   `tonemap_vs_eo:"drift"` (with the mean pixel `tonemap_vs_eo_diff`) and
+   `tonemap_match:false`. This is the direct check: if EO changes its tone map
+   and this copy wasn't mirrored, the recorder catches it by itself. Verified:
+   matched tone maps → `"ok"`, diff ~0.4; a changed tone map → `"drift"`, diff
+   ~40. Reports `"unchecked"` only when a session has no zoom=1 display frame to
+   compare against (e.g. radar-only, or always-zoomed).
+2. **Device drift signature.** The recorder also stamps `tonemap_version` +
+   `tonemap_hash` into `eo_y10/channel.json` at record time and re-checks at
+   replay, catching the recorder's own tone map changing between record and
+   replay (also folded into `tonemap_match`).
+3. **Empirical bench check.** `tools/verify_replay_match.py` does the same
+   native-vs-display comparison offline across many frames — run it in
+   EO/recorder acceptance whenever the tone map is touched.
 
 **Smooth full-quality native play over WiFi — cached H.264.** Native
 JPEG-per-frame is ~12-24 MB/s, more than WiFi carries. So on replay open the

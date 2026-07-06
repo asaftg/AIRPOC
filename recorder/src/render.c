@@ -104,6 +104,31 @@ int render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int 
     return rc;
 }
 
+/* Decode a grayscale JPEG into out (>= its w*h). Returns 0 + sets ow/oh. */
+int render_decode_jpeg_gray(const uint8_t *jpg, uint32_t len, uint8_t *out, uint32_t cap,
+                            int *ow, int *oh)
+{
+    struct jpeg_decompress_struct d;
+    JErr err;
+    d.err = jpeg_std_error(&err.mgr);
+    err.mgr.error_exit = jerr_exit;
+    if (setjmp(err.env)) { jpeg_destroy_decompress(&d); return -1; }
+    jpeg_create_decompress(&d);
+    jpeg_mem_src(&d, (unsigned char *)jpg, len);
+    if (jpeg_read_header(&d, TRUE) != JPEG_HEADER_OK) { jpeg_destroy_decompress(&d); return -1; }
+    d.out_color_space = JCS_GRAYSCALE;
+    jpeg_start_decompress(&d);
+    if ((uint32_t)d.output_width * d.output_height > cap) { jpeg_destroy_decompress(&d); return -1; }
+    *ow = d.output_width; *oh = d.output_height;
+    while (d.output_scanline < d.output_height) {
+        JSAMPROW r = out + (size_t)d.output_scanline * d.output_width;
+        jpeg_read_scanlines(&d, &r, 1);
+    }
+    jpeg_finish_decompress(&d);
+    jpeg_destroy_decompress(&d);
+    return 0;
+}
+
 int render_selftest(void)
 {
     int w = 64, h = 48;

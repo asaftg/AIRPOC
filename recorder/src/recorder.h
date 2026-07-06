@@ -205,6 +205,8 @@ int  render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int
                         uint8_t *out, uint32_t cap, uint32_t *outlen);
 int  render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
                          int median_on, void *tone_state, int reseed, uint8_t *out8);
+int  render_decode_jpeg_gray(const uint8_t *jpg, uint32_t len, uint8_t *out, uint32_t cap,
+                             int *ow, int *oh);
 int  render_selftest(void);
 
 /* transcode.c — cache a smooth H.264 MP4 of a session's native replay */
