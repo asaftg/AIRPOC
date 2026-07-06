@@ -168,8 +168,7 @@ static void handle_export(int fd, const char *qs)
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
         if (access(probe, F_OK) != 0) continue;
-        if (want_video) { transcode_ensure(tok);      /* EO native.mp4 */
-                          radar_movie_ensure(tok); }  /* radar scope movie */
+        if (want_video) transcode_ensure(tok);        /* build the EO native.mp4 if missing */
         lo += (size_t)snprintf(list + lo, sizeof list - lo, " '%s'", tok);
         nsid++;
     }

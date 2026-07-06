@@ -100,7 +100,7 @@ Recording / library:
 | `GET /library?tags=a,b&q=text&state=saved` | summaries: sid,name,state,t0,dur_ms,tags,note,mode,thumbs,bytes{native,display,radar,meta} (tags AND-match, q case-insensitive on name+note) |
 | `GET /session/<sid>` | full manifest |
 | `GET /thumbs/<sid>/<n>.jpg` | preview stills n=0..7 (lazy-regenerated) |
-| `GET /export?sids=<a,b,..\|all>&tier=meta\|display\|full` | stream the selected sessions as one `.tar` download. **meta** = annotations+thumbs+radar data (no video); **display** = two playable movies — `native.mp4` (EO camera) + `radar.mp4` (rendered PPI scope) + metadata, raw channels excluded; **full** = everything (raw channels + both movies). Movies are built on the fly if not cached. Sids validated |
+| `GET /export?sids=<a,b,..\|all>&tier=meta\|display\|full` | stream the selected sessions as one `.tar` download. **meta** = annotations+thumbs+radar data (no video); **display** = the playable `native.mp4` EO movie + radar data + metadata (raw EO channels excluded); **full** = everything (raw channels + EO movie). The EO movie is transcoded on the fly if not cached. Sids validated |
 
 Replay:
 

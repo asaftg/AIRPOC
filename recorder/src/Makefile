@@ -13,7 +13,7 @@ LDFLAGS := -pthread -lrt -ljpeg -lm
 # identical, drift-alarmed at runtime) — see eo_tonemap.h. Self-contained; the
 # recorder does not reach into the eo/ module tree.
 SRC := main.c channel.c session.c store.c disk.c events.c http.c \
-       pack10.c library.c thumbs.c replay.c render.c eo_tonemap.c transcode.c radar_movie.c
+       pack10.c library.c thumbs.c replay.c render.c eo_tonemap.c transcode.c
 OBJ := $(SRC:.c=.o)
 
 all: airpoc_recorder tap_bench
