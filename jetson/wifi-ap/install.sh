@@ -11,17 +11,18 @@ SSID="${AIRPOC_AP_SSID:-AIRPOC}"
 
 # Open (no-password) AP, 2.4 GHz for range, NAT + DHCP via ipv4.method=shared
 # (gateway/host = 10.42.0.1). autoconnect off — the failover service owns activation.
+#
+# IMPORTANT: for a truly OPEN network the profile must carry NO 802-11-wireless-security
+# setting at all. In NetworkManager key-mgmt=none means *WEP* (it will demand a wep-key),
+# not open. So we (re)create the profile clean, without any security setting.
 if nmcli -t -f NAME connection show | grep -qx "$AP_CON"; then
-  echo "profile $AP_CON already exists — leaving it as-is"
-else
-  sudo nmcli connection add type wifi ifname "$IFACE" con-name "$AP_CON" ssid "$SSID" \
-       autoconnect no \
-       802-11-wireless.mode ap 802-11-wireless.band bg \
-       ipv4.method shared ipv6.method ignore
-  # OPEN network — explicitly no security (as requested: no password)
-  sudo nmcli connection modify "$AP_CON" 802-11-wireless-security.key-mgmt none 2>/dev/null || true
-  echo "created open AP profile $AP_CON (ssid: $SSID)"
+  sudo nmcli connection delete "$AP_CON" >/dev/null
 fi
+sudo nmcli connection add type wifi ifname "$IFACE" con-name "$AP_CON" ssid "$SSID" \
+     autoconnect no \
+     802-11-wireless.mode ap 802-11-wireless.band bg \
+     ipv4.method shared ipv6.method ignore
+echo "created open AP profile $AP_CON (ssid: $SSID)"
 
 sudo install -m 0755 "$DIR/airpoc-autoap.sh" /usr/local/bin/airpoc-autoap.sh
 sudo cp "$DIR/airpoc-autoap.service" /etc/systemd/system/airpoc-autoap.service
