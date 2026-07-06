@@ -416,6 +416,8 @@
         + num(eo.fps, 0, " fps") + " · exp " + num(eo.exp_ms, 1, " ms") + " · duty " + num(eo.duty_pct, 0, "%") + " · gain " + num(eo.gain, 0) + (eo.ae ? " · AUTO" : " · MAN");
       $("eo-tr").textContent = "BRG " + (d.brg === null ? "—" : num(d.brg, 0, "°")) + "  RNG " + (d.rng === null ? "—" : num(d.rng, 2, " km"));
       $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cpupct").textContent = num(d.cpu_pct, 0); $("v-gpupct").textContent = num(d.gpu_pct, 0);
+      var nc = d.ncpu || 6;
+      $("v-cores").textContent = (typeof d.cpu_pct === "number") ? (d.cpu_pct / 100 * nc).toFixed(1) + "/" + nc : "";
       if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0 && Date.now() - zoomTouch > 1200) { zoom = eo.zoom; setZoomLabel(); }
       updateISP(eo);
       var light = $("light");

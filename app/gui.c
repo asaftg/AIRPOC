@@ -211,6 +211,7 @@ static void handle_stats(int fd)
     char cpp_s[16], gpp_s[16];
     if (cpupct < 0) snprintf(cpp_s, sizeof cpp_s, "null"); else snprintf(cpp_s, sizeof cpp_s, "%.0f", cpupct);
     if (gpupct < 0) snprintf(gpp_s, sizeof gpp_s, "null"); else snprintf(gpp_s, sizeof gpp_s, "%.0f", gpupct);
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN); if (ncpu < 1) ncpu = 1;   /* for the "x/N cores" figure */
 
     /* link type from the interface the operator's browser actually connected through */
     char lip[INET_ADDRSTRLEN] = "", lif[32] = "";
@@ -228,10 +229,10 @@ static void handle_stats(int fd)
     char body[1040];
     int bl = snprintf(body, sizeof body,
         "{\"eo_connected\":%d,\"mbps\":%.2f,\"tx_fps\":%.0f,\"track\":\"%s\",\"engage\":%d,"
-        "\"tracks\":%s,\"cpu_c\":%s,\"cpu_pct\":%s,\"gpu_pct\":%s,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
+        "\"tracks\":%s,\"cpu_c\":%s,\"cpu_pct\":%s,\"gpu_pct\":%s,\"ncpu\":%ld,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
         eoc, mbps, stream_fps(), g_track_man ? "man" : "auto", g_engage,
-        tracks_s, cpu_s, cpp_s, gpp_s, ltype, rssi_s, lrate_s,
+        tracks_s, cpu_s, cpp_s, gpp_s, ncpu, ltype, rssi_s, lrate_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
