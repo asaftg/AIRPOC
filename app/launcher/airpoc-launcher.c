@@ -30,6 +30,32 @@ static int port_up(int p)                       /* is something listening on 127
     return ok;
 }
 
+/* Is the recorder's shared-memory tap for <chan> actually connected? A feed's TCP port
+ * can be up (live view works) while its /dev/shm tap is gone — then recording captures
+ * nothing. This asks the recorder (:8093) the truth so /status can't lie about it. */
+static int rec_chan_up(const char *chan)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 400000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(8093) };
+    inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) != 0) { close(fd); return 0; }
+    const char *rq = "GET /stats HTTP/1.0\r\nConnection: close\r\n\r\n";
+    if (write(fd, rq, strlen(rq)) < 0) { close(fd); return 0; }
+    char buf[4096]; size_t n = 0; ssize_t r;
+    while (n < sizeof buf - 1 && (r = read(fd, buf + n, sizeof buf - 1 - n)) > 0) n += (size_t)r;
+    close(fd);
+    buf[n] = 0;
+    char key[64]; snprintf(key, sizeof key, "\"name\":\"%s\"", chan);
+    char *p = strstr(buf, key);
+    if (!p) return 0;
+    p = strstr(p, "\"connected\":");
+    return p && p[12] == '1';
+}
+
 static const char *WIFI_MODE_FILE   = "/var/lib/airpoc/wifi-mode";     /* we write: auto|ap|home */
 static const char *WIFI_STATUS_FILE = "/var/lib/airpoc/wifi-status";   /* autoap writes live state */
 
@@ -69,13 +95,15 @@ static const char *PAGE =
 ".wbtns button:last-child{border-right:0}.wbtns button.on{background:#c1a173;color:#0a0a0c}"
 ".wsub{font-size:11px;color:#5f5c56;letter-spacing:1px;min-height:14px;max-width:min(86vw,340px);text-align:center}"
 ".wsub.switching{color:#c1a173;font-size:13px;line-height:1.5}"
-".danger{height:48px;font-size:13px;margin-top:14px;background:#2a0c0c;color:#ff8a8a;border:1px solid #6a2020}</style></head><body>"
+".danger{height:48px;font-size:13px;margin-top:14px;background:#2a0c0c;color:#ff8a8a;border:1px solid #6a2020}"
+".recw{font-size:12px;letter-spacing:.5px;color:#e0a94a;max-width:min(86vw,360px);text-align:center;line-height:1.4;min-height:0}</style></head><body>"
 "<h1>FAZE <i>CONTROL</i></h1>"
 "<div class=st><span id=dot class=dot></span><span id=stat>checking…</span></div>"
 "<button class=start onclick=go('start')>START SYSTEM</button>"
 "<button class=stop onclick=go('stop')>STOP SYSTEM</button>"
 "<button class=open onclick=\"location.href='http://'+location.hostname+':8080/'\">OPEN CONSOLE</button>"
 "<div class=sub id=sub></div>"
+"<div class=recw id=recw></div>"
 "<div class=wifi><div class=wlabel>NETWORK</div><div class=wbtns>"
 "<button id=w-auto onclick=setwifi('auto')>AUTO</button>"
 "<button id=w-home onclick=setwifi('home')>WIFI</button>"
@@ -85,9 +113,12 @@ static const char *PAGE =
 "<script>"
 "function poll(){fetch('/status').then(r=>r.json()).then(d=>{"
 "var n=(d.app?1:0)+(d.eo?1:0)+(d.radar?1:0);var dot=document.getElementById('dot');"
-"dot.className='dot'+(n===3?' up':n>0?' part':'');"
-"document.getElementById('stat').textContent=n===3?'SYSTEM UP':n===0?'SYSTEM OFF':'STARTING…';"
-"document.getElementById('sub').textContent='app '+(d.app?'\\u2713':'\\u2717')+'  \\u00b7  eo '+(d.eo?'\\u2713':'\\u2717')+'  \\u00b7  radar '+(d.radar?'\\u2713':'\\u2717');"
+"var bad=(d.eo&&!d.eo_rec)||(d.radar&&!d.radar_rec);"  /* feed live but recorder tap dead */
+"dot.className='dot'+(n===3&&!bad?' up':n>0?' part':'');"
+"document.getElementById('stat').textContent=n===0?'SYSTEM OFF':bad?'REC BUS DOWN':n===3?'SYSTEM UP':'STARTING\\u2026';"
+"var fx=function(f,r){return f?(r?'\\u2713':'\\u2713 rec\\u2717'):'\\u2717';};"
+"document.getElementById('sub').textContent='app '+(d.app?'\\u2713':'\\u2717')+'  \\u00b7  eo '+fx(d.eo,d.eo_rec)+'  \\u00b7  radar '+fx(d.radar,d.radar_rec);"
+"document.getElementById('recw').textContent=bad?'\\u26a0 feed is live but the recorder tap is DOWN \\u2014 recordings will be EMPTY. Press START to re-attach.':'';"
 "}).catch(()=>{document.getElementById('stat').textContent='launcher unreachable';});}"
 "function go(a){document.getElementById('stat').textContent=(a==='start'?'STARTING':'STOPPING')+'\\u2026';"
 "fetch('/'+a).then(()=>setTimeout(poll,1200));}"
@@ -129,9 +160,13 @@ static void handle_conn(int fd)
     } else if (strstr(req, "hotspot-detect") || strstr(req, "ncsi.txt") || strstr(req, "connecttest")) {
         reply(fd, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
     } else if (!strncmp(req, "GET /status", 11)) {
-        char b[128];
-        snprintf(b, sizeof b, "{\"app\":%s,\"eo\":%s,\"radar\":%s}",
-                 port_up(8080) ? "true" : "false", port_up(8091) ? "true" : "false", port_up(8092) ? "true" : "false");
+        int eo = port_up(8091), rad = port_up(8092);
+        char b[256];
+        snprintf(b, sizeof b,
+                 "{\"app\":%s,\"eo\":%s,\"radar\":%s,\"eo_rec\":%s,\"radar_rec\":%s}",
+                 port_up(8080) ? "true" : "false", eo ? "true" : "false", rad ? "true" : "false",
+                 (eo && rec_chan_up("eo_y10")) ? "true" : "false",
+                 (rad && rec_chan_up("radar_raw")) ? "true" : "false");
         reply(fd, "application/json", b);
     } else if (!strncmp(req, "GET /start", 10)) {
         if (system("bash ./start.sh >/tmp/airpoc-start.log 2>&1 &") == -1) {}
