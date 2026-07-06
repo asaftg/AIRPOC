@@ -604,7 +604,9 @@
   function openReplay(s) {
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
-      replayHasEO = !!(s.thumbs && s.thumbs > 0);           /* thumbs:0 => no video was recorded */
+      /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
+       * session can have EO video with no thumbnails generated). */
+      replayHasEO = !!(s.bytes && ((s.bytes.display > 0) || (s.bytes.native > 0)));
       replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
       document.body.classList.add("replay"); $("library").hidden = true;
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
