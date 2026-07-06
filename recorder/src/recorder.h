@@ -203,7 +203,14 @@ int  thumbs_generate(const char *dir);   /* 8 stills from eo_jpeg */
 int  render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
                         int median_on, void *tone_state, int reseed, int quality,
                         uint8_t *out, uint32_t cap, uint32_t *outlen);
+int  render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+                         int median_on, void *tone_state, int reseed, uint8_t *out8);
 int  render_selftest(void);
+
+/* transcode.c — cache a smooth H.264 MP4 of a session's native replay */
+void transcode_request(const char *sid);         /* kick a build if not cached/building */
+int  transcode_status(const char *sid, int *pct);/* 2=ready 1=building 0=none -1=failed */
+int  transcode_mp4_path(const char *sid, char *path, size_t plen);  /* 0 if file exists */
 
 /* replay.c */
 void replay_ctl(const char *qs, char *resp, size_t rlen);

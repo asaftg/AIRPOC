@@ -402,6 +402,7 @@ static int rp_open(const char *sid)
     }
     snprintf(g_rp.sid, sizeof g_rp.sid, "%s", sid);
     snprintf(g_rp.name, sizeof g_rp.name, "%s", name);
+    if (has_y10) transcode_request(sid);        /* start the smooth-play MP4 now */
     g_rp.open = 1;
     g_rp.rate = 1.0;
     clock_set(0, 0);
@@ -493,18 +494,24 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
 {
     RChan *vc = video_chan();
     long fi = rchan_at(vc, t);
+    int mp4_pct = 0;
+    int mp4_st = g_rp.has_native ? transcode_status(g_rp.sid, &mp4_pct) : 0;
+    const char *mp4_state = mp4_st == 2 ? "ready" : mp4_st == 1 ? "building"
+                          : mp4_st < 0 ? "failed" : "none";
     return (size_t)snprintf(buf, len,
         "{\"sid\":\"%s\",\"name\":\"%s\",\"t_ms\":%lld,\"dur_ms\":%lld,"
         "\"playing\":%d,\"rate\":%.2f,\"t_wall_ms\":%llu,\"frame_i\":%ld,\"frames\":%ld,"
         "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d,"
-        "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d}",
+        "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d,"
+        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
         (unsigned long long)((g_rp.t0_real + (uint64_t)t * 1000000ull) / 1000000ull),
         fi, vc->n,
         g_rp.video_native && g_rp.has_native ? "native" : "display",
         g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h,
-        g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match);
+        g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match,
+        mp4_state, mp4_pct);
 }
 
 void replay_state_json(char *buf, size_t len)

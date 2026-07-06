@@ -46,12 +46,12 @@ static int encode_gray(const uint8_t *g, int w, int h, int quality,
     return rc;
 }
 
-/* Reconstruct a native JPEG. st carries the tonemap EMA across frames (pass the
- * same state on sequential frames to match the live anti-breathing; set reseed
- * on a seek/jump). median_on applies the same 3x3 median the live feed used. */
-int render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
-                       int median_on, void *tone_state, int reseed, int quality,
-                       uint8_t *out, uint32_t cap, uint32_t *outlen)
+/* Reconstruct the native 8-bit frame via the shared tone map. st carries the
+ * EMA across frames (same state on sequential frames = live anti-breathing;
+ * reseed on a seek/jump). median_on applies the same 3x3 median the live feed
+ * used. out8 must hold w*h bytes. */
+int render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+                        int median_on, void *tone_state, int reseed, uint8_t *out8)
 {
     uint32_t npx = (uint32_t)w * h;
     uint32_t need = mode == MODE_RAW16 ? npx * 2 : mode == MODE_Y8 ? npx : npx * 10 / 8;
@@ -78,16 +78,29 @@ int render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int 
 
     uint16_t *sm = malloc((size_t)npx * sizeof(uint16_t));
     int *xs = malloc((size_t)(w + 1) * sizeof(int));
-    uint8_t *out8 = malloc(npx);
     int rc = -1;
-    if (sm && xs && out8) {
+    if (sm && xs) {
         EoToneState *st = tone_state;
         if (reseed) st->seeded = 0;
         eo_tonemap(y16, 2 * w, 0, 0, w, h, out8, w, h, st, sm, xs);
         if (median_on) { uint8_t *msc = malloc(npx); if (msc) { eo_median3(out8, w, h, msc); free(msc); } }
-        rc = encode_gray(out8, w, h, quality, out, cap, outlen);
+        rc = 0;
     }
-    free(sm); free(xs); free(out8); free(tmp);
+    free(sm); free(xs); free(tmp);
+    return rc;
+}
+
+/* Native JPEG for one frame (pause/step/scrub stills). */
+int render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
+                       int median_on, void *tone_state, int reseed, int quality,
+                       uint8_t *out, uint32_t cap, uint32_t *outlen)
+{
+    uint32_t npx = (uint32_t)w * h;
+    uint8_t *out8 = malloc(npx);
+    if (!out8) return -1;
+    int rc = render_native_gray8(payload, plen, w, h, mode, median_on, tone_state, reseed, out8);
+    if (rc == 0) rc = encode_gray(out8, w, h, quality, out, cap, outlen);
+    free(out8);
     return rc;
 }
 

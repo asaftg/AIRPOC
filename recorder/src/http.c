@@ -79,6 +79,53 @@ static void send_file(int fd, const char *path, const char *ctype)
     fclose(f);
 }
 
+/* Range-capable file server for <video> seeking. Honors a single
+ * "Range: bytes=start-end"; otherwise serves the whole file (Accept-Ranges). */
+static void send_file_range(int fd, const char *path, const char *ctype, const char *range)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) { send_json(fd, 404, "{\"err\":\"not found\"}"); return; }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+
+    long start = 0, end = sz - 1;
+    int partial = 0;
+    if (range && !strncmp(range, "bytes=", 6)) {
+        char *dash = strchr(range + 6, '-');
+        start = atol(range + 6);
+        if (dash && dash[1]) end = atol(dash + 1);
+        if (start < 0) start = 0;
+        if (end >= sz) end = sz - 1;
+        if (end < start) { start = 0; end = sz - 1; }
+        partial = 1;
+    }
+    long clen = end - start + 1;
+
+    char h[320];
+    int hn;
+    if (partial)
+        hn = snprintf(h, sizeof h,
+            "HTTP/1.0 206 Partial Content\r\nContent-Type: %s\r\nAccept-Ranges: bytes\r\n"
+            "Content-Range: bytes %ld-%ld/%ld\r\nContent-Length: %ld\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n", ctype, start, end, sz, clen);
+    else
+        hn = snprintf(h, sizeof h,
+            "HTTP/1.0 200 OK\r\nContent-Type: %s\r\nAccept-Ranges: bytes\r\n"
+            "Content-Length: %ld\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", ctype, sz);
+    if (write(fd, h, (size_t)hn) != hn) { fclose(f); return; }
+
+    fseek(f, start, SEEK_SET);
+    char buf[65536];
+    long left = clen;
+    while (left > 0) {
+        size_t want = left < (long)sizeof buf ? (size_t)left : sizeof buf;
+        size_t n = fread(buf, 1, want, f);
+        if (!n || write(fd, buf, n) != (ssize_t)n) break;
+        left -= (long)n;
+    }
+    fclose(f);
+}
+
 /* ---- /ctl ---- */
 
 static void handle_ctl(int fd, const char *qs)
@@ -152,7 +199,7 @@ static void handle_ctl(int fd, const char *qs)
 
 /* ---- connection handler ---- */
 
-static void handle(int fd, const char *path, const char *qs)
+static void handle(int fd, const char *path, const char *qs, const char *range)
 {
     static char big[1024 * 1024];        /* >= eo_jpeg slot cap; guarded by g_big_lk */
     static pthread_mutex_t g_big_lk = PTHREAD_MUTEX_INITIALIZER;
@@ -218,6 +265,21 @@ static void handle(int fd, const char *path, const char *qs)
         } else
             send_json(fd, 404, "{\"err\":\"no frame\"}");
         pthread_mutex_unlock(&g_big_lk);
+    } else if (!strcmp(path, "/replay/native.mp4")) {
+        char sid[SID_LEN + 1] = "", p[640];
+        query_get(qs, "sid", sid, sizeof sid);
+        if (!sid[0]) { send_json(fd, 400, "{\"err\":\"sid=\"}"); return; }
+        int pct = 0, st = transcode_status(sid, &pct);
+        if (st == 2 && transcode_mp4_path(sid, p, sizeof p) == 0)
+            send_file_range(fd, p, "video/mp4", range);
+        else if (st == 1) {                               /* still encoding */
+            char b[64]; snprintf(b, sizeof b, "{\"building\":true,\"pct\":%d}", pct);
+            send_head(fd, 202, "Accepted", "application/json", (long)strlen(b));
+            if (write(fd, b, strlen(b)) < 0) {}
+        } else {
+            transcode_request(sid);                       /* kick it, tell client to wait */
+            send_json(fd, 202, "{\"building\":true,\"pct\":0}");
+        }
     } else if (!strcmp(path, "/replay/stream")) {
         replay_stream(fd);                                /* blocks for connection life */
     } else {
@@ -239,7 +301,19 @@ static void *client_thread(void *arg)
         if (sscanf(req, "GET %1023s HTTP", path) == 1) {
             char *qs = strchr(path, '?');
             if (qs) *qs++ = 0;
-            handle(fd, path, qs ? qs : "");
+            /* pull the Range header value (case-insensitive) for <video> seeks */
+            char range[64] = "";
+            for (char *h = req; (h = strchr(h, '\n')); h++) {
+                if (!strncasecmp(h + 1, "Range:", 6)) {
+                    char *v = h + 7;
+                    while (*v == ' ') v++;
+                    size_t i = 0;
+                    while (v[i] && v[i] != '\r' && v[i] != '\n' && i < sizeof range - 1) { range[i] = v[i]; i++; }
+                    range[i] = 0;
+                    break;
+                }
+            }
+            handle(fd, path, qs ? qs : "", range);
         }
     }
     close(fd);
