@@ -24,6 +24,13 @@ sudo nmcli connection add type wifi ifname "$IFACE" con-name "$AP_CON" ssid "$SS
      ipv4.method shared ipv6.method ignore
 echo "created open AP profile $AP_CON (ssid: $SSID)"
 
+# shared state dir: the launcher (runs as $WIFI_USER) writes the desired mode here
+# (auto|ap|home) and the failover daemon publishes live status back.
+WIFI_USER="${AIRPOC_LAUNCHER_USER:-asaftg}"
+sudo install -d -o "$WIFI_USER" -g "$WIFI_USER" /var/lib/airpoc
+if [ ! -f /var/lib/airpoc/wifi-mode ]; then echo auto | sudo tee /var/lib/airpoc/wifi-mode >/dev/null; fi
+sudo chown "$WIFI_USER":"$WIFI_USER" /var/lib/airpoc/wifi-mode
+
 sudo install -m 0755 "$DIR/airpoc-autoap.sh" /usr/local/bin/airpoc-autoap.sh
 sudo cp "$DIR/airpoc-autoap.service" /etc/systemd/system/airpoc-autoap.service
 sudo systemctl daemon-reload

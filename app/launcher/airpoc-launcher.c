@@ -29,6 +29,24 @@ static int port_up(int p)                       /* is something listening on 127
     return ok;
 }
 
+static const char *WIFI_MODE_FILE   = "/var/lib/airpoc/wifi-mode";     /* we write: auto|ap|home */
+static const char *WIFI_STATUS_FILE = "/var/lib/airpoc/wifi-status";   /* autoap writes live state */
+
+static void set_wifi_mode(const char *m)
+{
+    FILE *f = fopen(WIFI_MODE_FILE, "w");
+    if (f) { fputs(m, f); fputc('\n', f); fclose(f); }
+}
+static int read_file(const char *path, char *buf, size_t n)   /* -> bytes read, 0 on fail */
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    size_t r = fread(buf, 1, n - 1, f);
+    fclose(f);
+    buf[r] = 0;
+    return (int)r;
+}
+
 static const char *PAGE =
 "<!doctype html><html><head><meta charset=utf-8>"
 "<meta name=viewport content='width=device-width,initial-scale=1,maximum-scale=1'>"
@@ -42,13 +60,24 @@ static const char *PAGE =
 "button{width:min(86vw,340px);height:64px;border:0;border-radius:8px;font:inherit;font-size:18px;letter-spacing:2px;cursor:pointer}"
 ".start{background:#6cdf8a;color:#0a0a0c}.stop{background:#5a1a1a;color:#ffb4b4;border:1px solid #7a2a2a}"
 ".open{background:#131316;color:#c1a173;border:1px solid #3b3b42}button:active{transform:scale(.985)}"
-".sub{font-size:11px;color:#5f5c56;letter-spacing:1px}</style></head><body>"
+".sub{font-size:11px;color:#5f5c56;letter-spacing:1px}"
+".wifi{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:8px}"
+".wlabel{font-size:10px;letter-spacing:3px;color:#5f5c56}"
+".wbtns{display:flex;border:1px solid #3b3b42;border-radius:8px;overflow:hidden}"
+".wbtns button{width:auto;min-width:100px;height:46px;background:#131316;color:#9a968e;border:0;border-right:1px solid #3b3b42;border-radius:0;font-size:13px;letter-spacing:2px}"
+".wbtns button:last-child{border-right:0}.wbtns button.on{background:#c1a173;color:#0a0a0c}"
+".wsub{font-size:11px;color:#5f5c56;letter-spacing:1px;min-height:14px}</style></head><body>"
 "<h1>FAZE <i>CONTROL</i></h1>"
 "<div class=st><span id=dot class=dot></span><span id=stat>checking…</span></div>"
 "<button class=start onclick=go('start')>START SYSTEM</button>"
 "<button class=stop onclick=go('stop')>STOP SYSTEM</button>"
 "<button class=open onclick=\"location.href='http://'+location.hostname+':8080/'\">OPEN CONSOLE</button>"
 "<div class=sub id=sub></div>"
+"<div class=wifi><div class=wlabel>NETWORK</div><div class=wbtns>"
+"<button id=w-auto onclick=setwifi('auto')>AUTO</button>"
+"<button id=w-home onclick=setwifi('home')>WIFI</button>"
+"<button id=w-ap onclick=setwifi('ap')>AP</button>"
+"</div><div class=wsub id=wsub></div></div>"
 "<script>"
 "function poll(){fetch('/status').then(r=>r.json()).then(d=>{"
 "var n=(d.app?1:0)+(d.eo?1:0)+(d.radar?1:0);var dot=document.getElementById('dot');"
@@ -58,7 +87,12 @@ static const char *PAGE =
 "}).catch(()=>{document.getElementById('stat').textContent='launcher unreachable';});}"
 "function go(a){document.getElementById('stat').textContent=(a==='start'?'STARTING':'STOPPING')+'\\u2026';"
 "fetch('/'+a).then(()=>setTimeout(poll,1200));}"
-"setInterval(poll,2000);poll();"
+"function setwifi(m){document.getElementById('wsub').textContent='switching\\u2026 (rejoin the new network)';fetch('/wifi?mode='+m).then(()=>setTimeout(pollwifi,400));}"
+"function pollwifi(){fetch('/wifi/status').then(r=>r.json()).then(d=>{"
+"[['auto','w-auto'],['home','w-home'],['ap','w-ap']].forEach(function(p){document.getElementById(p[1]).classList.toggle('on',d.mode===p[0]);});"
+"document.getElementById('wsub').textContent=d.ap?('AP \\u00b7 '+(d.ip||'10.42.0.1')+' \\u00b7 '+(d.clients||0)+' joined'):(d.net?(d.net+(d.ip?' \\u00b7 '+d.ip:'')):'\\u2014');"
+"}).catch(()=>{});}"
+"setInterval(poll,2000);poll();setInterval(pollwifi,3000);pollwifi();"
 "</script></body></html>";
 
 static void reply(int fd, const char *ctype, const char *body)
@@ -98,6 +132,17 @@ int main(int argc, char **argv)
         } else if (!strncmp(req, "GET /stop", 9)) {
             if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
             reply(fd, "application/json", "{\"ok\":1}");
+        } else if (!strncmp(req, "GET /wifi/status", 16)) {
+            char b[256];
+            if (read_file(WIFI_STATUS_FILE, b, sizeof b) <= 0)
+                snprintf(b, sizeof b, "{\"mode\":\"auto\",\"ap\":false,\"net\":\"\",\"ip\":\"\",\"clients\":0}");
+            reply(fd, "application/json", b);
+        } else if (!strncmp(req, "GET /wifi", 9)) {
+            const char *m = strstr(req, "mode="), *set = "auto";
+            if (m) { m += 5; if (!strncmp(m, "ap", 2)) set = "ap"; else if (!strncmp(m, "home", 4)) set = "home"; }
+            set_wifi_mode(set);
+            char b[64]; snprintf(b, sizeof b, "{\"ok\":1,\"mode\":\"%s\"}", set);
+            reply(fd, "application/json", b);
         } else {
             reply(fd, "text/html", PAGE);
         }

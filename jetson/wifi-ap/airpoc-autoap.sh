@@ -1,18 +1,19 @@
 #!/bin/bash
-# AIRPOC WiFi failover. One radio, so it is client XOR access-point:
-#   - connected to a known (home) WiFi  -> stay put, DO NOTHING (no scans, so a live
-#     video stream over that link is never disturbed).
-#   - no WiFi connection and no known network in range -> raise the open AIRPOC AP so a
-#     phone can join point-to-point in the field (10.42.0.1).
-#   - in AP mode with NO phone joined -> once every AP_PROBE_EVERY seconds, briefly drop
-#     the AP to scan (a radio can't scan while it's an AP); if home WiFi is back, rejoin
-#     it, else re-raise the AP. If a phone IS joined (operator working), never disturb it.
+# AIRPOC WiFi control + failover. One radio, so it is client XOR access-point. A mode
+# file (written by the launcher page) picks the policy:
+#   auto  - home WiFi if a known network is in range, else raise the open AIRPOC AP
+#   ap    - PINNED access point: keep AIRPOC up, never fail back, never scan-drop (most
+#           reliable for field work)
+#   home  - PINNED client: stay on home WiFi, never raise the AP
+# The daemon also publishes the live state to a status file the launcher reads.
 #
 # Runs as root under systemd.
 IFACE="${AIRPOC_WIFI_IFACE:-wlP1p1s0}"
 AP_CON="AIRPOC-AP"
 POLL="${AIRPOC_AUTOAP_POLL:-20}"                 # seconds between checks
-AP_PROBE_EVERY="${AIRPOC_AP_PROBE_EVERY:-120}"   # seconds between home-probes while in AP
+AP_PROBE_EVERY="${AIRPOC_AP_PROBE_EVERY:-120}"   # seconds between home-probes while auto+AP
+MODE_FILE="${AIRPOC_WIFI_MODE_FILE:-/var/lib/airpoc/wifi-mode}"
+STATUS_FILE="${AIRPOC_WIFI_STATUS_FILE:-/var/lib/airpoc/wifi-status}"
 
 log() { echo "autoap: $*"; }
 
@@ -25,7 +26,7 @@ active_con() {   # connection currently active on the wifi iface (empty if none)
 ap_clients() {   # how many phones are joined to our AP
   iw dev "$IFACE" station dump 2>/dev/null | grep -c "^Station"
 }
-home_in_range() {   # rescan (radio must be in managed/idle mode) -> 0 if a saved net is visible
+home_in_range() {   # rescan (radio must be managed/idle) -> 0 if a saved net is visible
   nmcli dev wifi rescan ifname "$IFACE" 2>/dev/null || true
   sleep 3
   local vis con ssid
@@ -39,46 +40,51 @@ home_in_range() {   # rescan (radio must be in managed/idle mode) -> 0 if a save
 }
 join_home() { local first; first=$(known_cons | head -1); [ -n "$first" ] && nmcli connection up "$first" 2>/dev/null; }
 
+read_mode() { local m; m=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null); case "$m" in ap|home|auto) echo "$m";; *) echo auto;; esac; }
 now() { date +%s; }
 last_probe=0
 
-tick() {
-  local act; act=$(active_con)
+write_status() {   # $1 = selected mode
+  local act ap net ip
+  act=$(active_con)
+  if [ "$act" = "$AP_CON" ]; then ap=true; net="AIRPOC"; ip="10.42.0.1"
+  elif [ -n "$act" ]; then ap=false; net="$act"; ip=$(ip -4 addr show "$IFACE" 2>/dev/null | awk '/inet /{print $2; exit}'); ip="${ip%%/*}"
+  else ap=false; net=""; ip=""; fi
+  printf '{"mode":"%s","ap":%s,"net":"%s","ip":"%s","clients":%s}\n' \
+    "$1" "$ap" "$net" "$ip" "$(ap_clients)" > "${STATUS_FILE}.tmp" 2>/dev/null && mv "${STATUS_FILE}.tmp" "$STATUS_FILE" 2>/dev/null
+}
 
+auto_tick() {   # $1 = current active connection
+  local act="$1"
   if [ "$act" = "$AP_CON" ]; then
-    # In AP mode. Never disturb a connected operator.
-    [ "$(ap_clients)" -gt 0 ] && return
-    # No phone joined: occasionally drop the AP to look for home (can't scan as an AP).
+    [ "$(ap_clients)" -gt 0 ] && return              # operator connected -> never disturb
     local t; t=$(now)
     if [ $(( t - last_probe )) -ge "$AP_PROBE_EVERY" ]; then
       last_probe=$t
-      log "AP idle — briefly dropping to probe for home WiFi"
+      log "auto: AP idle -> briefly probing for home WiFi"
       nmcli connection down "$AP_CON" 2>/dev/null
-      if home_in_range; then
-        log "home WiFi is back -> rejoining"
-        join_home
-      else
-        log "still no home -> re-raising AP"
-        nmcli connection up "$AP_CON" 2>/dev/null
-      fi
+      if home_in_range; then log "home is back -> rejoining"; join_home
+      else log "still no home -> re-raising AP"; nmcli connection up "$AP_CON" 2>/dev/null; fi
     fi
     return
   fi
-
-  if [ -n "$act" ]; then
-    return   # connected as a client -> idle, do not disturb the link
-  fi
-
-  # No wifi connection at all. Prefer a known network; only raise the AP if none is near.
-  if home_in_range; then
-    log "no connection but home WiFi in range -> joining"
-    join_home
-  else
-    log "no known WiFi in range -> raising open AP $AP_CON"
-    nmcli connection up "$AP_CON" 2>/dev/null
-    last_probe=$(now)   # don't probe again until AP_PROBE_EVERY has passed
-  fi
+  [ -n "$act" ] && return                            # connected as client -> idle
+  if home_in_range; then log "auto: home in range -> joining"; join_home
+  else log "auto: no known WiFi -> raising AP"; nmcli connection up "$AP_CON" 2>/dev/null; last_probe=$(now); fi
 }
 
-log "started (iface=$IFACE ap=$AP_CON poll=${POLL}s probe=${AP_PROBE_EVERY}s)"
+tick() {
+  local mode act; mode=$(read_mode); act=$(active_con)
+  case "$mode" in
+    home)   # pinned client: drop AP, join home, never raise AP
+      [ "$act" = "$AP_CON" ] && { log "mode=home -> leaving AP"; nmcli connection down "$AP_CON" 2>/dev/null; act=""; }
+      [ -z "$act" ] && { home_in_range && join_home; } ;;
+    ap)     # pinned AP: keep it up, no fail-back, no scan-drops
+      [ "$act" = "$AP_CON" ] || { log "mode=ap -> raising AP"; nmcli connection up "$AP_CON" 2>/dev/null; } ;;
+    *)      auto_tick "$act" ;;
+  esac
+  write_status "$mode"
+}
+
+log "started (iface=$IFACE ap=$AP_CON poll=${POLL}s probe=${AP_PROBE_EVERY}s mode-file=$MODE_FILE)"
 while true; do tick; sleep "$POLL"; done
