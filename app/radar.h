@@ -16,6 +16,12 @@ int  radar_get_frame_json(char *buf, int cap);
 int  radar_connected(void);      /* 1 if the daemon reports a connected radar */
 int  radar_num_targets(void);    /* target count in the latest frame (for /stats)  */
 
+/* Block until a frame newer than *last_seq arrives (event-driven; the frame thread
+ * signals on every new frame) or timeout_ms elapses, then copy it into buf and update
+ * *last_seq. Returns the frame length, or 0 on timeout. Lets the app PUSH radar to the
+ * browser over SSE at the sensor's native rate instead of the browser polling. */
+int  radar_wait_frame(unsigned *last_seq, char *buf, int cap, int timeout_ms);
+
 /* Forward a raw control query to the daemon's /ctl (e.g. "eps=8&fov=60"). The daemon
  * owns all six live controls (eps/minpts/speed/snrmin/fov/doppler) and clamps them
  * server-side, so the GUI just forwards and reads back. Best-effort GET /ctl. */

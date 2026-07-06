@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include "radar.h"
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -21,8 +22,10 @@ static pthread_t       stats_th;
 static int             stats_th_ok = 0;
 static volatile int    run_flag = 0;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  cv = PTHREAD_COND_INITIALIZER;   /* signalled on every new frame */
 static char           *g_json = NULL;      /* latest frame JSON (grown as needed) */
 static int             g_len = 0, g_cap = 0;
+static unsigned        g_seq = 0;          /* bumps each stored frame (SSE push detector) */
 static volatile int    g_connected = 0;    /* daemon reports a radar connected     */
 static volatile int    g_ntargets = 0;
 static char            g_rstats[512] = ""; /* daemon /stats JSON (controls + counts) */
@@ -52,6 +55,8 @@ static void store_frame(const char *json, int len)
     if (len + 1 > g_cap) { char *nb = realloc(g_json, len + 1 + 4096); if (nb) { g_json = nb; g_cap = len + 1 + 4096; } }
     if (g_json && len + 1 <= g_cap) { memcpy(g_json, json, len); g_json[len] = 0; g_len = len; }
     g_connected = conn; g_ntargets = nt;
+    g_seq++;
+    pthread_cond_broadcast(&cv);            /* wake SSE pushers waiting on a new frame */
     pthread_mutex_unlock(&lk);
 }
 
@@ -164,6 +169,25 @@ int radar_get_frame_json(char *buf, int cap)
 
 int radar_connected(void)   { return g_connected; }
 int radar_num_targets(void) { return g_ntargets; }
+
+int radar_wait_frame(unsigned *last_seq, char *buf, int cap, int timeout_ms)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeout_ms / 1000;
+    ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&lk);
+    while (run_flag && g_seq == *last_seq)
+        if (pthread_cond_timedwait(&cv, &lk, &ts) == ETIMEDOUT) break;
+    int n = 0;
+    if (g_seq != *last_seq && g_json && g_len > 0 && g_len < cap) {
+        memcpy(buf, g_json, g_len); buf[g_len] = 0; n = g_len;
+    }
+    *last_seq = g_seq;
+    pthread_mutex_unlock(&lk);
+    return n;
+}
 
 /* Forward a raw control query (e.g. "eps=8&fov=60") to the daemon's /ctl, then re-read
  * /stats so the readback reflects the clamped result. Best-effort. */

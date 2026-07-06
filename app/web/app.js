@@ -434,27 +434,39 @@
     }).catch(function () { $("v-link").textContent = "—"; $("p-link").classList.remove("on"); });
   }
 
-  function pollRadar() {
-    fetch(API.radar).then(function (r) { return r.json(); }).then(function (d) {
-      lastRadar = d;
-      /* radar Hz from the daemon's own frame_id + timestamp (accurate regardless of our poll rate) */
-      if (d.connected && typeof d.frame_id === "number" && typeof d.timestamp === "number") {
-        if (rLastFid !== null && d.frame_id > rLastFid && d.timestamp > rLastTs) {
-          var inst = (d.frame_id - rLastFid) / (d.timestamp - rLastTs);
-          rHz = rHz ? rHz * 0.7 + inst * 0.3 : inst;
-        }
-        rLastFid = d.frame_id; rLastTs = d.timestamp;
+  function onRadarFrame(d) {
+    lastRadar = d;
+    /* radar Hz from the daemon's own frame_id + timestamp (accurate regardless of rate) */
+    if (d.connected && typeof d.frame_id === "number" && typeof d.timestamp === "number") {
+      if (rLastFid !== null && d.frame_id > rLastFid && d.timestamp > rLastTs) {
+        var inst = (d.frame_id - rLastFid) / (d.timestamp - rLastTs);
+        rHz = rHz ? rHz * 0.7 + inst * 0.3 : inst;
       }
-      $("v-tracks").textContent = d.connected ? (Math.round(rHz) + " Hz · " + (d.num_targets || 0) + " TRK") : "no data";
-      if (!d.connected) { held = {}; updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
-      var cur = targets(d), now = Date.now(), present = {};
-      cur.forEach(function (t) { held[t.tid] = { t: t, ts: now }; present[t.tid] = 1; });
-      Object.keys(held).forEach(function (tid) { if (!present[tid] && now - held[tid].ts > HOLD_MS) delete held[tid]; });
-      updateViewRange(d);
-      if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
-      else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
-      renderTargetList(d); drawRadar(d); drawEO();
-    }).catch(function () {});
+      rLastFid = d.frame_id; rLastTs = d.timestamp;
+    }
+    $("v-tracks").textContent = d.connected ? (Math.round(rHz) + " Hz · " + (d.num_targets || 0) + " TRK") : "no data";
+    if (!d.connected) { held = {}; updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
+    var cur = targets(d), now = Date.now(), present = {};
+    cur.forEach(function (t) { held[t.tid] = { t: t, ts: now }; present[t.tid] = 1; });
+    Object.keys(held).forEach(function (tid) { if (!present[tid] && now - held[tid].ts > HOLD_MS) delete held[tid]; });
+    updateViewRange(d);
+    if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
+    else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
+    renderTargetList(d); drawRadar(d); drawEO();
+  }
+  /* Live radar is PUSHED over SSE (/radar/stream) at the sensor's native rate — no polling,
+   * so the display matches the sensor instead of an 8 Hz sample. pollRadar is used ONLY in
+   * replay, where frames come from the recorder over the replay endpoint. */
+  var radarES = null;
+  function openRadarStream() {
+    if (radarES) { radarES.close(); radarES = null; }
+    radarES = new EventSource("/radar/stream");
+    radarES.onmessage = function (e) { if (replaying) return; try { onRadarFrame(JSON.parse(e.data)); } catch (x) {} };
+    radarES.onerror = function () { if (!replaying) onRadarFrame({ connected: false }); };   /* auto-reconnects */
+  }
+  function pollRadar() {   /* replay only */
+    if (!replaying) return;
+    fetch(API.radar).then(function (r) { return r.json(); }).then(onRadarFrame).catch(function () {});
   }
 
   /* Reflect the EO feed's ISP state into the DEV panel (guarded so a poll never fights a
@@ -641,6 +653,7 @@
   function openReplay(s) {
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
+      if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
       replayHasEO = !!(s.bytes && ((s.bytes.display > 0) || (s.bytes.native > 0)));
@@ -665,6 +678,7 @@
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
+    openRadarStream();                                   /* resume the live radar push */
     $("library").hidden = false; loadLibrary();
   }
   $("rb-close").onclick = closeReplay;
@@ -720,7 +734,7 @@
 
   setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
   setInterval(poll, 160); poll();
-  setInterval(pollRadar, 120); pollRadar();
+  setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollRec, 400); pollRec();
 })();

@@ -253,6 +253,25 @@ static void handle_radar(int fd)
     free(b);
 }
 
+/* Push radar frames to the browser as Server-Sent Events at the sensor's native rate —
+ * event-driven (blocks on radar_wait_frame), so the display isn't capped by a poll. A
+ * 1.5 s idle beat emits {"connected":false} so the UI reflects a dropped daemon. */
+static void handle_radar_stream(int fd)
+{
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\nConnection: close\r\n\r\n");
+    int cap = 131072;
+    char *b = malloc(cap);
+    if (!b) return;
+    unsigned seq = 0;
+    for (;;) {
+        int n = radar_wait_frame(&seq, b, cap, 1500);
+        const char *payload = (n > 0) ? b : "{\"connected\":false}";
+        if (dprintf(fd, "data: %s\n\n", payload) < 0) break;   /* browser closed the tab */
+    }
+    free(b);
+}
+
 /* the daemon's /stats (its 6 control values + fps/drops), for slider init + readback */
 static void handle_rstats(int fd)
 {
@@ -377,6 +396,7 @@ static void *client(void *arg)
     if (has(req, "/rec/"))           handle_rec(fd, req);
     else if (has(req, "/rstats"))    handle_rstats(fd);
     else if (has(req, "/stats"))     handle_stats(fd);
+    else if (has(req, "/radar/stream")) handle_radar_stream(fd);
     else if (has(req, "/radar"))     handle_radar(fd);
     else if (has(req, "/ctl")) {
         handle_ctl(req);
