@@ -57,7 +57,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
 | Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
 | Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
-| Record & replay (`recorder/`) | — | 🟡 daemon deployed (systemd, `:8093`), HW-verified @ ~125 MB/s 0 drops; **radar taps live — real sessions record + replay today**; native full-res replay (exact EO tone map, auto drift-checked), smooth H.264 over WiFi, library + tiered offload. Pending: EO taps (WI-EO), console UI | [`recorder/`](../recorder/README.md) |
+| Record & replay (`recorder/`) | — | 🟡 records the full mission (camera, radar, all data) to the NVMe without slowing the live system, and replays it looking like the live screen — full resolution, smooth, pause/step/scrub. Working on-device with the real camera + radar; browse/tag/offload included. Next: the record/replay buttons in the console | [`recorder/`](../recorder/README.md) |
 | Detection | — | ⬜ not started | — |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
