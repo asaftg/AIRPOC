@@ -606,7 +606,23 @@
     card.onclick = function () { openReplay(s); };
     return card;
   }
-  function updateDelBtn() { var n = Object.keys(libSel).filter(function (k) { return libSel[k]; }).length; var b = $("lib-del"); b.hidden = n === 0; b.textContent = "DELETE (" + n + ")"; }
+  function updateDelBtn() {
+    var n = Object.keys(libSel).filter(function (k) { return libSel[k]; }).length;
+    var d = $("lib-del"); d.hidden = n === 0; d.textContent = "DELETE (" + n + ")";
+    var o = $("lib-offsel"); o.hidden = n === 0; o.textContent = "OFFLOAD (" + n + ")";
+  }
+  /* offload = download a .tar of the session(s) — display video + radar + data. Over plain
+   * HTTP the browser can't pick a folder, so it lands in Downloads (enable the browser's
+   * "ask where to save each file" to choose one). tier=display keeps it reasonable; raw
+   * native is excluded (regenerable). */
+  function offloadTar(sids, n) {
+    if (!confirm("Offload " + n + " session(s)?\n\nDownloads a .tar (display video + radar + data) to this device — it goes to your Downloads folder unless your browser is set to ask where to save.")) return;
+    var a = document.createElement("a");
+    a.href = "/rec/export?sids=" + encodeURIComponent(sids) + "&tier=display";
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  $("lib-offall").onclick = function () { if (!libSessions.length) { alert("Library is empty."); return; } offloadTar("all", libSessions.length); };
+  $("lib-offsel").onclick = function () { var s = Object.keys(libSel).filter(function (k) { return libSel[k]; }); if (!s.length) { alert("Select sessions first (the checkboxes)."); return; } offloadTar(s.join(","), s.length); };
   $("lib-del").onclick = function () {
     var sids = Object.keys(libSel).filter(function (k) { return libSel[k]; });
     if (!sids.length || !confirm("Delete " + sids.length + " session(s)? Cannot be undone.")) return;

@@ -222,6 +222,8 @@ body.replay #devclose,body.replay #to-control{pointer-events:auto;opacity:1}
 .lib-tags{display:flex;flex-wrap:wrap;gap:4px;max-width:44%}
 .lib-spacer{flex:1}
 .lib-del{background:#5a1a1a;color:#ffb4b4;border:1px solid #7a2a2a;border-radius:3px;padding:6px 12px;font:inherit;font-size:12px;cursor:pointer}
+.lib-off{background:#131316;color:#c1a173;border:1px solid #3b3b42;border-radius:3px;padding:6px 12px;font:inherit;font-size:12px;cursor:pointer}
+.lib-off:hover{border-color:var(--amber)}
 .lib-disk{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
 .lib-disk>div:first-child,#lib-diskbar{width:120px;height:8px;background:var(--bd2);border-radius:4px;overflow:hidden;position:relative}
 #lib-diskbar{width:120px}#lib-diskbar::after{content:"";position:absolute;inset:0 auto 0 0;width:var(--used,0%);background:var(--amber)}
@@ -329,6 +331,7 @@ body.replay #devclose,body.replay #to-control{pointer-events:auto;opacity:1}
 
   /* LIBRARY — stack the header, full-width search, single-column cards */
   .lib-head{flex-wrap:wrap;gap:8px;padding:10px 12px}
+  .lib-off,.lib-del{min-height:42px}
   #lib-close{order:1;margin-left:auto}
   #lib-q{order:2;width:100%}
   .lib-tags{order:3;max-width:100%}
