@@ -148,8 +148,7 @@
   }
 
   /* ── reserved ── */
-  $("restart").onclick = function () { if (confirm("Restart AIRPOC service?")) ctl("restart=1"); };
-  $("logs").onclick = function () { var l = $("logs"); l.textContent = "reserved"; setTimeout(function () { l.textContent = "LOGS"; }, 900); };
+  $("to-control").onclick = function () { location.href = "http://" + location.hostname + ":8088/"; };  /* back to the START/STOP launcher */
 
   /* ── target model + selection (daemon schema: class-less objects) ── */
   function targets(radar) {
