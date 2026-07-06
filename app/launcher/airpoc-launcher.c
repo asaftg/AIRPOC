@@ -68,7 +68,8 @@ static const char *PAGE =
 ".wbtns button{width:auto;min-width:100px;height:46px;background:#131316;color:#9a968e;border:0;border-right:1px solid #3b3b42;border-radius:0;font-size:13px;letter-spacing:2px}"
 ".wbtns button:last-child{border-right:0}.wbtns button.on{background:#c1a173;color:#0a0a0c}"
 ".wsub{font-size:11px;color:#5f5c56;letter-spacing:1px;min-height:14px;max-width:min(86vw,340px);text-align:center}"
-".wsub.switching{color:#c1a173;font-size:13px;line-height:1.5}</style></head><body>"
+".wsub.switching{color:#c1a173;font-size:13px;line-height:1.5}"
+".danger{height:48px;font-size:13px;margin-top:14px;background:#2a0c0c;color:#ff8a8a;border:1px solid #6a2020}</style></head><body>"
 "<h1>FAZE <i>CONTROL</i></h1>"
 "<div class=st><span id=dot class=dot></span><span id=stat>checking…</span></div>"
 "<button class=start onclick=go('start')>START SYSTEM</button>"
@@ -80,6 +81,7 @@ static const char *PAGE =
 "<button id=w-home onclick=setwifi('home')>WIFI</button>"
 "<button id=w-ap onclick=setwifi('ap')>AP</button>"
 "</div><div class=wsub id=wsub></div></div>"
+"<button class=danger onclick=shutdownJetson()>\\u23fb SHUTDOWN JETSON</button>"
 "<script>"
 "function poll(){fetch('/status').then(r=>r.json()).then(d=>{"
 "var n=(d.app?1:0)+(d.eo?1:0)+(d.radar?1:0);var dot=document.getElementById('dot');"
@@ -89,6 +91,7 @@ static const char *PAGE =
 "}).catch(()=>{document.getElementById('stat').textContent='launcher unreachable';});}"
 "function go(a){document.getElementById('stat').textContent=(a==='start'?'STARTING':'STOPPING')+'\\u2026';"
 "fetch('/'+a).then(()=>setTimeout(poll,1200));}"
+"function shutdownJetson(){if(!confirm('Power OFF the Jetson? The whole system stops and you will need physical access to power it back on.'))return;document.getElementById('stat').textContent='SHUTTING DOWN\\u2026';document.getElementById('dot').className='dot';fetch('/shutdown');}"
 "function setwifi(m){"
 "[['auto','w-auto'],['home','w-home'],['ap','w-ap']].forEach(function(p){document.getElementById(p[1]).classList.toggle('on',p[0]===m);});"  /* instant: show the press registered */
 "var t=m==='ap'?'Switching to AP\\u2026 ~10s. This page will drop \\u2014 then join the \\'AIRPOC\\' WiFi and open 10.42.0.1:8088':m==='home'?'Switching to home WiFi\\u2026 ~10s. Reconnect to your home network, then reopen this page':'Switching to AUTO\\u2026 ~10s';"
@@ -136,6 +139,10 @@ static void handle_conn(int fd)
     } else if (!strncmp(req, "GET /stop", 9)) {
         if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
+    } else if (!strncmp(req, "GET /shutdown", 13)) {
+        reply(fd, "application/json", "{\"ok\":1}");   /* answer first — the box is about to go down */
+        if (system("sudo -n systemctl poweroff >/dev/null 2>&1 &") == -1) {}
+
     } else if (!strncmp(req, "GET /wifi/status", 16)) {
         char b[256];
         if (read_file(WIFI_STATUS_FILE, b, sizeof b) <= 0)

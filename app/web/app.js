@@ -475,7 +475,7 @@
 
   /* ═══════════════════════ RECORDER / REPLAY ═══════════════════════ */
   var TAGVOCAB = ["night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
-  var recState = null, pendingSid = null, libSel = {}, libTagFilter = {};
+  var recState = null, pendingSid = null, libSel = {}, libTagFilter = {}, libSessions = [];
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
   var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
   var replayPlaying = false, replayStillT = -1;    /* EO pane: MJPEG stream while playing, still frame while paused */
@@ -564,7 +564,7 @@
       $("lib-disktext").textContent = Math.round(d.disk_free_gb) + " GB free" + (recState && recState.est_min_remaining ? " · ~" + recState.est_min_remaining + " min" : "");
     }
     var g = $("lib-grid"); g.innerHTML = "";
-    var sessions = d.sessions || [];
+    var sessions = d.sessions || []; libSessions = sessions;
     $("lib-empty").hidden = sessions.length > 0; $("lib-empty").textContent = "No sessions match.";
     sessions.forEach(function (s) { g.appendChild(libCard(s)); });
     updateDelBtn();
@@ -610,6 +610,14 @@
   $("lib-del").onclick = function () {
     var sids = Object.keys(libSel).filter(function (k) { return libSel[k]; });
     if (!sids.length || !confirm("Delete " + sids.length + " session(s)? Cannot be undone.")) return;
+    fetch("/rec/ctl?delete=" + sids.map(encodeURIComponent).join(",")).then(function () { libSel = {}; loadLibrary(); }).catch(function () {});
+  };
+  $("lib-delall").onclick = function () {           /* wipe everything — double verification */
+    var n = libSessions.length;
+    if (!n) { alert("Library is already empty."); return; }
+    if (!confirm("Delete ALL " + n + " session(s)? This permanently erases every recording — there is no undo.")) return;
+    if (prompt("FINAL CHECK — type DELETE (capitals) to erase all " + n + " recordings:") !== "DELETE") return;
+    var sids = libSessions.map(function (s) { return s.sid; });
     fetch("/rec/ctl?delete=" + sids.map(encodeURIComponent).join(",")).then(function () { libSel = {}; loadLibrary(); }).catch(function () {});
   };
 
