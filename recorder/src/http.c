@@ -155,7 +155,11 @@ static void handle_export(int fd, const char *qs)
         if (!sids[0]) { send_json(fd, 404, "{\"err\":\"no sessions\"}"); return; }
     }
 
-    /* validate every sid (charset-checked -> safe to pass to the shell) + exists */
+    if (strcmp(tier, "meta") && strcmp(tier, "full")) snprintf(tier, sizeof tier, "display");
+    int want_video = strcmp(tier, "meta") != 0;      /* display/full carry the movie */
+
+    /* validate every sid (charset-checked -> safe for the shell) + exists; and for
+     * video tiers, make sure the playable native.mp4 is built (sync) before tarring */
     char list[8192]; size_t lo = 0; int nsid = 0;
     char work[8192]; snprintf(work, sizeof work, "%s", sids);
     char *save = NULL;
@@ -164,17 +168,18 @@ static void handle_export(int fd, const char *qs)
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
         if (access(probe, F_OK) != 0) continue;
+        if (want_video) transcode_ensure(tok);       /* build native.mp4 if missing */
         lo += (size_t)snprintf(list + lo, sizeof list - lo, " '%s'", tok);
         nsid++;
     }
     if (!nsid) { send_json(fd, 404, "{\"err\":\"no such sessions\"}"); return; }
 
-    /* tier excludes; native.mp4 is a regenerable cache — never ship it */
+    /* meta = no video · display = the playable movie + metadata (no raw channels)
+     * · full = everything (raw channels + movie) */
     const char *excl;
-    if (!strcmp(tier, "meta"))      excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*/native.mp4";
-    else if (!strcmp(tier, "full")) excl = "--exclude=*/native.mp4";
-    else { snprintf(tier, sizeof tier, "display");   /* default */
-           excl = "--exclude=*/eo_y10 --exclude=*/native.mp4"; }
+    if (!strcmp(tier, "meta"))      excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*/native.mp4 --exclude=*.tmp";
+    else if (!strcmp(tier, "full")) excl = "--exclude=*.tmp";
+    else                            excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*.tmp";
 
     char cmd[8192];
     int cn = snprintf(cmd, sizeof cmd, "tar -C '%s' -cf - %s%s", g_rec.root, excl, list);

@@ -58,16 +58,14 @@ static AirecIdxRow *load_idx(const char *dir, const char *chan, long *n)
     return rows;
 }
 
-static void *build_thread(void *arg)
+/* Build native.mp4 for a session (blocking). pct (optional) tracks progress.
+ * Unique tmp per caller so a replay-triggered build and an export build can't
+ * clobber each other. Returns 0 on success. */
+static int build_mp4(const char *sid, volatile int *pct)
 {
-    char sid[SID_LEN + 1];
-    snprintf(sid, sizeof sid, "%s", (char *)arg);
-    free(arg);
-
     char dir[600];
     snprintf(dir, sizeof dir, "%s/%s", g_rec.root, sid);
 
-    /* geometry + encoding from channel.json */
     int w = 1440, h = 1088, mode = MODE_Y10P;
     char cj[512], v[24], cjp[700];
     snprintf(cjp, sizeof cjp, "%s/eo_y10/channel.json", dir);
@@ -82,9 +80,8 @@ static void *build_thread(void *arg)
 
     long n = 0;
     AirecIdxRow *rows = load_idx(dir, "eo_y10", &n);
-    if (!rows || n <= 0) { free(rows); goto fail; }
+    if (!rows || n <= 0) { free(rows); return -1; }
 
-    /* average fps from the frame timestamps (native is ~constant) */
     double fps = 30.0;
     if (n > 1) {
         double dur = (rows[n - 1].t_ns - rows[0].t_ns) / 1e9;
@@ -93,20 +90,18 @@ static void *build_thread(void *arg)
         if (fps > 120) fps = 120;
     }
 
-    /* ffmpeg: gray raw in -> H.264 mp4. -preset veryfast + crf 20 = good quality,
-     * fast enough; niced so it yields to the live pipeline. faststart for <video>. */
-    char tmp[680], cmd[1200];
-    snprintf(tmp, sizeof tmp, "%s/native.mp4.tmp", dir);
+    char tmp[700], cmd[1240];
+    snprintf(tmp, sizeof tmp, "%s/native.mp4.%lu.tmp", dir, (unsigned long)pthread_self());
     snprintf(cmd, sizeof cmd,
         "nice -n 15 ionice -c3 ffmpeg -hide_banner -loglevel error -y "
         "-f rawvideo -pix_fmt gray -s %dx%d -r %.3f -i - "
         "-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p "
-        "-movflags +faststart -f mp4 '%s'", w, h, fps, tmp);   /* -f mp4: .tmp ext */
+        "-movflags +faststart -f mp4 '%s'", w, h, fps, tmp);
     FILE *ff = popen(cmd, "w");
-    if (!ff) { free(rows); goto fail; }
+    if (!ff) { free(rows); return -1; }
 
     uint8_t *out8 = malloc((size_t)w * h);
-    uint8_t *raw = malloc(mode == MODE_RAW16 ? (size_t)w * h * 2 : (size_t)w * h * 2);
+    uint8_t *raw = malloc((size_t)w * h * 2);
     EoToneState st = { 0, 0, 0 };
     FILE *segs[64] = { 0 };
     int ok = out8 && raw;
@@ -122,16 +117,12 @@ static void *build_thread(void *arg)
         }
         FILE *sf = segs[r->segment_no];
         if (fseek(sf, (long)r->offset + (long)sizeof(AirecRecHdr), SEEK_SET) != 0 ||
-            r->payload_len > (mode == MODE_RAW16 ? (uint32_t)w * h * 2 : (uint32_t)w * h * 2) ||
-            fread(raw, 1, r->payload_len, sf) != r->payload_len) continue;   /* skip torn frame */
+            r->payload_len > (uint32_t)w * h * 2 ||
+            fread(raw, 1, r->payload_len, sf) != r->payload_len) continue;
 
         if (render_native_gray8(raw, r->payload_len, w, h, mode, 0, &st, i == 0, out8) == 0)
             if (fwrite(out8, 1, (size_t)w * h, ff) != (size_t)w * h) { ok = 0; break; }
-
-        int pct = (int)((i + 1) * 100 / n);
-        pthread_mutex_lock(&g_lk);
-        if (!strcmp(g_job.sid, sid)) g_job.pct = pct;
-        pthread_mutex_unlock(&g_lk);
+        if (pct) *pct = (int)((i + 1) * 100 / n);
     }
     for (int s = 0; s < 64; s++) if (segs[s]) fclose(segs[s]);
     free(out8); free(raw); free(rows);
@@ -139,19 +130,31 @@ static void *build_thread(void *arg)
 
     char final[680];
     snprintf(final, sizeof final, "%s/native.mp4", dir);
-    if (ok && rc == 0 && rename(tmp, final) == 0) {
-        pthread_mutex_lock(&g_lk);
-        if (!strcmp(g_job.sid, sid)) { g_job.state = 2; g_job.pct = 100; }
-        pthread_mutex_unlock(&g_lk);
-        return NULL;
-    }
+    if (ok && rc == 0 && rename(tmp, final) == 0) return 0;
     unlink(tmp);
-fail:
+    return -1;
+}
+
+static void *build_thread(void *arg)
+{
+    char sid[SID_LEN + 1];
+    snprintf(sid, sizeof sid, "%s", (char *)arg);
+    free(arg);
+    int rc = build_mp4(sid, &g_job.pct);
     pthread_mutex_lock(&g_lk);
-    if (!strcmp(g_job.sid, sid)) g_job.state = -1;
+    if (!strcmp(g_job.sid, sid)) { g_job.state = rc == 0 ? 2 : -1; if (rc == 0) g_job.pct = 100; }
     pthread_mutex_unlock(&g_lk);
-    fprintf(stderr, "transcode: %s failed\n", sid);
+    if (rc != 0) fprintf(stderr, "transcode: %s failed\n", sid);
     return NULL;
+}
+
+/* Ensure native.mp4 exists (build it synchronously if missing). For export. */
+int transcode_ensure(const char *sid)
+{
+    char p[640];
+    if (strlen(sid) != SID_LEN || strchr(sid, '/')) return -1;
+    if (transcode_mp4_path(sid, p, sizeof p) == 0) return 0;    /* already there */
+    return build_mp4(sid, NULL);
 }
 
 void transcode_request(const char *sid)
