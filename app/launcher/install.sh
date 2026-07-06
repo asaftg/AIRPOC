@@ -9,7 +9,8 @@ chmod +x "$DIR/start.sh" "$DIR/stop.sh"
 
 sudo cp "$DIR/airpoc-launcher.service" /etc/systemd/system/airpoc-launcher.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now airpoc-launcher
+sudo systemctl enable airpoc-launcher
+sudo systemctl restart airpoc-launcher   # restart (not just enable) so a re-install loads the new binary
 
 echo
 echo "Launcher installed and running."

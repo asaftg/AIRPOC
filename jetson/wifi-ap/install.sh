@@ -34,7 +34,8 @@ sudo chown "$WIFI_USER":"$WIFI_USER" /var/lib/airpoc/wifi-mode
 sudo install -m 0755 "$DIR/airpoc-autoap.sh" /usr/local/bin/airpoc-autoap.sh
 sudo cp "$DIR/airpoc-autoap.service" /etc/systemd/system/airpoc-autoap.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now airpoc-autoap
+sudo systemctl enable airpoc-autoap
+sudo systemctl restart airpoc-autoap   # restart (not just enable) so a re-install loads new code
 
 echo
 echo "WiFi failover installed."
