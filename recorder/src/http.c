@@ -168,7 +168,8 @@ static void handle_export(int fd, const char *qs)
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
         if (access(probe, F_OK) != 0) continue;
-        if (want_video) transcode_ensure(tok);       /* build native.mp4 if missing */
+        if (want_video) { transcode_ensure(tok);      /* EO native.mp4 */
+                          radar_movie_ensure(tok); }  /* radar scope movie */
         lo += (size_t)snprintf(list + lo, sizeof list - lo, " '%s'", tok);
         nsid++;
     }
@@ -177,7 +178,7 @@ static void handle_export(int fd, const char *qs)
     /* meta = no video · display = the playable movie + metadata (no raw channels)
      * · full = everything (raw channels + movie) */
     const char *excl;
-    if (!strcmp(tier, "meta"))      excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*/native.mp4 --exclude=*.tmp";
+    if (!strcmp(tier, "meta"))      excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*.mp4 --exclude=*.tmp";
     else if (!strcmp(tier, "full")) excl = "--exclude=*.tmp";
     else                            excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*.tmp";
 
