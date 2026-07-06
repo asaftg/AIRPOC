@@ -46,6 +46,7 @@ static volatile unsigned long long g_stream_bytes = 0;  /* total video bytes rel
 static volatile unsigned long long g_stream_frames = 0; /* total frames written to clients → delivered-fps meter */
 static char            g_wifi_if[32] = "";              /* WiFi iface name, or "" if none associated */
 static volatile double g_rssi = 0, g_link_mbps = -1;    /* RSSI dBm + negotiated PHY rate (Mb/s) */
+static volatile double g_cpu_pct = -1;                  /* aggregate CPU busy %, sampled ~1s */
 static pthread_t       g_net_th;
 static int             g_net_ok = 0;
 
@@ -57,6 +58,38 @@ static double read_temp_c(const char *path)
     if (fscanf(f, "%ld", &milli) != 1) milli = -1;
     fclose(f);
     return milli < 0 ? -1.0 : milli / 1000.0;
+}
+
+/* aggregate CPU busy % over the interval since the previous call (sampled ~1s by the
+ * net poller). Returns -1 on the first call (no baseline yet) or on error. */
+static double read_cpu_pct(void)
+{
+    static unsigned long long prev_total = 0, prev_idle = 0;
+    FILE *f = fopen("/proc/stat", "r");
+    if (!f) return -1.0;
+    unsigned long long u = 0, n = 0, s = 0, idle = 0, io = 0, irq = 0, soft = 0, steal = 0;
+    int got = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &u, &n, &s, &idle, &io, &irq, &soft, &steal);
+    fclose(f);
+    if (got < 4) return -1.0;
+    unsigned long long total = u + n + s + idle + io + irq + soft + steal, idle_all = idle + io;
+    double pct = -1.0;
+    if (prev_total && total > prev_total) {
+        unsigned long long dt = total - prev_total, di = idle_all - prev_idle;
+        pct = 100.0 * (double)(dt - di) / (double)dt;
+    }
+    prev_total = total; prev_idle = idle_all;
+    return pct;
+}
+
+/* Tegra GPU load, per-mille (0-1000) -> % */
+static double read_gpu_pct(void)
+{
+    FILE *f = fopen("/sys/devices/platform/gpu.0/load", "r");
+    if (!f) return -1.0;
+    int load = -1;
+    if (fscanf(f, "%d", &load) != 1) load = -1;
+    fclose(f);
+    return load < 0 ? -1.0 : load / 10.0;
 }
 
 /* True link throughput: bytes actually relayed since the last /stats call over the elapsed
@@ -122,6 +155,7 @@ static void *net_poller(void *a)
             double lr = read_link_rate(ifn);
             snprintf(g_wifi_if, sizeof g_wifi_if, "%s", ifn); g_rssi = rssi; g_link_mbps = lr;
         } else { g_wifi_if[0] = 0; g_link_mbps = -1.0; }
+        g_cpu_pct = read_cpu_pct();      /* ~1s window per loop */
         for (int i = 0; i < 10 && g_run; i++) usleep(100000);
     }
     return NULL;
@@ -168,8 +202,15 @@ static void handle_stats(int fd)
     if (radar_connected()) snprintf(tracks_s, sizeof tracks_s, "%d", radar_num_targets());
     else snprintf(tracks_s, sizeof tracks_s, "null");
 
-    double cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
+    /* Jetson temperature = the junction (tj) zone — the hottest/throttle-relevant number;
+     * fall back to cpu-thermal. Plus aggregate CPU% and GPU% single figures. */
+    double cpu = read_temp_c("/sys/class/thermal/thermal_zone8/temp");
+    if (cpu < 0) cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
     char cpu_s[16]; if (cpu < 0) snprintf(cpu_s, sizeof cpu_s, "null"); else snprintf(cpu_s, sizeof cpu_s, "%.0f", cpu);
+    double cpupct = g_cpu_pct, gpupct = read_gpu_pct();
+    char cpp_s[16], gpp_s[16];
+    if (cpupct < 0) snprintf(cpp_s, sizeof cpp_s, "null"); else snprintf(cpp_s, sizeof cpp_s, "%.0f", cpupct);
+    if (gpupct < 0) snprintf(gpp_s, sizeof gpp_s, "null"); else snprintf(gpp_s, sizeof gpp_s, "%.0f", gpupct);
 
     /* link type from the interface the operator's browser actually connected through */
     char lip[INET_ADDRSTRLEN] = "", lif[32] = "";
@@ -184,13 +225,13 @@ static void handle_stats(int fd)
         ltype = "usb";
     }
 
-    char body[980];
+    char body[1040];
     int bl = snprintf(body, sizeof body,
         "{\"eo_connected\":%d,\"mbps\":%.2f,\"tx_fps\":%.0f,\"track\":\"%s\",\"engage\":%d,"
-        "\"tracks\":%s,\"cpu_c\":%s,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
+        "\"tracks\":%s,\"cpu_c\":%s,\"cpu_pct\":%s,\"gpu_pct\":%s,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
         eoc, mbps, stream_fps(), g_track_man ? "man" : "auto", g_engage,
-        tracks_s, cpu_s, ltype, rssi_s, lrate_s,
+        tracks_s, cpu_s, cpp_s, gpp_s, ltype, rssi_s, lrate_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
