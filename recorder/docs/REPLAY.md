@@ -37,14 +37,23 @@ Two layers, so a divergence can never pass unnoticed:
    display res) pixel-by-pixel; a drift shows as a jump in mean pixel difference.
    Run it as part of EO/recorder acceptance whenever the tone map is touched.
 
-**Bandwidth (smooth over WiFi).** Native frames are large; pushing full-quality
-native at 60 fps is ~12-24 MB/s, more than WiFi carries. So while **playing**,
-native is emitted at `play_q` (default 55) and capped to `play_fps` (default 20)
-— ~1.5-2.5 MB/s, smooth. On **pause / step / scrub / hover** you get the full
-q85 native frame (single frame, bandwidth is not the constraint) — full detail
-exactly when you're inspecting. Tunable live via `/replay/ctl?playq=&playfps=`;
-`/replay/state` reports `play_q`/`play_fps`. The DISPLAY source (small recorded
-JPEGs, served verbatim) remains the lightest option for pure smoothness.
+**Smooth full-quality native play over WiFi — cached H.264.** Native
+JPEG-per-frame is ~12-24 MB/s, more than WiFi carries. So on replay open the
+recorder transcodes the session's native replay into one H.264 MP4 (`transcode.c`
+→ ffmpeg libx264, the exact tone map, `nice -n 15 ionice -c3` so it never touches
+the live pipeline), cached in the session dir. The browser plays it with
+`<video src=/replay/native.mp4?sid=…>` — buffered, smooth, full quality, instant
+seek, and ~400× smaller on the wire than raw frames.
+- `GET /replay/native.mp4?sid=<sid>` — the cached MP4 with HTTP Range (206) for
+  `<video>` seeking; `202 {building,pct}` while it encodes.
+- `/replay/state` reports `native_mp4` (`none|building|ready|failed`) +
+  `native_mp4_pct`. Encoding is kicked on open, so it's usually ready by play.
+- Still-frame paths (`/replay/frame`, pause/step) serve full-q native JPEGs
+  directly — exact detail when inspecting.
+- Fallbacks: the paced MJPEG `/replay/stream` (native emitted at `play_q`/
+  `play_fps`, tunable via `/replay/ctl?playq=&playfps=`) covers the window while
+  the MP4 builds; the DISPLAY source (small recorded JPEGs, verbatim) is the
+  lightest option and needs no transcode.
 
 - Falls back to the recorded display JPEGs (`eo_jpeg`, byte-verbatim) when the
   native channel is absent or has been dropped via `purge_native`.

@@ -71,11 +71,16 @@ relays the replay MJPEG stream). On connect failure: `502` with
   Add a `NATIVE / DISPLAY` toggle in the transport → `/rec/replay/ctl?video=native|display`
   (hide when `has_native:false`, e.g. radar-only or purged-raw). The `<img>`
   renders whatever res arrives; CSS `object-fit` keeps the layout stable on switch.
-  - **Smoothness over WiFi:** native auto-adapts during play (lower quality +
-    capped fps) and serves full detail when paused/stepped — no GUI work needed.
-    Optional: a "smooth ↔ sharp" control mapping to `/rec/replay/ctl?playq=<20-95>`
-    and `playfps=<2-60>` (state exposes `play_q`/`play_fps`). If pure smoothness
-    matters more than detail, the DISPLAY toggle is the lightest.
+  - **Smooth native play over WiFi (recommended path):** for NATIVE playback use
+    a `<video src="/rec/replay/native.mp4?sid=<sid>">` element, not the MJPEG
+    `<img>`. The recorder transcodes the session to a cached H.264 on open;
+    `/rec/replay/state` reports `native_mp4` (`none|building|ready|failed`) +
+    `native_mp4_pct`. While `building`, show "preparing native… N%" (and you may
+    play the paced `/rec/replay/stream` MJPEG meanwhile); when `ready`, point the
+    `<video>` at the MP4 — buffered, smooth, full quality, instant seek. The
+    `<video>`'s own timeline/seek can drive the transport, or keep your transport
+    bar and map it to the video element. Range requests are supported (206).
+    Use the MJPEG `<img>` stream for the DISPLAY source and for radar-only sessions.
   - **Tone-map integrity:** `/rec/replay/state` has `tonemap_match` (bool). It's
     normally true (native replay renders with the exact live tone map). If ever
     `false`, this session was recorded under different tone-map math than the
