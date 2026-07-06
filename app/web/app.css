@@ -207,8 +207,10 @@ body.replay #cluster,body.replay #eo-exp,body.replay .eo-exp,body.replay #zoomba
 #tp-scrub::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;background:var(--amber);border-radius:2px;cursor:pointer}
 #tp-scrub::-moz-range-thumb{width:14px;height:14px;background:var(--amber);border:0;border-radius:2px;cursor:pointer}
 #tp-hover{display:none;position:absolute;bottom:52px;width:160px;border:1px solid var(--bd3);border-radius:3px;pointer-events:none}
-/* replay disables all live controls (shown read-only) */
+/* replay disables all live controls (shown read-only) — but keep the panel's own nav
+ * (close ✕ and RETURN TO CONTROL) live so DEV can still be minimized during replay */
 body.replay #dev input,body.replay #dev button{pointer-events:none;opacity:.6}
+body.replay #devclose,body.replay #to-control{pointer-events:auto;opacity:1}
 
 /* ── LIBRARY ── */
 #library{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column}
@@ -235,6 +237,9 @@ body.replay #dev input,body.replay #dev button{pointer-events:none;opacity:.6}
 .lib-meta{font-size:11px;color:var(--muted);display:flex;gap:8px}
 .lib-size b{color:var(--fg)}.lib-size .raw{color:var(--dim)}
 .lib-cardtags{display:flex;flex-wrap:wrap;gap:3px}
+.lib-note{margin-top:5px;font-size:11px;line-height:1.35;color:var(--muted);font-style:italic;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.rb-note{font-style:italic;font-weight:600;opacity:.85}
 .lib-pending{position:absolute;top:8px;left:-28px;transform:rotate(-45deg);background:var(--amber);color:var(--bg);
   font-size:9px;letter-spacing:1px;padding:2px 30px;font-weight:700}
 .lib-cb{position:absolute;top:6px;right:6px;width:18px;height:18px;z-index:2;accent-color:var(--on)}

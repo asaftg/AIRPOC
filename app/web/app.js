@@ -587,7 +587,8 @@
     body.innerHTML = '<div class="lib-name">' + esc(s.name || s.sid) + "</div>"
       + '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
       + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
-      + '<div class="lib-cardtags">' + (s.tags || []).map(function (t) { return '<span class="tagchip">' + esc(t) + "</span>"; }).join("") + "</div>";
+      + '<div class="lib-cardtags">' + (s.tags || []).map(function (t) { return '<span class="tagchip">' + esc(t) + "</span>"; }).join("") + "</div>"
+      + (s.note ? '<div class="lib-note">' + esc(s.note) + "</div>" : "");
     card.appendChild(body);
     card.onclick = function () { openReplay(s); };
     return card;
@@ -614,7 +615,8 @@
        * last live frame. pollReplayState swaps to the stream once playback starts. */
       replayPlaying = false; replayStillT = -1;
       $("video").src = replayHasEO ? ("/rec/replay/frame?t=0") : BLANK;
-      $("rb-text").textContent = "REPLAY — " + (s.name || s.sid) + " — " + s.t0;
+      $("rb-text").innerHTML = "REPLAY — " + esc(s.name || s.sid) + " — " + esc(s.t0)
+        + (s.note ? ' <span class="rb-note">“' + esc(s.note) + '”</span>' : "");
       $("tp-dur").textContent = fmtClockT(s.dur_ms); $("tp-scrub").max = s.dur_ms; $("tp-scrub").value = 0;
       if (replayStatePoll) clearInterval(replayStatePoll);
       replayStatePoll = setInterval(pollReplayState, 150); pollReplayState();
