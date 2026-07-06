@@ -71,6 +71,14 @@ typedef struct {
 typedef enum { CH_EO_Y10, CH_EO_JPEG, CH_RADAR_RAW, CH_RADAR_WIRE, CH_EVENTS, CH_N } ChanId;
 typedef enum { MODE_Y10P, MODE_RAW16, MODE_Y8 } VideoMode;
 
+/* per-frame illuminator, packed by the EO tap into eo_y10 meta[4] (present only
+ * when the tap's meta_json carries "illum":1). See recorder/docs/FORMAT.md. */
+#define ILLUM_ON(m)      ((int)((m) & 1))
+#define ILLUM_PRESENT(m) ((int)(((m) >> 1) & 1))
+#define ILLUM_POWER(m)   ((int)(((m) >> 8) & 0xFF))
+#define ILLUM_FOV_X10(m) ((int)(((m) >> 16) & 0x3FF))
+#define EO_META_ILLUM    4                       /* meta slot carrying the above */
+
 #define CHUNK_BYTES   (4u << 20)
 #define SEG_BYTES     (256u << 20)
 #define QUEUE_CHUNKS  16

@@ -44,7 +44,14 @@ rebuildable by scanning segments.
 
 | channel | payload | meta[6] |
 |---|---|---|
-| eo_y10 | packed 10-bit bitstream (`y10p`: 4 px → 5 B, p0 bits 0–9…), or `raw16`/`y8` per `channel.json.encoding` | v4l2_sequence, exp_lines, gain, vmax, mean10_x100, drops_cum |
+| eo_y10 | packed 10-bit bitstream (`y10p`: 4 px → 5 B, p0 bits 0–9…), or `raw16`/`y8` per `channel.json.encoding` | v4l2_sequence, exp_lines, gain, vmax, mean10_x100 **or illum_packed**, drops_cum |
+
+> When the EO tap declares `"illum":1` in its `meta_json`, `eo_y10` meta[4] is the
+> per-frame illuminator instead of `mean10_x100`, packed:
+> `bit0 on · bit1 present · bits8-15 power(0-255) · bits16-25 FOV×10 (0.0-102.3°)`.
+> `channel.json` records `"illum":1` and names the slot `illum_packed`; replay
+> exposes it as `illum:{on,power,fov,present}` in `/replay/state`. Backward
+> compatible: without the flag, meta[4] stays `mean10_x100` and nothing changes.
 | eo_jpeg | display JPEG **byte-verbatim** as served to the operator | eo_seq, dw, dh, zoom, res_idx, 0 |
 | radar_raw | UART bytes exactly as `read()` returned (re-feedable to the TLV parser) | read_len |
 | radar_wire | the exact SSE frame JSON | frame_number, n_points, n_targets |

@@ -53,6 +53,7 @@ static struct {
     int tonemap_match;                             /* replay tone map == record-time tone map */
     int tm_vs_eo;                                  /* 0 not checked, 1 matches EO, -1 drift */
     double tm_vs_eo_diff;                          /* mean abs pixel diff of the check */
+    int has_illum;                                 /* eo_y10 meta[4] carries packed illuminator */
     int play_q;                                    /* native JPEG quality while playing */
     double play_fps;                               /* native frame cap while playing */
     char *evbuf;                         /* events channel, loaded whole */
@@ -393,7 +394,7 @@ static void rp_unload(void)
     g_rp.evbuf = NULL;
     g_rp.n_evs = 0;
     g_rp.open = 0;
-    g_rp.has_native = g_rp.has_display = g_rp.video_native = 0;
+    g_rp.has_native = g_rp.has_display = g_rp.video_native = g_rp.has_illum = 0;
 }
 
 static int rp_open(const char *sid)
@@ -449,6 +450,8 @@ static int rp_open(const char *sid)
             /* does the current build's tone map match the one that recorded this? */
             if (store_manifest_field(cj, "tonemap_hash", v, sizeof v) == 0 && v[0])
                 g_rp.tonemap_match = ((uint32_t)strtoul(v, NULL, 10) == eo_tonemap_hash());
+            if (store_manifest_field(cj, "illum", v, sizeof v) == 0 && atoi(v) == 1)
+                g_rp.has_illum = 1;
         }
     }
     nat_cache_drop();
@@ -569,13 +572,28 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
     int mp4_st = g_rp.has_native ? transcode_status(g_rp.sid, &mp4_pct) : 0;
     const char *mp4_state = mp4_st == 2 ? "ready" : mp4_st == 1 ? "building"
                           : mp4_st < 0 ? "failed" : "none";
+
+    /* per-frame illuminator (from the native frame's meta[4] at this instant) */
+    char illum[80] = "";
+    if (g_rp.has_illum && g_rp.y10.n) {
+        long yi = rchan_at(&g_rp.y10, t);
+        if (yi < 0) yi = 0;
+        const AirecRecHdr *h;
+        uint32_t l;
+        if (rchan_payload(&g_rp.y10, yi, &l, &h) && h) {
+            uint32_t im = h->meta[EO_META_ILLUM];
+            snprintf(illum, sizeof illum,
+                ",\"illum\":{\"on\":%d,\"power\":%d,\"fov\":%.1f,\"present\":%d}",
+                ILLUM_ON(im), ILLUM_POWER(im), ILLUM_FOV_X10(im) / 10.0, ILLUM_PRESENT(im));
+        }
+    }
     return (size_t)snprintf(buf, len,
         "{\"sid\":\"%s\",\"name\":\"%s\",\"t_ms\":%lld,\"dur_ms\":%lld,"
         "\"playing\":%d,\"rate\":%.2f,\"t_wall_ms\":%llu,\"frame_i\":%ld,\"frames\":%ld,"
         "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d,"
         "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d,"
         "\"tonemap_vs_eo\":\"%s\",\"tonemap_vs_eo_diff\":%.1f,"
-        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d}",
+        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d%s}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
         (unsigned long long)((g_rp.t0_real + (uint64_t)t * 1000000ull) / 1000000ull),
@@ -584,7 +602,7 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h,
         g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match,
         g_rp.tm_vs_eo == 1 ? "ok" : g_rp.tm_vs_eo < 0 ? "drift" : "unchecked",
-        g_rp.tm_vs_eo_diff, mp4_state, mp4_pct);
+        g_rp.tm_vs_eo_diff, mp4_state, mp4_pct, illum);
 }
 
 void replay_state_json(char *buf, size_t len)

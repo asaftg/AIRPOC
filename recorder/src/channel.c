@@ -401,28 +401,30 @@ static void write_channel_json(Chan *c, const char *dir)
 {
     char path[640], body[640];
     const char *enc = c->cfg->encoding;
-    char geom[64] = "";
+    const char *meta_desc = c->cfg->meta_desc;
+    char geom[96] = "";
     if (c->id == CH_EO_Y10) {
         VideoMode m = g_rec.mode;
         enc = m == MODE_Y10P ? "y10p" : m == MODE_Y8 ? "y8" : "y16le";
-        /* native geometry for replay reconstruction — from the EO tap's
-         * declared meta_json, default to the IMX296 native */
-        int w = 1440, h = 1088;
+        /* native geometry + illuminator flag from the EO tap's meta_json */
+        int w = 1440, h = 1088, illum = 0;
         if (c->sub_ok && c->sub.t.h) {
             char tmp[24];
             if (store_manifest_field(c->sub.t.h->meta_json, "w", tmp, sizeof tmp) == 0 && atoi(tmp) > 0) w = atoi(tmp);
             if (store_manifest_field(c->sub.t.h->meta_json, "h", tmp, sizeof tmp) == 0 && atoi(tmp) > 0) h = atoi(tmp);
+            if (store_manifest_field(c->sub.t.h->meta_json, "illum", tmp, sizeof tmp) == 0 && atoi(tmp) == 1) illum = 1;
         }
-        /* stamp the tone-map version: native replay renders with the EO module's
-         * shared eo_tonemap; if that algorithm ever changes, this flags sessions
-         * recorded under the old math instead of silently re-rendering them */
-        snprintf(geom, sizeof geom, ",\"w\":%d,\"h\":%d,\"tonemap_version\":%d,\"tonemap_hash\":%u",
-                 w, h, EO_TONEMAP_VERSION, eo_tonemap_hash());
+        /* when the EO tap provides per-frame illuminator, meta[4] carries it
+         * (packed) instead of mean10_x100. tonemap_hash flags tone-map drift. */
+        if (illum) meta_desc = "v4l2_sequence,exp_lines,gain,vmax,illum_packed,drops_cum";
+        snprintf(geom, sizeof geom,
+                 ",\"w\":%d,\"h\":%d,\"tonemap_version\":%d,\"tonemap_hash\":%u,\"illum\":%d",
+                 w, h, EO_TONEMAP_VERSION, eo_tonemap_hash(), illum);
     }
     snprintf(path, sizeof path, "%s/%s/channel.json", dir, c->cfg->name);
     int n = snprintf(body, sizeof body,
         "{\"name\":\"%s\",\"encoding\":\"%s\"%s,\"meta\":[%s],\"source\":\"%s%s\",\"airec\":%d}\n",
-        c->cfg->name, enc, geom, c->cfg->meta_desc,
+        c->cfg->name, enc, geom, meta_desc,
         c->cfg->tap ? "shm:" : "internal", c->cfg->tap ? c->cfg->tap : "", AIREC_VERSION);
     store_write_file_atomic(path, body, (size_t)n);
 }
