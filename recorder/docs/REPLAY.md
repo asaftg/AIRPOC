@@ -114,6 +114,7 @@ Replay:
 | `GET /replay/stats` | `{replay:true, replay_state:{sid,name,t_ms,dur_ms,playing,rate,t_wall_ms,frame_i,frames}, eo:<recorded>, app:<recorded>}` |
 | `GET /replay/state` | just `replay_state` — the 150 ms transport-bar poll |
 | `GET /replay/frame?t=<ms>` | single JPEG at ≤ t (timeline hover preview) |
+| `GET /replay/native.mp4?sid=<sid>` | cached H.264 of the native replay (HTTP Range/206 for `<video>` seek); `202 {building,pct}` while encoding |
 
 > Pitfall: replay of the session currently being recorded is refused by design
 > — stop first. Replaying any *other* session while recording is fine.

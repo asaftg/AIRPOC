@@ -15,10 +15,13 @@ crash-safe by construction, ~300 lines of dependency-free C. An offline
   <channel>/data.NNNNN.airec       segments (heavy: fallocate 256 MiB, O_DIRECT)
   <channel>/index.bin              append-only 32 B rows
   thumbs/0..7.jpg                  written at save
+  native.mp4                       cached H.264 of native replay (built on demand)
 ```
 
 Channels today: `eo_y10` `eo_jpeg` `radar_raw` `radar_wire` `events`.
-New channels = new directory, same three files; no format change.
+New channels = new directory, same three files; no format change. `eo_y10`'s
+`channel.json` also carries `w`/`h`, `tonemap_version`, and `tonemap_hash`
+(the device tone-map signature — see REPLAY.md drift check).
 
 ## Binary layout (little-endian, all structs 64 B / 32 B)
 

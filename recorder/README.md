@@ -30,18 +30,22 @@ any session through the operator console exactly as it looked live.
 | `tap/airpoc_tap.h` | tap protocol v1, vendored by producer modules |
 | `src/channel.c` | drain threads, single-pass 16→10 pack, O_DIRECT chunk writers |
 | `src/session.c` | recording→pending→saved/discarded lifecycle, crash recovery, disk guard |
-| `src/replay.c` | timeline clock, MJPEG pushers, recorded-endpoint views |
+| `src/replay.c` | timeline clock, MJPEG pushers, recorded-endpoint views, video-source select, EO-drift check |
+| `src/render.c` `src/eo_tonemap.c` | native-frame reconstruction (unpack + tone map + JPEG); the tone map itself |
+| `src/transcode.c` | cached H.264 of a session's native replay (smooth play over WiFi) |
 | `src/library.c` `src/thumbs.c` | /library filters, 8-still previews |
-| `src/store.c` `src/http.c` `src/events.c` `src/disk.c` `src/pack10.c` | manifest store, :8093 server, stats poller, disk guard, pack kernel |
+| `src/store.c` `src/http.c` `src/events.c` `src/disk.c` `src/pack10.c` | manifest store, :8093 server (Range-capable), stats poller, disk guard, pack kernel |
+| `systemd/` | `airpoc-recorder.service` + `install.sh` |
 | `tools/` | `tap_bench.c` (synthetic soak), `airec_dump.py` (verify), `verify_replay_match.py` (native-vs-live tone-map check), `offload_pull.sh` + `airpoc-offload.ps1` (pull), `compress_native.sh` |
 
 **Tone map (`src/eo_tonemap.c`):** native replay renders through the recorder's
 own copy of the EO feed's tone map, kept byte-identical to
 `eo/pipeline/isp.c:isp_scale_tonemap`. Self-contained — the recorder does not
-reach into the eo/ module. A runtime drift alarm (`tonemap_hash` stamped per
-recording, `tonemap_match` in `/replay/state`) flags any divergence. See
+reach into the eo/ module. Drift is caught two ways: an automatic per-open
+comparison of a native frame against the operator's recorded display frame
+(`tonemap_vs_eo` in `/replay/state`), plus a `tonemap_hash` stamped per
+recording. See
 [docs/REPLAY.md](docs/REPLAY.md#keeping-replay-identical-to-the-live-feed--and-knowing-if-it-isnt).
-| `systemd/` | `airpoc-recorder.service` + `install.sh` |
 
 ## Build / run
 
