@@ -477,6 +477,7 @@
   var recState = null, pendingSid = null, libSel = {}, libTagFilter = {};
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
   var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
+  var replayPlaying = false, replayStillT = -1;    /* EO pane: MJPEG stream while playing, still frame while paused */
   var BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
   var RATES = [0.5, 1, 2, 4];
 
@@ -607,7 +608,11 @@
       replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
       document.body.classList.add("replay"); $("library").hidden = true;
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
-      $("video").src = replayHasEO ? (API.stream + "?t=" + Date.now()) : BLANK;   /* no frozen live frame when EO wasn't recorded */
+      /* Show the recorded still at the open position — NOT the live stream. The replay
+       * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
+       * last live frame. pollReplayState swaps to the stream once playback starts. */
+      replayPlaying = false; replayStillT = -1;
+      $("video").src = replayHasEO ? ("/rec/replay/frame?t=0") : BLANK;
       $("rb-text").textContent = "REPLAY — " + (s.name || s.sid) + " — " + s.t0;
       $("tp-dur").textContent = fmtClockT(s.dur_ms); $("tp-scrub").max = s.dur_ms; $("tp-scrub").value = 0;
       if (replayStatePoll) clearInterval(replayStatePoll);
@@ -626,6 +631,16 @@
   function pollReplayState() {
     fetch("/rec/replay/state").then(function (r) { return r.json(); }).then(function (st) {
       var rs = st.replay_state || st.state || st; if (!rs) return;   /* /state nests as .state, /stats as .replay_state */
+      /* EO pane source: live MJPEG replay stream while playing, recorded still while
+       * paused/stepped/scrubbed — so it never falls back to the live view. */
+      if (replayHasEO) {
+        if (rs.playing && rs.t_ms < rs.dur_ms) {
+          if (!replayPlaying) { replayPlaying = true; $("video").src = "/rec/replay/stream?t=" + Date.now(); }
+        } else {
+          replayPlaying = false;
+          if (rs.t_ms !== replayStillT) { replayStillT = rs.t_ms; $("video").src = "/rec/replay/frame?t=" + rs.t_ms; }
+        }
+      }
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
       $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
       $("tp-rate").textContent = rs.rate + "×";
