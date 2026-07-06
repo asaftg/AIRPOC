@@ -30,6 +30,10 @@ start 8091 "$BASE/eo/pipeline" ./eo_pipeline "${EO_ARGS[@]}"
 # stable by-id path: if00 = CLI/config UART, if03 = high-speed data. The cfg lives in
 # radar/cfg (not radar/src), so pass it explicitly. The board enumerates a few seconds
 # after boot — wait for the CLI port before starting, else it gets ENOENT and gives up.
+# were the feeds already up? (if we (re)start one, the recorder must re-attach — below)
+up 8091; eo_was_up=$?
+up 8092; radar_was_up=$?
+
 RCLI=$(ls /dev/serial/by-id/*XDS110*if00* 2>/dev/null | head -1); RCLI="${RCLI:-/dev/ttyACM0}"
 RDAT=$(ls /dev/serial/by-id/*XDS110*if03* 2>/dev/null | head -1); RDAT="${RDAT:-/dev/ttyACM1}"
 if wait_dev "$RCLI" 15; then
@@ -42,5 +46,16 @@ sleep 2   # let the feeds bind before the console dials into them
 
 # Operator console — pure proxy over EO (:8091) + radar (:8092) + recorder (:8093).
 start 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093
+
+# Recorder re-attach: the always-on recorder taps the EO/radar shared memory. When a feed
+# is (re)started it gets NEW shm, and the recorder keeps stale handles -> records 0 bytes.
+# So if we just brought a feed up, bounce the recorder so its taps bind to the live feeds.
+# (Only on a fresh feed start, so an in-progress recording during a redundant START is
+# never interrupted.) Needs the scoped NOPASSWD rule from app/launcher/install.sh.
+if [ "$eo_was_up" -ne 0 ] || [ "$radar_was_up" -ne 0 ]; then
+  sleep 3   # let the feeds create + populate their shm first
+  echo "feeds (re)started -> restarting recorder so its taps re-attach"
+  sudo -n systemctl restart airpoc-recorder 2>/dev/null || echo "warn: recorder not restarted (missing NOPASSWD sudoers rule)"
+fi
 
 echo "start requested"

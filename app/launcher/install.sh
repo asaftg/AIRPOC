@@ -8,6 +8,14 @@ cc -O2 -Wall -o "$DIR/airpoc-launcher" "$DIR/airpoc-launcher.c"
 chmod +x "$DIR/start.sh" "$DIR/stop.sh"
 
 sudo cp "$DIR/airpoc-launcher.service" /etc/systemd/system/airpoc-launcher.service
+
+# scoped passwordless sudo so start.sh (runs as the launcher user) can bounce the recorder
+# to re-attach its shm taps after (re)starting the EO/radar feeds.
+LU="${AIRPOC_LAUNCHER_USER:-asaftg}"
+printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart airpoc-recorder, /bin/systemctl restart airpoc-recorder\n' "$LU" \
+  | sudo tee /etc/sudoers.d/airpoc-recorder >/dev/null
+sudo chmod 0440 /etc/sudoers.d/airpoc-recorder
+
 sudo systemctl daemon-reload
 sudo systemctl enable airpoc-launcher
 sudo systemctl restart airpoc-launcher   # restart (not just enable) so a re-install loads the new binary

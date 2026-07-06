@@ -10,7 +10,7 @@
 # Runs as root under systemd.
 IFACE="${AIRPOC_WIFI_IFACE:-wlP1p1s0}"
 AP_CON="AIRPOC-AP"
-POLL="${AIRPOC_AUTOAP_POLL:-20}"                 # seconds between checks
+POLL="${AIRPOC_AUTOAP_POLL:-3}"                  # seconds between checks (short = snappy mode switches)
 AP_PROBE_EVERY="${AIRPOC_AP_PROBE_EVERY:-120}"   # seconds between home-probes while auto+AP
 MODE_FILE="${AIRPOC_WIFI_MODE_FILE:-/var/lib/airpoc/wifi-mode}"
 STATUS_FILE="${AIRPOC_WIFI_STATUS_FILE:-/var/lib/airpoc/wifi-status}"
