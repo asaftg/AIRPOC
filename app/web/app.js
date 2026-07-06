@@ -519,6 +519,17 @@
   }
   function closeSaveDialog() { $("recdlg").hidden = true; pendingSid = null; }
   $("dlg-x").onclick = closeSaveDialog;   /* dismiss leaves the session pending */
+  /* type your own tag (not in the bank) → Enter adds it as a selected chip */
+  $("dlg-tagadd").onkeydown = function (e) {
+    if (e.key !== "Enter") return; e.preventDefault();
+    var v = this.value.trim().toLowerCase().replace(/[\s,]+/g, "-").replace(/[^a-z0-9-]/g, "");
+    this.value = ""; if (!v) return;
+    var ex = [].slice.call(document.querySelectorAll("#dlg-tags .tagchip")).filter(function (c) { return c.textContent === v; })[0];
+    if (ex) { ex.classList.add("on"); return; }
+    var c = document.createElement("span"); c.className = "tagchip on"; c.textContent = v;
+    c.onclick = function () { c.classList.toggle("on"); };
+    $("dlg-tags").appendChild(c);
+  };
   $("dlg-save").onclick = function () {
     if (!pendingSid) return;
     var tags = [].slice.call(document.querySelectorAll("#dlg-tags .tagchip.on")).map(function (c) { return encodeURIComponent(c.textContent); }).join(",");

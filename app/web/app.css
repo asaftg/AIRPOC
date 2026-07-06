@@ -259,6 +259,9 @@ body.replay #devclose,body.replay #to-control{pointer-events:auto;opacity:1}
 #dlg-x{background:transparent;border:0;color:var(--muted);font-size:16px;cursor:pointer}
 .dlg-l{display:block;font-size:10px;letter-spacing:1.5px;color:var(--dim);margin:10px 0 5px}
 #dlg-name,#dlg-note{width:100%;background:var(--sub);border:1px solid var(--bd2);color:var(--fg);border-radius:3px;padding:8px 10px;font:inherit;font-size:13px}
+.dlg-tagadd{width:100%;margin-top:6px;background:var(--sub);border:1px dashed var(--bd3);color:var(--fg);
+  border-radius:3px;padding:7px 10px;font:inherit;font-size:12px}
+.dlg-tagadd::placeholder{color:var(--dim)}
 .dlg-tags{display:flex;flex-wrap:wrap;gap:5px}
 .dlg-btns{display:flex;align-items:center;gap:8px;margin-top:16px}
 .dlg-spacer{flex:1}
@@ -268,30 +271,73 @@ body.replay #devclose,body.replay #to-control{pointer-events:auto;opacity:1}
 
 @media (max-height:560px){.topbar{height:40px}.big{height:50px}}
 
-/* ── Phone / narrow portrait: the desktop side-by-side (EO | 30% radar column | DEV
- * drawer) doesn't fit, so stack it: EO on top, targets + radar below, and make the DEV
- * and LIBRARY panels full-screen overlays. ── */
+/* ── Phone / narrow portrait ── The desktop side-by-side (EO | 30% right column | DEV
+ * drawer) doesn't fit a phone, so: stack EO on top, RADAR right under it, TARGETS at the
+ * bottom; DEV + LIBRARY become full-screen overlays; everything is sized for touch.
+ * Scoped to <=720px so the laptop layout is untouched. ── */
 @media (max-width:720px){
-  .topbar{height:auto;flex-wrap:wrap;gap:8px 10px;padding:8px 10px}
+  /* topbar — condense, wrap, drop the reserved BATT/ALT placeholders, touch-size buttons */
+  .topbar{height:auto;flex-wrap:wrap;gap:6px 8px;padding:8px 10px}
+  .topbar h1 .wordmark{height:18px}
   .pills{margin-left:0;width:100%;justify-content:flex-start;flex-wrap:wrap;gap:5px}
+  .pill{padding:5px 9px}
+  .pill.reserved{display:none}
+  .icb{height:34px;padding:0 14px}
 
+  /* stack: EO on top, RADAR directly under it, TARGETS at the bottom (flex order) */
   #stage{flex-direction:column}
-  #eo{flex:0 0 auto;height:46vh;width:100%}
+  #eo{flex:0 0 auto;height:44vh;width:100%}
   #right{flex:1 1 auto;width:100%;max-width:100%;min-width:0;flex-direction:column;
     border-left:0;border-top:1px solid var(--bd)}
-  #targets{flex:0 0 auto;max-height:20vh;overflow-y:auto}
-  #radar{flex:1 1 auto;margin-top:0;min-height:26vh}
+  #radar{order:1;flex:1 1 auto;margin-top:0;min-height:34vh}
+  #targets{order:2;flex:0 0 auto;max-height:22vh;overflow-y:auto;border-top:1px solid var(--bd)}
 
-  /* transport spans full width — there's no radar column beside it on mobile */
-  #transport{left:8px;right:8px}
-
-  /* controls sized for touch, tucked so they don't bury the EO */
+  /* EO controls — bigger tap targets */
   #cluster{bottom:8px;gap:6px;padding:6px}
-  .big{min-width:62px;height:48px;font-size:11px}
+  .big{min-width:64px;height:50px;font-size:11px}
   #zoombar{left:8px;bottom:8px}
+  #zoombar button{width:44px;height:40px;font-size:20px}
+  .exp{width:36px;height:36px}
 
-  /* DEV panel: full-screen overlay instead of a 400px side drawer */
+  /* DEV — full-screen overlay, touch-size rows/sliders/segmented buttons */
   #dev{position:fixed;inset:0;z-index:30;width:0}
   #dev.open{width:100vw}
-  #dev-body{width:100vw}
+  #dev-body{width:100vw;padding:14px 16px}
+  #devclose{font-size:26px;line-height:1;padding:2px 8px}
+  .srow{grid-template-columns:72px 1fr 54px;gap:10px;padding:8px 0}
+  .srow input[type=range]{height:22px}
+  .srow input[type=range]::-webkit-slider-thumb{width:24px;height:24px}
+  .srow input[type=range]::-moz-range-thumb{width:24px;height:24px}
+  .btns{gap:6px}
+  .btns button{padding:10px 8px;font-size:12px;min-height:42px;flex:1}
+  .sysbtns button{min-height:44px}
+
+  /* replay banner — let the name+note wrap instead of clipping */
+  #replay-banner{height:auto;min-height:26px;flex-wrap:wrap;gap:4px 10px;padding:6px 12px;
+    font-size:11px;letter-spacing:1px;line-height:1.35}
+  #replay-banner #rb-close{padding:6px 12px}
+
+  /* transport — full width, touch buttons, scrub on its own line */
+  #transport{left:8px;right:8px;bottom:8px;flex-wrap:wrap;gap:8px;padding:8px 10px}
+  #transport button{min-width:44px;height:42px;font-size:16px}
+  #tp-rate{min-width:48px}
+  .tp-time{min-width:46px;font-size:11px}
+  #tp-scrub{flex:1 1 100%;order:9;height:12px}
+  #tp-scrub::-webkit-slider-thumb{width:22px;height:22px}
+  #tp-scrub::-moz-range-thumb{width:22px;height:22px}
+
+  /* LIBRARY — stack the header, full-width search, single-column cards */
+  .lib-head{flex-wrap:wrap;gap:8px;padding:10px 12px}
+  #lib-close{order:1;margin-left:auto}
+  #lib-q{order:2;width:100%}
+  .lib-tags{order:3;max-width:100%}
+  .lib-spacer{display:none}
+  .lib-disk{order:4}
+  .lib-disk>div:first-child,#lib-diskbar{width:90px}
+  .lib-grid{padding:12px;gap:12px;grid-template-columns:1fr}
+
+  /* save dialog — 16px inputs so iOS/Chrome don't zoom on focus */
+  .dlg-card{width:94vw;padding:14px 16px}
+  #dlg-name,#dlg-note,.dlg-tagadd{font-size:16px}
+  .tagchip{font-size:12px;padding:6px 10px}
 }
