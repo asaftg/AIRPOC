@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 static uint8_t g_lut[256];
 static int     g_lut_ready = 0;
@@ -95,11 +98,13 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
         static float *rmed = NULL; static int rmed_cap = 0;
         if (oh > rmed_cap) { free(rmed); rmed = malloc((size_t)oh * sizeof(float)); rmed_cap = rmed ? oh : 0; }
         if (rmed) {
-            int half = npx / oh / 2;                    /* = ow/2 */
+            /* per-row median from a column-subsampled histogram (every 4th px — the median
+             * is robust to it, and it cuts the histogram build 4x for the native case). */
+            int nsamp = (ow + 3) / 4, half = nsamp / 2;
             for (int y = 0; y < oh; y++) {
                 int rh[1024]; memset(rh, 0, sizeof rh);
                 const uint16_t *r = sm + (size_t)y * ow;
-                for (int x = 0; x < ow; x++) rh[r[x]]++;
+                for (int x = 0; x < ow; x += 4) rh[r[x]]++;
                 int acc = 0, med = 0;
                 for (int v = 0; v < 1024; v++) { acc += rh[v]; if (acc >= half) { med = v; break; } }
                 rmed[y] = (float)med;
@@ -109,13 +114,17 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
                 int a0 = y - R, b0 = y + R; if (a0 < 0) a0 = 0; if (b0 >= oh) b0 = oh - 1;
                 float s = 0; for (int k = a0; k <= b0; k++) s += rmed[k];
                 int off = (int)lround(rmed[y] - s / (b0 - a0 + 1));
-                if (off) {
-                    uint16_t *r = sm + (size_t)y * ow;
-                    for (int x = 0; x < ow; x++) {
-                        int v = (int)r[x] - off;
-                        r[x] = (uint16_t)(v < 0 ? 0 : v > 1023 ? 1023 : v);
-                    }
-                }
+                if (!off) continue;
+                uint16_t *r = sm + (size_t)y * ow;
+                int x = 0;
+#if defined(__aarch64__) || defined(__ARM_NEON)
+                uint16x8_t vmax = vdupq_n_u16(1023);
+                if (off > 0) { uint16x8_t vo = vdupq_n_u16((uint16_t)off);       /* saturating sub -> clamps at 0 */
+                    for (; x + 8 <= ow; x += 8) vst1q_u16(r + x, vminq_u16(vqsubq_u16(vld1q_u16(r + x), vo), vmax)); }
+                else { uint16x8_t vo = vdupq_n_u16((uint16_t)(-off));            /* saturating add -> clamps at max */
+                    for (; x + 8 <= ow; x += 8) vst1q_u16(r + x, vminq_u16(vqaddq_u16(vld1q_u16(r + x), vo), vmax)); }
+#endif
+                for (; x < ow; x++) { int v = (int)r[x] - off; r[x] = (uint16_t)(v < 0 ? 0 : v > 1023 ? 1023 : v); }
             }
         }
     }
