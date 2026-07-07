@@ -72,3 +72,9 @@ the display-JPEG channel is always on regardless.
 > Pitfall: sessions land as `pending` on REC-stop and are auto-purged after
 > 24 h unless saved. Saved sessions are never auto-deleted; `purge_native=`
 > is the explicit space-reclaim (drops raw Y10, keeps everything else).
+
+> Loss watchdog: the recorder can't record frames a producer never publishes,
+> but it never loses a feed *silently*. If a tap-fed channel stops producing
+> >2 s mid-recording, `/stats` sets that channel's `lost:1` and a `channel_lost`
+> event (with the last-frame time) is written into the recording. See
+> [docs/FORMAT.md](docs/FORMAT.md) events.

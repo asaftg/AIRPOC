@@ -40,6 +40,12 @@ channel — so the replay timeline aligns across channels even though `eo_y10`'s
 source `t_src_ns` is the camera's own V4L2 clock). Binary-search by `t_ns`;
 rebuildable by scanning segments.
 
+> Segments are **unbounded** — heavy channels roll a new 256 MiB `data.NNNNN`
+> every ~2 s of native, so a long recording has hundreds (a 3:37 session ≈ 96).
+> Any reader (replay, transcode) MUST cover every segment the index references,
+> not a fixed cap, or long recordings truncate on playback (the recording itself
+> is always complete).
+
 ## Per-channel meta[6] and payloads
 
 | channel | payload | meta[6] |
@@ -55,7 +61,12 @@ rebuildable by scanning segments.
 | eo_jpeg | display JPEG **byte-verbatim** as served to the operator | eo_seq, dw, dh, zoom, res_idx, 0 |
 | radar_raw | UART bytes exactly as `read()` returned (re-feedable to the TLV parser) | read_len |
 | radar_wire | the exact SSE frame JSON | frame_number, n_points, n_targets |
-| events | JSON `{"type":"eo_stats\|radar_stats\|app_stats\|clock_anchor\|marker","t_mono_ns":…,"body":{…}}` | — |
+| events | JSON `{"type":"eo_stats\|radar_stats\|app_stats\|clock_anchor\|marker\|channel_lost\|channel_resumed","t_mono_ns":…,"body":{…}}` | — |
+
+> `channel_lost`/`channel_resumed` are the loss watchdog (below): if a tap-fed
+> channel stops producing >2 s mid-recording, `channel_lost` (with the
+> last-frame timestamp) is recorded here and `/stats` sets that channel's
+> `lost:1`, so a dropped feed is never silent. `channel_resumed` when it recovers.
 
 ## Clocks
 

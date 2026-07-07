@@ -24,6 +24,10 @@ relays the replay MJPEG stream). On connect failure: `502` with
   the save dialog for that sid.
 - If `/rec/stats` shows `pending_sid` at page load (stop happened while the
   page was away), offer the save dialog for it.
+- **Feed-loss warning while recording:** each `/rec/stats` channel has `lost`.
+  If any is `1` during a recording, show a loud "⚠ FEED LOST — <channel>"
+  banner (a live sensor feed stopped mid-recording). It clears when the feed
+  resumes (`lost:0`).
 
 ## 3. Save dialog (`#recdlg`, modal; live feeds keep running behind it)
 
