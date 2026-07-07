@@ -12,6 +12,9 @@
 
 static uint8_t g_lut[256];
 static int     g_lut_ready = 0;
+static volatile int g_destripe = 1;   /* row-noise correction on by default */
+void isp_set_destripe(int on) { g_destripe = on ? 1 : 0; }
+int  isp_destripe_on(void)    { return g_destripe; }
 static void lut_init(void)
 {
     for (int i = 0; i < 256; i++) {
@@ -79,6 +82,41 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
                 for (int sx = sx0; sx < sx1; sx++) { acc += (row[2*sx] | (row[2*sx+1] << 8)) >> 6; cnt++; }
             }
             orow[ox] = (uint16_t)(cnt ? acc / cnt : 0);
+        }
+    }
+    /* Row-noise correction (destripe) — remove each row's fixed/temporal offset BEFORE
+     * the night stretch amplifies it into horizontal lines. The IMX296's row noise is
+     * only ~1 LSB, but a dark scene (signal a few LSB above black) gets stretched ~6x,
+     * turning that 1 LSB into visible banding. Each row's offset = the high-frequency
+     * part of its median (a boxcar low-pass over rows preserves the real vertical scene
+     * gradient); subtract it. Cost: one 10-bit histogram-median per row + a boxcar + one
+     * subtract per pixel — a few M ops/frame, negligible vs the encode. */
+    if (g_destripe && oh >= 8) {
+        static float *rmed = NULL; static int rmed_cap = 0;
+        if (oh > rmed_cap) { free(rmed); rmed = malloc((size_t)oh * sizeof(float)); rmed_cap = rmed ? oh : 0; }
+        if (rmed) {
+            int half = npx / oh / 2;                    /* = ow/2 */
+            for (int y = 0; y < oh; y++) {
+                int rh[1024]; memset(rh, 0, sizeof rh);
+                const uint16_t *r = sm + (size_t)y * ow;
+                for (int x = 0; x < ow; x++) rh[r[x]]++;
+                int acc = 0, med = 0;
+                for (int v = 0; v < 1024; v++) { acc += rh[v]; if (acc >= half) { med = v; break; } }
+                rmed[y] = (float)med;
+            }
+            const int R = 16;                           /* low-pass radius: keeps scene gradient */
+            for (int y = 0; y < oh; y++) {
+                int a0 = y - R, b0 = y + R; if (a0 < 0) a0 = 0; if (b0 >= oh) b0 = oh - 1;
+                float s = 0; for (int k = a0; k <= b0; k++) s += rmed[k];
+                int off = (int)lround(rmed[y] - s / (b0 - a0 + 1));
+                if (off) {
+                    uint16_t *r = sm + (size_t)y * ow;
+                    for (int x = 0; x < ow; x++) {
+                        int v = (int)r[x] - off;
+                        r[x] = (uint16_t)(v < 0 ? 0 : v > 1023 ? 1023 : v);
+                    }
+                }
+            }
         }
     }
     /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
