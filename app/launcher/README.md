@@ -1,23 +1,35 @@
 # AIRPOC launcher — start/stop from any device
 
-A tiny always-on web page that starts and stops the operator stack. It runs as its own
-systemd service so it is up whenever the Jetson is up; from it you press **START SYSTEM**
-to bring up EO + radar + console, and **STOP SYSTEM** to bring them down. Reachable from
-any phone/laptop/tablet on the network — no install, no SSH.
+A tiny always-on web page that starts/stops the operator stack, switches WiFi mode, and
+powers the box off. It runs as its own systemd service so it's up whenever the Jetson is
+up. Reachable from any phone/laptop/tablet on the network — no install, no SSH.
 
 ```
   browser (any device)                Jetson (orin-nano)
-  +--------------------+   :8088      +------------------------------+
-  |  FAZE CONTROL page | -----------> |  airpoc-launcher  (always on)|
-  |  START / STOP /    |              |    /start -> start.sh        |
-  |  OPEN CONSOLE      | <-- /status  |    /stop  -> stop.sh         |
-  +--------------------+              |    /status -> port probes    |
-                                      +------------------------------+
-                                         | start.sh brings up:
+  +----------------------+ :8088      +----------------------------------+
+  |  FAZE CONTROL page   | ---------> |  airpoc-launcher  (always on)    |
+  |  START / STOP        |            |   /start -> start.sh             |
+  |  OPEN CONSOLE        | <-/status- |   /stop  -> stop.sh              |
+  |  NETWORK AUTO/WIFI/AP|            |   /status -> feed ports + recorder|
+  |  SHUTDOWN JETSON     |            |              tap health           |
+  +----------------------+            |   /wifi[/status] -> mode file     |
+                                      |   /shutdown -> systemctl poweroff |
+                                      +----------------------------------+
+                                         | start.sh brings up (self-healing):
                                          |- eo_pipeline   :8091
                                          |- radar_preview :8092
                                          +- app (console) :8080
 ```
+
+- **Honest status.** `/status` returns `eo`/`radar` (feed ports) **and** `eo_rec`/
+  `radar_rec` (does the recorder's `/dev/shm` tap actually flow?). A feed can be up while
+  its tap is dead → recordings come out empty; the page then shows **REC BUS DOWN** instead
+  of a green ✓, and `start.sh` re-attaches on the next START (it counts a feed healthy only
+  when port **and** tap exist, and bounces the recorder after (re)starting a feed).
+- **NETWORK toggle** (AUTO/WIFI/AP) and the field failover live in
+  [`jetson/wifi-ap/`](../../jetson/wifi-ap/README.md) — the launcher just writes the mode.
+- **SHUTDOWN JETSON** → `/shutdown` → `sudo -n systemctl poweroff` (a scoped NOPASSWD rule
+  installed by `install.sh`). Confirms first.
 
 The launcher never dies with the stack — STOP leaves the launcher (and the recorder,
 its own service) running so you can always press START again.
@@ -35,9 +47,13 @@ It compiles `airpoc-launcher`, installs the systemd unit, and enables it. Prints
 
 1. Open **http://orin-nano.lan:8088/** (or **http://192.168.86.101:8088/**).
    Bookmark it, or use the desktop shortcut in `desktop/`.
-2. **START SYSTEM** — brings up EO, radar, console. The status dot goes green.
+2. **START SYSTEM** — brings up EO, radar, console. The status dot goes green (amber +
+   "REC BUS DOWN" if a feed is live but its recorder tap isn't — press START again to heal).
 3. **OPEN CONSOLE** — opens the operator GUI (`:8080`) in a new tab.
-4. **STOP SYSTEM** — shuts the stack down. The launcher stays up.
+4. **STOP SYSTEM** — shuts the stack down. The launcher + recorder stay up.
+5. **NETWORK** — AUTO (home WiFi on the bench, AP in the field) / WIFI (pin home) / AP (pin
+   the field access point). Switching drops your current network — rejoin the new one.
+6. **SHUTDOWN JETSON** — powers the box off (physical access needed to turn it back on).
 
 ## Desktop shortcut
 

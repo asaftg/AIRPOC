@@ -25,9 +25,9 @@ CONNECTED** — there is no synthetic data.
 | File | Role |
 |---|---|
 | `main.c` | supervisor: start the EO + radar consumers + the GUI server, wait for a signal |
-| `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar` (verbatim) · `/stats` (console + feed stats) · `/ctl` (routed) |
+| `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar` + `/radar/stream` (verbatim poll + SSE push) · `/stats` · `/ctl` (routed) · `/rec/<path>` (recorder pass-through) |
 | `eo_client.c` / `eo_client.h` | consumes the EO module's MJPEG feed (latest JPEG + its `/stats`); forwards controls to its `/ctl` |
-| `radar_client.c` / `radar.h` | consumes the radar daemon's SSE (latest frame + tracks); forwards cluster cfg to its `/ctl` |
+| `radar_client.c` / `radar.h` | consumes the radar daemon's SSE (latest frame + tracks); re-broadcasts each frame to the browser (`/radar/stream`); forwards all six controls to its `/ctl` |
 | `web/` | front-end (`index.html`, `app.css`, `app.js`) — embedded at build |
 | `gen_assets.sh` | `xxd`-embeds `web/` into `web_assets.h` (single self-contained binary) |
 | `systemd/` | `airpoc-app.service.in` + `install.sh` |
@@ -37,9 +37,11 @@ CONNECTED** — there is no synthetic data.
 ```bash
 sudo apt-get install -y xxd            # self-contained C — no libjpeg/eo-pipeline/illuminator link
 cd app && make
-./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092
+./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093
 ```
-Open **`http://<jetson>:8080/`** (or `192.168.55.1:8080` over USB-C).
+`-e` EO feed · `-r` radar daemon · `-c` recorder daemon (for the `/rec/*` pass-through).
+Open **`http://<jetson>:8080/`** (or `192.168.55.1:8080` over USB-C). In practice the
+[launcher](launcher/README.md) (`:8088`) starts/stops the whole stack for you.
 
 The console needs the two sensor modules running:
 - **EO** — `cd ../eo/pipeline && make && ./eo_pipeline` (serves the video + controls on `:8091`).
@@ -61,9 +63,16 @@ daemon with `-s` (simulation) in front of an operator.
   `/ctl`/`/stats` for the future gimbal.
 - **Illuminator** — the EO feed owns it; the console's LIGHT/PWR/BEAM + AUTO-fit forward
   to the EO feed's `/ctl`.
-- Also live: **day = bright white theme**, DEV panel, CPU temp, tracks count.
-- Reserved (need their modules/bus): BRG/RNG, BATT/ALT, REC, EO detection box, gimbal
-  pointing.
+- **Record / replay** — `REC` records via the recorder daemon (`:8093`, proxied at
+  `/rec/*`); LIBRARY browses/filters/deletes/offloads sessions (`OFFLOAD → /rec/export`
+  `.tar`); replay reuses the live renderers with a transport bar. Save dialog takes
+  name/tags (bank + custom)/note.
+- **ROI + zoom** — EO/radar ROI-box zoom + EO/replay digital zoom + a radar range selector
+  (AUTO/50/100/250/500 m) with constant 100/250 m reference rings — all client-side render.
+- **System readouts** — Jetson junction temp, CPU % (+ core-equivalents), GPU %.
+- Also live: **day = bright white theme**, DEV panel, link chip (signal/type/Mb/s/fps),
+  phone-responsive layout.
+- Reserved (need their modules/bus): BRG/RNG, BATT/ALT, EO detection box, gimbal pointing.
 
 > Pitfall: the operator laptop is on the drone's link with **no internet** — the page
 > loads **no external fonts or icons**. Keep `web/` fully self-contained.

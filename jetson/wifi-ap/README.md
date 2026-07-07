@@ -25,6 +25,16 @@ One WiFi radio, used two ways automatically:
 | in AP mode, **no** phone joined, home back in range | drop AP, rejoin home |
 | in AP mode, **a** phone is joined | stay — never cut off the operator |
 
+**Modes.** The launcher's NETWORK buttons write `/var/lib/airpoc/wifi-mode` (`auto` |
+`home` | `ap`), which `airpoc-autoap.sh` reads each tick and reports live state back to
+`/var/lib/airpoc/wifi-status`:
+- **auto** — the table above (home on the bench, AP in the field).
+- **ap** — PINNED access point: keep `AIRPOC` up, never fail back, no scan-drops (most
+  reliable for field work).
+- **home** — PINNED client: stay on home WiFi, never raise the AP.
+- Reboot boots into whatever mode the file holds (it persists). GOTCHA: any junk value
+  falls back to `auto`.
+
 ## Install (once, on the Jetson)
 
 ```
@@ -47,3 +57,9 @@ prefers home whenever it's in range, so your current connection is not dropped.
   Fixed host/gateway `10.42.0.1`, DHCP handed to clients.
 - Change the SSID: `AIRPOC_AP_SSID=whatever ./install.sh` (before first install), or
   `nmcli connection modify AIRPOC-AP wifi.ssid whatever`.
+- **Captive-portal fix (so phones don't shove traffic to cellular).** An internet-less open
+  AP makes Android route to mobile data → `10.42.0.1` is only reachable with mobile data
+  off. Fix: the AP's dnsmasq (`dnsmasq-shared.d/airpoc-captive.conf`) resolves the OS
+  connectivity-check domains to `10.42.0.1`, and the launcher answers `generate_204` on
+  `:80` — so the phone marks `AIRPOC` validated and uses it normally. First time, forget +
+  rejoin `AIRPOC` on the phone (HTTPS probe still fails, so worst case one "stay connected" tap).
