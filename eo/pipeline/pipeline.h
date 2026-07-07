@@ -49,18 +49,6 @@
                                         * tone-map will stretch to full range;
                                         * below this the scene is flat/dim and
                                         * stretching just amplifies noise 6x+ */
-#define EO_DESTRIPE_GATE 150           /* destripe runs only when p99-p1 span < this (10-bit).
-                                        * A wide span = bright hi-DR scene: banding invisible
-                                        * and real horizontal structure would ghost -> skip.
-                                        * p99 ignores small blown night lights, so night
-                                        * scenes (narrow span) still engage. */
-#define EO_DESTRIPE_MAX  3             /* max per-row correction (10-bit LSB). Row FPN is
-                                        * ~1 LSB; a larger row-median residual is REAL
-                                        * horizontal scene structure (a shelf, a window
-                                        * edge), not noise — clamping here guarantees the
-                                        * destripe can never subtract scene => no ghost
-                                        * bands, while still killing the small night FPN.
-                                        * <=3 LSB is <1 LSB in 8-bit: invisible by design. */
 
 /* duty = exposure_time / frame_time = exposure_lines / VMAX  (== NIR strobe duty) */
 #define EO_DUTY_PCT(exp_lines, vmax)  (100.0 * (exp_lines) / (double)(vmax))
@@ -126,11 +114,6 @@ void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, in
                          uint8_t *out8, int ow, int oh);
 /* In-place edge-preserving 3x3 median on an 8-bit plane — cheap low-light grain filter. */
 void   isp_median3(uint8_t *img, int w, int h);
-/* Row-noise correction (destripe) inside isp_scale_tonemap; on by default, gated to dark
- * scenes. isp_destripe_active() = whether the gate actually ran it on the last frame. */
-void   isp_set_destripe(int on);
-int    isp_destripe_on(void);
-int    isp_destripe_active(void);
 
 /* ---- Wire-feed tuning. The display stream is one of four operator-selected 4:3
  * sizes (below); the DETECTOR always keeps the full-native frame. Two bandwidth

@@ -9,17 +9,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(__aarch64__) || defined(__ARM_NEON)
-#include <arm_neon.h>
-#endif
 
 static uint8_t g_lut[256];
 static int     g_lut_ready = 0;
-static volatile int g_destripe = 1;   /* row-noise correction enabled (gated to dark scenes) */
-static volatile int g_ds_active = 0;  /* did the gate actually run it on the last frame? */
-void isp_set_destripe(int on) { g_destripe = on ? 1 : 0; }
-int  isp_destripe_on(void)    { return g_destripe; }
-int  isp_destripe_active(void){ return g_ds_active; }
 static void lut_init(void)
 {
     for (int i = 0; i < 256; i++) {
@@ -89,12 +81,10 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
             orow[ox] = (uint16_t)(cnt ? acc / cnt : 0);
         }
     }
-    /* p1/p99 percentile endpoints on the raw downscaled 10-bit — computed BEFORE the
-     * destripe because the span also GATES it: a wide p1..p99 means a bright, high-dynamic
-     * -range scene where banding is invisible anyway AND real horizontal structure would
-     * ghost, so the destripe must not run. p99 (not max) means a few small blown night
-     * lights don't widen the span — only a LARGE bright region does, which is exactly the
-     * ghost-prone daytime case we skip. */
+    /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
+     * small blown streetlight; p1 sets a real black. Endpoints are EMA-smoothed across
+     * frames so the mapping doesn't wobble frame-to-frame (the "breathing"), and the
+     * span is floored so a flat/dim scene isn't blown up to full range (6x noise gain).*/
     int hist[1024] = {0}, nh = 0;
     for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* subsample: percentiles don't need every px */
     int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
@@ -104,53 +94,6 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
         if (!got_lo && a >= lo_t) { p_lo = v; got_lo = 1; }
         if (a >= hi_t) { p_hi = v; break; }
     }
-    /* Row-noise correction (destripe) — DARK scenes only (gated above). Row noise is ~1
-     * LSB, invisible until a dark scene's ~6x stretch turns it into horizontal lines. Each
-     * row's offset = the high-freq part of its median (a boxcar low-pass keeps the vertical
-     * scene gradient), clamped to +-EO_DESTRIPE_MAX so a real edge is never subtracted.
-     * Gate + clamp both bound it: it cannot ghost a scene. A few M ops/frame, negligible. */
-    g_ds_active = (g_destripe && (p_hi - p_lo) < EO_DESTRIPE_GATE && oh >= 8);
-    if (g_ds_active) {
-        static float *rmed = NULL; static int rmed_cap = 0;
-        if (oh > rmed_cap) { free(rmed); rmed = malloc((size_t)oh * sizeof(float)); rmed_cap = rmed ? oh : 0; }
-        if (rmed) {
-            /* per-row median from a column-subsampled histogram (every 4th px — the median
-             * is robust to it, and it cuts the histogram build 4x for the native case). */
-            int nsamp = (ow + 3) / 4, half = nsamp / 2;
-            for (int y = 0; y < oh; y++) {
-                int rh[1024]; memset(rh, 0, sizeof rh);
-                const uint16_t *r = sm + (size_t)y * ow;
-                for (int x = 0; x < ow; x += 4) rh[r[x]]++;
-                int acc = 0, med = 0;
-                for (int v = 0; v < 1024; v++) { acc += rh[v]; if (acc >= half) { med = v; break; } }
-                rmed[y] = (float)med;
-            }
-            const int R = 16;                           /* low-pass radius: keeps scene gradient */
-            for (int y = 0; y < oh; y++) {
-                int a0 = y - R, b0 = y + R; if (a0 < 0) a0 = 0; if (b0 >= oh) b0 = oh - 1;
-                float s = 0; for (int k = a0; k <= b0; k++) s += rmed[k];
-                /* clamp: a large row-median residual is real horizontal scene structure,
-                 * not the ~1 LSB row FPN — never subtract it (that ghosts the scene). */
-                int off = (int)lround(rmed[y] - s / (b0 - a0 + 1));
-                if (off >  EO_DESTRIPE_MAX) off =  EO_DESTRIPE_MAX;
-                if (off < -EO_DESTRIPE_MAX) off = -EO_DESTRIPE_MAX;
-                if (!off) continue;
-                uint16_t *r = sm + (size_t)y * ow;
-                int x = 0;
-#if defined(__aarch64__) || defined(__ARM_NEON)
-                uint16x8_t vmax = vdupq_n_u16(1023);
-                if (off > 0) { uint16x8_t vo = vdupq_n_u16((uint16_t)off);       /* saturating sub -> clamps at 0 */
-                    for (; x + 8 <= ow; x += 8) vst1q_u16(r + x, vminq_u16(vqsubq_u16(vld1q_u16(r + x), vo), vmax)); }
-                else { uint16x8_t vo = vdupq_n_u16((uint16_t)(-off));            /* saturating add -> clamps at max */
-                    for (; x + 8 <= ow; x += 8) vst1q_u16(r + x, vminq_u16(vqaddq_u16(vld1q_u16(r + x), vo), vmax)); }
-#endif
-                for (; x < ow; x++) { int v = (int)r[x] - off; r[x] = (uint16_t)(v < 0 ? 0 : v > 1023 ? 1023 : v); }
-            }
-        }
-    }
-    /* Endpoints are EMA-smoothed across frames so the mapping doesn't wobble frame-to-
-     * frame (the "breathing"), and the span is floored so a flat/dim scene isn't blown up
-     * to full range (6x noise gain). */
     static double s_lo = -1.0, s_hi = -1.0;
     if (s_lo < 0.0) { s_lo = p_lo; s_hi = p_hi; }      /* seed on first frame */
     s_lo = 0.85 * s_lo + 0.15 * p_lo;

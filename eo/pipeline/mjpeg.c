@@ -292,20 +292,20 @@ static void *client(void *arg)
         pthread_mutex_lock(&g_lock);
         double wfps = g_wire_fps; uint64_t c_pub = g_seq;
         pthread_mutex_unlock(&g_lock);
-        char body[800];
+        char body[760];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
             "\"prod\":%llu,\"drop\":%llu,\"pub\":%llu,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
-            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"destripe\":%d,\"ds_active\":%d,\"connected\":%d,"
+            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             wfps, st.mean, st.exp_ms, st.duty_pct, st.gain,
             st.sfps, st.sfps,
             (unsigned long long)c_prod, (unsigned long long)c_drop, (unsigned long long)c_pub,
             z, hf, vf, st.focus,
-            st.ae_on, st.gaincap, st.median, isp_destripe_on(), isp_destripe_active(), st.connected,
+            st.ae_on, st.gaincap, st.median, st.connected,
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
@@ -335,7 +335,6 @@ static void *client(void *arg)
         if ((q = strstr(req, "expms=")))   eo_set_expms(atof(q + 6));
         if ((q = strstr(req, "gaincap="))) eo_set_gaincap(atoi(q + 8));
         if ((q = strstr(req, "median=")))  eo_set_median(atoi(q + 7));
-        if ((q = strstr(req, "destripe="))) isp_set_destripe(atoi(q + 9));
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }
