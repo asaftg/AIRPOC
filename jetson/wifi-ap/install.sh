@@ -18,11 +18,16 @@ SSID="${AIRPOC_AP_SSID:-AIRPOC}"
 if nmcli -t -f NAME connection show | grep -qx "$AP_CON"; then
   sudo nmcli connection delete "$AP_CON" >/dev/null
 fi
+# 5 GHz (band a, ch 36 — non-DFS, universally allowed) for real throughput. 2.4 GHz (bg)
+# was much slower + congested and Realtek AP mode is weak there; 5 GHz gives hundreds of
+# Mbit/s at the cost of range (fine for line-of-sight field use). Override with
+# AIRPOC_AP_BAND / AIRPOC_AP_CHAN if you need the 2.4 GHz range fallback (bg + a low ch).
+AP_BAND="${AIRPOC_AP_BAND:-a}"; AP_CHAN="${AIRPOC_AP_CHAN:-36}"
 sudo nmcli connection add type wifi ifname "$IFACE" con-name "$AP_CON" ssid "$SSID" \
      autoconnect no \
-     802-11-wireless.mode ap 802-11-wireless.band bg \
+     802-11-wireless.mode ap 802-11-wireless.band "$AP_BAND" 802-11-wireless.channel "$AP_CHAN" \
      ipv4.method shared ipv6.method ignore
-echo "created open AP profile $AP_CON (ssid: $SSID)"
+echo "created open AP profile $AP_CON (ssid: $SSID, band $AP_BAND ch $AP_CHAN)"
 
 # shared state dir: the launcher (runs as $WIFI_USER) writes the desired mode here
 # (auto|ap|home) and the failover daemon publishes live status back.

@@ -41,6 +41,9 @@ prefers home whenever it's in range, so your current connection is not dropped.
   join `AIRPOC` and reach the control page (`:8088`) and console (`:8080`), which can fire
   the illuminator. Fine for an isolated field site; add a passphrase later by setting
   `802-11-wireless-security` on the `AIRPOC-AP` profile if you ever want it.
-- 2.4 GHz (best range/penetration). Fixed host/gateway `10.42.0.1`, DHCP handed to clients.
+- 5 GHz (band a, ch 36) for throughput — 2.4 GHz was slow/congested and Realtek AP mode is
+  weak there. Trade-off is shorter range; for 2.4 GHz range fallback set `AIRPOC_AP_BAND=bg
+  AIRPOC_AP_CHAN=6` before install (or `nmcli connection modify AIRPOC-AP 802-11-wireless.band bg`).
+  Fixed host/gateway `10.42.0.1`, DHCP handed to clients.
 - Change the SSID: `AIRPOC_AP_SSID=whatever ./install.sh` (before first install), or
   `nmcli connection modify AIRPOC-AP wifi.ssid whatever`.
