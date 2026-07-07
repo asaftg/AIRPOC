@@ -87,14 +87,27 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
             orow[ox] = (uint16_t)(cnt ? acc / cnt : 0);
         }
     }
-    /* Row-noise correction (destripe) — remove each row's fixed/temporal offset BEFORE
-     * the night stretch amplifies it into horizontal lines. The IMX296's row noise is
-     * only ~1 LSB, but a dark scene (signal a few LSB above black) gets stretched ~6x,
-     * turning that 1 LSB into visible banding. Each row's offset = the high-frequency
-     * part of its median (a boxcar low-pass over rows preserves the real vertical scene
-     * gradient); subtract it. Cost: one 10-bit histogram-median per row + a boxcar + one
-     * subtract per pixel — a few M ops/frame, negligible vs the encode. */
-    if (g_destripe && oh >= 8) {
+    /* p1/p99 percentile endpoints on the raw downscaled 10-bit — computed BEFORE the
+     * destripe because the span also GATES it: a wide p1..p99 means a bright, high-dynamic
+     * -range scene where banding is invisible anyway AND real horizontal structure would
+     * ghost, so the destripe must not run. p99 (not max) means a few small blown night
+     * lights don't widen the span — only a LARGE bright region does, which is exactly the
+     * ghost-prone daytime case we skip. */
+    int hist[1024] = {0}, nh = 0;
+    for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* subsample: percentiles don't need every px */
+    int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
+    int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
+    for (int v = 0; v < 1024; v++) {
+        a += hist[v];
+        if (!got_lo && a >= lo_t) { p_lo = v; got_lo = 1; }
+        if (a >= hi_t) { p_hi = v; break; }
+    }
+    /* Row-noise correction (destripe) — DARK scenes only (gated above). Row noise is ~1
+     * LSB, invisible until a dark scene's ~6x stretch turns it into horizontal lines. Each
+     * row's offset = the high-freq part of its median (a boxcar low-pass keeps the vertical
+     * scene gradient), clamped to +-EO_DESTRIPE_MAX so a real edge is never subtracted.
+     * Gate + clamp both bound it: it cannot ghost a scene. A few M ops/frame, negligible. */
+    if (g_destripe && (p_hi - p_lo) < EO_DESTRIPE_GATE && oh >= 8) {
         static float *rmed = NULL; static int rmed_cap = 0;
         if (oh > rmed_cap) { free(rmed); rmed = malloc((size_t)oh * sizeof(float)); rmed_cap = rmed ? oh : 0; }
         if (rmed) {
@@ -132,19 +145,9 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
             }
         }
     }
-    /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
-     * small blown streetlight; p1 sets a real black. Endpoints are EMA-smoothed across
-     * frames so the mapping doesn't wobble frame-to-frame (the "breathing"), and the
-     * span is floored so a flat/dim scene isn't blown up to full range (6x noise gain).*/
-    int hist[1024] = {0}, nh = 0;
-    for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* subsample: percentiles don't need every px */
-    int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
-    int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
-    for (int v = 0; v < 1024; v++) {
-        a += hist[v];
-        if (!got_lo && a >= lo_t) { p_lo = v; got_lo = 1; }
-        if (a >= hi_t) { p_hi = v; break; }
-    }
+    /* Endpoints are EMA-smoothed across frames so the mapping doesn't wobble frame-to-
+     * frame (the "breathing"), and the span is floored so a flat/dim scene isn't blown up
+     * to full range (6x noise gain). */
     static double s_lo = -1.0, s_hi = -1.0;
     if (s_lo < 0.0) { s_lo = p_lo; s_hi = p_hi; }      /* seed on first frame */
     s_lo = 0.85 * s_lo + 0.15 * p_lo;

@@ -49,6 +49,11 @@
                                         * tone-map will stretch to full range;
                                         * below this the scene is flat/dim and
                                         * stretching just amplifies noise 6x+ */
+#define EO_DESTRIPE_GATE 150           /* destripe runs only when p99-p1 span < this (10-bit).
+                                        * A wide span = bright hi-DR scene: banding invisible
+                                        * and real horizontal structure would ghost -> skip.
+                                        * p99 ignores small blown night lights, so night
+                                        * scenes (narrow span) still engage. */
 #define EO_DESTRIPE_MAX  3             /* max per-row correction (10-bit LSB). Row FPN is
                                         * ~1 LSB; a larger row-median residual is REAL
                                         * horizontal scene structure (a shelf, a window
