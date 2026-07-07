@@ -201,7 +201,7 @@ body.replay #replay-banner{display:flex}
   padding:2px 10px;font:inherit;font-size:11px;letter-spacing:1px;cursor:pointer}
 /* transport spans the bottom of the LEFT main view (left of the 30% right column), so it
  * stays in the same screen place whether EO or radar is the big panel */
-#transport{display:none;position:absolute;left:12px;right:calc(30% + 12px);bottom:12px;z-index:7;align-items:center;gap:10px;
+#transport{display:none;position:absolute;left:70px;right:calc(30% + 12px);bottom:12px;z-index:7;align-items:center;gap:10px;
   padding:8px 12px;background:rgba(10,11,13,.86);border:1px solid var(--bd);border-radius:6px}
 body.replay #transport{display:flex}
 body.replay #cluster,body.replay #eo-exp,body.replay .eo-exp{display:none}   /* zoombar stays: replay supports client-side digital zoom */
