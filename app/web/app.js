@@ -286,8 +286,9 @@
   /* View range: default 100 m; jump to 250 m once a target is beyond 100 m, and to
    * 500 m once one is beyond 250 m. Grow instantly, shrink only after a few quiet
    * frames so a one-frame drop doesn't make the scope pump. */
-  var viewRangeM = 100, shrinkCtr = 0, SHRINK_FRAMES = 25;
+  var viewRangeM = 100, shrinkCtr = 0, SHRINK_FRAMES = 25, radarRangeMode = "auto";
   function updateViewRange(radar) {
+    if (radarRangeMode !== "auto") { viewRangeM = radarRangeMode; return; }   /* fixed 50/100/250/500 m */
     var maxTR = 0;
     (radar && radar.targets || []).forEach(function (t) { var r = Math.hypot(t.x || 0, t.y || 0); if (r > maxTR) maxTR = r; });
     var want = maxTR > 250 ? 500 : (maxTR > 100 ? 250 : 100);
@@ -295,6 +296,13 @@
     else if (want < viewRangeM) { if (++shrinkCtr >= SHRINK_FRAMES) { viewRangeM = want; shrinkCtr = 0; } }
     else shrinkCtr = 0;
   }
+  document.querySelectorAll("#rrange [data-rng]").forEach(function (b) {
+    b.onclick = function () {
+      radarRangeMode = b.dataset.rng === "auto" ? "auto" : parseInt(b.dataset.rng, 10);
+      document.querySelectorAll("#rrange [data-rng]").forEach(function (x) { x.classList.toggle("on", x === b); });
+      updateViewRange(lastRadar); drawRadar(lastRadar);
+    };
+  });
 
   var radarGeom = null;
   function drawRadar(radar) {

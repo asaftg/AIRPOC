@@ -85,6 +85,14 @@ body.day{
 .hz{font-size:11px;color:var(--muted);margin-left:auto}
 .rwrap{position:relative;width:100%;background:var(--canvas)}   /* height set by JS (2:1) */
 #radar-cv{position:absolute;inset:0;width:100%;height:100%}
+/* radar range selector — AUTO (adaptive) + fixed 50/100/250/500 m, overlaid top-left */
+.rrange{position:absolute;top:6px;left:6px;z-index:2;display:flex;border:1px solid var(--bd3);
+  border-radius:3px;overflow:hidden;background:rgba(10,12,16,.72)}
+.rrange button{background:transparent;border:0;border-right:1px solid var(--bd3);color:var(--muted);
+  font:inherit;font-size:10px;letter-spacing:.5px;padding:3px 7px;cursor:pointer}
+.rrange button:last-child{border-right:0}
+.rrange button:hover{color:var(--fg)}
+.rrange button.on{background:var(--amber);color:var(--bg)}
 
 /* ── target list ── */
 #tgt-list{list-style:none;margin:0;padding:5px;flex:0 0 auto}
