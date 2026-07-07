@@ -58,11 +58,66 @@
   });
   /* click the zoomed replay image to recenter the zoom on that point */
   $("video").addEventListener("click", function (e) {
-    if (!replaying || replayZoom <= 1) return;
+    if (roiArm || !replaying || replayZoom <= 1) return;
     var r = this.getBoundingClientRect();
     this.style.transformOrigin = ((e.clientX - r.left) / r.width * 100).toFixed(1) + "% "
                                + ((e.clientY - r.top) / r.height * 100).toFixed(1) + "%";
   });
+
+  /* ── ROI zoom — press ROI, drag a box on the EO or radar, it zooms there; press again to
+   * reset. EO = CSS scale on the frame; radar = a pan+zoom world window (drawRadar). Works
+   * live and in replay. ── */
+  var roiArm = false, radarROI = null, eoROI = false, roiDrag = null;
+  function setRoiUI() {
+    $("roibtn").classList.toggle("on", roiArm || !!radarROI || eoROI);
+    document.body.classList.toggle("roiarm", roiArm);
+  }
+  function clearROI() {
+    radarROI = null; eoROI = false; roiArm = false;
+    $("video").style.transform = ""; $("video").style.transformOrigin = "center";
+    if (replaying) applyReplayZoom();               /* restore any replay zoom level */
+    setRoiUI(); drawRadar(lastRadar);
+  }
+  $("roibtn").onclick = function () {
+    if (roiArm) { roiArm = false; setRoiUI(); return; }       /* cancel arm */
+    if (radarROI || eoROI) { clearROI(); return; }            /* reset to full view */
+    roiArm = true; setRoiUI();                                /* arm: draw a box next */
+  };
+  function roiMove(e) {
+    if (!roiDrag) return;
+    var b = $("roibox"), x = Math.min(e.clientX, roiDrag.x0), y = Math.min(e.clientY, roiDrag.y0);
+    b.style.left = x + "px"; b.style.top = y + "px";
+    b.style.width = Math.abs(e.clientX - roiDrag.x0) + "px"; b.style.height = Math.abs(e.clientY - roiDrag.y0) + "px";
+  }
+  function roiStart(el, which, e) {
+    if (!roiArm || e.button !== 0) return;
+    roiDrag = { which: which, r: el.getBoundingClientRect(), x0: e.clientX, y0: e.clientY };
+    $("roibox").style.display = "block"; roiMove(e); e.preventDefault();
+  }
+  function roiEnd(e) {
+    if (!roiDrag) return;
+    var d = roiDrag; roiDrag = null; $("roibox").style.display = "none";
+    var bw = Math.abs(e.clientX - d.x0), bh = Math.abs(e.clientY - d.y0), r = d.r;
+    roiArm = false;
+    if (bw >= 14 && bh >= 14) {
+      var bx0 = Math.min(e.clientX, d.x0) - r.left, by0 = Math.min(e.clientY, d.y0) - r.top;
+      if (d.which === "eo") {
+        var sc = Math.min(r.width / bw, r.height / bh), v = $("video");
+        v.style.transformOrigin = ((bx0 + bw / 2) / r.width * 100).toFixed(1) + "% " + ((by0 + bh / 2) / r.height * 100).toFixed(1) + "%";
+        v.style.transform = "scale(" + sc.toFixed(3) + ")"; eoROI = true;
+      } else if (radarGeom) {
+        var g = radarGeom, toW = function (sx, sy) { return [(sx - g.cx) / g.scale, (g.cy - sy) / g.scale]; };
+        var c1 = toW(bx0 * g.dpr, by0 * g.dpr), c2 = toW((bx0 + bw) * g.dpr, (by0 + bh) * g.dpr);
+        radarROI = { x0: Math.min(c1[0], c2[0]), x1: Math.max(c1[0], c2[0]), y0: Math.min(c1[1], c2[1]), y1: Math.max(c1[1], c2[1]) };
+        drawRadar(lastRadar);
+      }
+    }
+    setRoiUI();
+  }
+  $("eo").addEventListener("mousedown", function (e) { roiStart($("eo"), "eo", e); });
+  $("radar-cv").parentElement.addEventListener("mousedown", function (e) { roiStart($("radar-cv").parentElement, "radar", e); });
+  window.addEventListener("mousemove", roiMove);
+  window.addEventListener("mouseup", roiEnd);
 
   /* ── tracking mode ── */
   function setTrack(m) {
@@ -315,19 +370,42 @@
     else rw.style.height = Math.round(rw.clientWidth / 2) + "px";
     var f = fit($("radar-cv")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
     ctx.clearRect(0, 0, w, h);
-    var cx = w / 2, cy = h - 10 * dpr, maxR = Math.max(20, Math.min(h - 16 * dpr, w / 2 - 6 * dpr));
+    var maxR0 = Math.max(20, Math.min(h - 16 * dpr, w / 2 - 6 * dpr));
     var dim = css("--dim");
-    var scale = maxR / Math.max(viewRangeM, 1), W2C = function (x, y) { return [cx + x * scale, cy - y * scale]; };
+    /* view mapping. default = forward half-circle from bottom-centre. radarROI (a drawn
+     * world rectangle) pans+zooms: cx,cy = screen pos of the radar origin (0,0). */
+    var cx, cy, scale, Reff;
+    if (radarROI) {
+      var rww = Math.max(radarROI.x1 - radarROI.x0, 1), rhh = Math.max(radarROI.y1 - radarROI.y0, 1);
+      scale = Math.min((w - 8 * dpr) / rww, (h - 8 * dpr) / rhh);
+      var mx = (radarROI.x0 + radarROI.x1) / 2, my = (radarROI.y0 + radarROI.y1) / 2;
+      cx = w / 2 - mx * scale; cy = h / 2 + my * scale;
+      Reff = Math.max(Math.hypot(radarROI.x0, radarROI.y0), Math.hypot(radarROI.x1, radarROI.y1),
+                      Math.hypot(radarROI.x0, radarROI.y1), Math.hypot(radarROI.x1, radarROI.y0));
+    } else {
+      cx = w / 2; cy = h - 10 * dpr; scale = maxR0 / Math.max(viewRangeM, 1); Reff = viewRangeM;
+    }
+    var maxR = radarROI ? Math.hypot(w, h) : maxR0;                 /* wedge/boresight ray length */
+    var W2C = function (x, y) { return [cx + x * scale, cy - y * scale]; };
     ctx.font = (11 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "left";
 
-    /* rings + labels (100 m ring shown amber when it lands on a ring) */
-    for (var i = 1; i <= 4; i++) {
-      var ringM = viewRangeM * i / 4, ref = Math.abs(ringM - 100) < 0.5;
-      ctx.strokeStyle = ref ? "rgba(193,161,115,0.6)" : "rgba(150,157,168,0.16)"; ctx.lineWidth = (ref ? 1.4 : 1) * dpr;
-      ctx.beginPath(); ctx.arc(cx, cy, maxR * i / 4, Math.PI, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = ref ? "rgba(216,189,144,0.9)" : "rgba(170,175,185,0.55)";
-      ctx.fillText(ringM.toFixed(0) + " m", cx + 5 * dpr, cy - maxR * i / 4 + 13 * dpr);
+    /* range grid — grey rings at a nice metric step, metre-labelled */
+    var step = [10, 25, 50, 100, 250, 500, 1000].filter(function (s) { return s >= Reff / 4.5; })[0] || 1000;
+    for (var rm = step; rm <= Reff * 1.02; rm += step) {
+      var gr = rm * scale;
+      ctx.strokeStyle = "rgba(150,157,168,0.16)"; ctx.lineWidth = 1 * dpr;
+      ctx.beginPath(); ctx.arc(cx, cy, gr, Math.PI, 2 * Math.PI); ctx.stroke();
+      ctx.fillStyle = "rgba(170,175,185,0.55)"; ctx.fillText(rm + " m", cx + 5 * dpr, cy - gr + 13 * dpr);
     }
+    /* constant amber reference rings at 100 m + 250 m on every zoom (when in range) */
+    [100, 250].forEach(function (m) {
+      if (m > Reff * 1.02) return;
+      var rr = m * scale;
+      ctx.strokeStyle = "rgba(193,161,115,0.65)"; ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath(); ctx.arc(cx, cy, rr, Math.PI, 2 * Math.PI); ctx.stroke();
+      ctx.fillStyle = "rgba(216,189,144,0.95)"; ctx.textAlign = "right";
+      ctx.fillText(m + " m", cx - 6 * dpr, cy - rr + 13 * dpr); ctx.textAlign = "left";
+    });
     /* FOV wedge from the daemon's live fov_half_deg (tracks the FOV knob) + boresight */
     var fovDeg = (radar && typeof radar.fov_half_deg === "number") ? radar.fov_half_deg : 90;
     var fr = fovDeg * Math.PI / 180;
@@ -378,7 +456,7 @@
 
   /* ── manual selection: tap the EO (project click az) or the radar target ── */
   $("eo").addEventListener("click", function (e) {
-    if (trackMode !== "man" || e.target.closest("#cluster") || e.target.closest("#zoombar")) return;
+    if (roiArm || trackMode !== "man" || e.target.closest("#cluster") || e.target.closest("#zoombar")) return;
     var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
     var ts = targets(lastRadar); if (!ts.length || !eoHfov) return;
     var r = this.getBoundingClientRect(), frac = (e.clientX - r.left) / r.width - 0.5;
@@ -386,7 +464,7 @@
     engage(ts.slice().sort(function (a, b) { return Math.abs(a.az - azClick) - Math.abs(b.az - azClick); })[0].tid);
   });
   $("radar-cv").addEventListener("click", function (e) {
-    if (trackMode !== "man" || !radarGeom) return;
+    if (roiArm || trackMode !== "man" || !radarGeom) return;
     var r = this.getBoundingClientRect(), g = radarGeom;
     var px = (e.clientX - r.left) * (this.width / r.width), py = (e.clientY - r.top) * (this.height / r.height);
     var best = null, bd = 1e9;
@@ -688,7 +766,7 @@
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
-      resetReplayZoom(); setZoomLabel();
+      resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
       replayHasEO = !!(s.bytes && ((s.bytes.display > 0) || (s.bytes.native > 0)));
@@ -714,7 +792,7 @@
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
     openRadarStream();                                   /* resume the live radar push */
-    resetReplayZoom(); setZoomLabel();
+    resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
     $("library").hidden = false; loadLibrary();
   }
   $("rb-close").onclick = closeReplay;
