@@ -116,9 +116,12 @@ body.day{
 #stage.rbig .rwrap{flex:1 1 auto;min-height:0}
 #stage.rbig #eo{position:absolute;left:auto;top:auto;right:0;bottom:0;width:30%;aspect-ratio:4/3;
   z-index:4;border:1px solid var(--bd);border-radius:4px;overflow:hidden}
-/* radar-big + DEV: the EO PIP sits bottom-right where the DEV drawer opens; hide it while
- * DEV is open so the drawer doesn't half-cover it (the big radar view stays on the left). */
-#stage.rbig.devopen #eo{display:none}
+/* radar-big + DEV: the radar/EO are absolute here so an in-flow DEV column would open UNDER
+ * the radar. Mimic the normal push instead — DEV takes the right 400px, the radar shrinks
+ * and the EO PIP shifts left to make room (EO stays visible, nothing is eliminated). */
+#stage.rbig #dev{position:absolute;top:0;right:0;bottom:0;z-index:20;align-self:auto}
+#stage.rbig.devopen #radar{right:calc(30% + 400px)}
+#stage.rbig.devopen #eo{right:400px}
 
 /* ── bottom cluster: pinned to the bottom-centre of the EO panel ── */
 #cluster{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:8px;
@@ -150,10 +153,10 @@ body.day{
 #v-zval{width:46px;height:26px;display:flex;align-items:center;justify-content:center;
   color:var(--amber);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd);font-size:12px;font-weight:600}
 
-/* ── DEV panel ── a right-edge overlay DRAWER (absolute, above everything) that slides in
- * without pushing/reflowing the EO + radar — same behaviour whether radar is small or big.
- * The inner body is fixed-width so content doesn't reflow while it animates. */
-#dev{position:absolute;top:0;right:0;bottom:0;width:0;overflow:hidden;transition:width .16s;z-index:20}
+/* ── DEV panel ── an in-flow column on the RIGHT that expands to push (squeeze) the EO +
+ * radar/targets to the left. The inner body is fixed-width so content doesn't reflow while
+ * it animates. (radar-big mimics this push via #stage.rbig rules — see above.) */
+#dev{flex:0 0 auto;width:0;overflow:hidden;transition:width .16s;align-self:stretch}
 #dev.open{width:400px}
 #dev-body{width:400px;height:100%;padding:12px 14px;overflow-y:auto;
   background:var(--panel);border-left:1px solid var(--bd)}
@@ -307,8 +310,9 @@ body.replay #dev #devclose,body.replay #dev #to-control{pointer-events:auto;opac
   .exp{width:36px;height:36px}
 
   /* DEV — full-screen overlay, touch-size rows/sliders/segmented buttons */
-  #dev{position:fixed;inset:0;z-index:30;width:0}
+  #dev,#stage.rbig #dev{position:fixed;inset:0;z-index:30;width:0}
   #dev.open{width:100vw}
+  #stage.rbig.devopen #radar,#stage.rbig.devopen #eo{right:0}
   #dev-body{width:100vw;padding:14px 16px}
   #devclose{font-size:26px;line-height:1;padding:2px 8px}
   .srow{grid-template-columns:72px 1fr 54px;gap:10px;padding:8px 0}
