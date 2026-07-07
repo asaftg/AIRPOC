@@ -16,7 +16,6 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-#define MAX_SEGS 64
 #define MAX_EVS  65536
 
 typedef struct { uint8_t *map; size_t len; } Seg;
@@ -25,7 +24,7 @@ typedef struct {
     AirecIdxRow *rows;
     int64_t *t_ms;                       /* per row, session-relative */
     long n;
-    Seg segs[MAX_SEGS];
+    Seg *segs;                           /* dynamic: a long recording has 100s of segments */
     int nsegs;
 } RChan;
 
@@ -93,6 +92,7 @@ static void rchan_free(RChan *c)
     free(c->rows); free(c->t_ms);
     for (int i = 0; i < c->nsegs; i++)
         if (c->segs[i].map) munmap(c->segs[i].map, c->segs[i].len);
+    free(c->segs);
     memset(c, 0, sizeof *c);
 }
 
@@ -115,19 +115,27 @@ static int rchan_load(const char *dir, const char *name, RChan *c, uint64_t *t0_
     }
     fclose(f);
 
-    for (int s = 0; s < MAX_SEGS; s++) {
+    /* segment count = highest segment_no in the index + 1 (a long recording has
+     * hundreds of 256 MiB segments — must map them ALL or replay truncates) */
+    int nseg = 0;
+    for (long i = 0; i < c->n; i++)
+        if ((int)c->rows[i].segment_no + 1 > nseg) nseg = c->rows[i].segment_no + 1;
+    c->segs = calloc((size_t)nseg, sizeof(Seg));
+    if (!c->segs) { rchan_free(c); return -1; }
+
+    for (int s = 0; s < nseg; s++) {
         snprintf(path, sizeof path, "%s/%s/data.%05d.airec", dir, name, s);
         int fd = open(path, O_RDONLY);
-        if (fd < 0) break;
+        if (fd < 0) continue;                /* a hole shouldn't happen; skip gracefully */
         struct stat st;
         fstat(fd, &st);
         c->segs[s].len = (size_t)st.st_size;
         c->segs[s].map = mmap(NULL, c->segs[s].len, PROT_READ, MAP_SHARED, fd, 0);
         close(fd);
-        if (c->segs[s].map == MAP_FAILED) { c->segs[s].map = NULL; break; }
+        if (c->segs[s].map == MAP_FAILED) c->segs[s].map = NULL;
         c->nsegs = s + 1;
     }
-    if (!c->nsegs) { rchan_free(c); return -1; }
+    if (!c->nsegs || !c->segs[0].map) { rchan_free(c); return -1; }
 
     uint64_t t0 = ((AirecSegHdr *)c->segs[0].map)->session_t0_mono_ns;
     if (t0_out) *t0_out = t0;

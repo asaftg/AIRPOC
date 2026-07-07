@@ -103,28 +103,29 @@ static int build_mp4(const char *sid, volatile int *pct)
     uint8_t *out8 = malloc((size_t)w * h);
     uint8_t *raw = malloc((size_t)w * h * 2);
     EoToneState st = { 0, 0, 0 };
-    FILE *segs[64] = { 0 };
+    FILE *cur = NULL; uint32_t cur_seg = 0xffffffff;   /* one segment open at a time */
     int ok = out8 && raw;
 
+    /* frames are stored in segment order, so a single rolling file handle covers
+     * ANY number of segments (no fixed cap that would truncate long recordings) */
     for (long i = 0; i < n && ok; i++) {
         AirecIdxRow *r = &rows[i];
-        if (r->segment_no >= 64) continue;
-        if (!segs[r->segment_no]) {
+        if (r->segment_no != cur_seg) {
+            if (cur) fclose(cur);
             char sp[720];
             snprintf(sp, sizeof sp, "%s/eo_y10/data.%05u.airec", dir, r->segment_no);
-            segs[r->segment_no] = fopen(sp, "rb");
-            if (!segs[r->segment_no]) { ok = 0; break; }
+            cur = fopen(sp, "rb"); cur_seg = r->segment_no;
+            if (!cur) { ok = 0; break; }
         }
-        FILE *sf = segs[r->segment_no];
-        if (fseek(sf, (long)r->offset + (long)sizeof(AirecRecHdr), SEEK_SET) != 0 ||
+        if (fseek(cur, (long)r->offset + (long)sizeof(AirecRecHdr), SEEK_SET) != 0 ||
             r->payload_len > (uint32_t)w * h * 2 ||
-            fread(raw, 1, r->payload_len, sf) != r->payload_len) continue;
+            fread(raw, 1, r->payload_len, cur) != r->payload_len) continue;
 
         if (render_native_gray8(raw, r->payload_len, w, h, mode, 0, &st, i == 0, out8) == 0)
             if (fwrite(out8, 1, (size_t)w * h, ff) != (size_t)w * h) { ok = 0; break; }
         if (pct) *pct = (int)((i + 1) * 100 / n);
     }
-    for (int s = 0; s < 64; s++) if (segs[s]) fclose(segs[s]);
+    if (cur) fclose(cur);
     free(out8); free(raw); free(rows);
     int rc = pclose(ff);
 

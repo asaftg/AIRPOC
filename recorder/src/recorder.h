@@ -124,6 +124,8 @@ typedef struct Chan {
     uint64_t records, bytes, drops_ring, drops_queue, next_seq_out;
     double   mb_s;                        /* EMA, /stats */
     uint64_t ema_bytes, ema_t_ns;
+    uint64_t last_rec_ns;                /* when the last frame was recorded (loss watchdog) */
+    int      lost;                       /* channel stopped producing mid-recording */
     /* threads */
     pthread_t drain_tid, write_tid;
 } Chan;

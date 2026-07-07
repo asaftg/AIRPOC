@@ -154,6 +154,7 @@ static void frame_commit(Chan *c, AirecRecHdr *h, uint32_t payload_len,
     k->used += sizeof *h + padded;
     c->records++;
     c->bytes += sizeof *h + padded;
+    c->last_rec_ns = now_ns();           /* loss watchdog */
 }
 
 /* ---- heavy drain thread ---- */
@@ -335,6 +336,7 @@ void chan_submit(ChanId id, const void *payload, uint32_t len,
             c->seg_used += sizeof h + padded;
             c->records++;
             c->bytes += sizeof h + padded;
+            c->last_rec_ns = now_ns();       /* loss watchdog */
         }
     }
     pthread_mutex_unlock(&c->small_lk);
@@ -442,6 +444,7 @@ int chan_session_open(Chan *c, const char *dir, uint64_t t0_mono_ns)
 
     c->records = c->bytes = c->drops_ring = c->drops_queue = 0;
     c->mb_s = 0; c->ema_bytes = 0; c->ema_t_ns = 0;
+    c->last_rec_ns = 0; c->lost = 0;
     c->seg_no = 0; c->seg_used = 0;
     c->fill = NULL;
     c->q_head = c->q_tail = 0;
