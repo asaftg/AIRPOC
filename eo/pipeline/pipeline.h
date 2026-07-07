@@ -126,9 +126,11 @@ void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, in
                          uint8_t *out8, int ow, int oh);
 /* In-place edge-preserving 3x3 median on an 8-bit plane — cheap low-light grain filter. */
 void   isp_median3(uint8_t *img, int w, int h);
-/* Row-noise correction (destripe) inside isp_scale_tonemap; on by default. Bench A/B. */
+/* Row-noise correction (destripe) inside isp_scale_tonemap; on by default, gated to dark
+ * scenes. isp_destripe_active() = whether the gate actually ran it on the last frame. */
 void   isp_set_destripe(int on);
 int    isp_destripe_on(void);
+int    isp_destripe_active(void);
 
 /* ---- Wire-feed tuning. The display stream is one of four operator-selected 4:3
  * sizes (below); the DETECTOR always keeps the full-native frame. Two bandwidth

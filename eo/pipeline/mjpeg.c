@@ -298,14 +298,14 @@ static void *client(void *arg)
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
             "\"prod\":%llu,\"drop\":%llu,\"pub\":%llu,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
-            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"destripe\":%d,\"connected\":%d,"
+            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"destripe\":%d,\"ds_active\":%d,\"connected\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             wfps, st.mean, st.exp_ms, st.duty_pct, st.gain,
             st.sfps, st.sfps,
             (unsigned long long)c_prod, (unsigned long long)c_drop, (unsigned long long)c_pub,
             z, hf, vf, st.focus,
-            st.ae_on, st.gaincap, st.median, isp_destripe_on(), st.connected,
+            st.ae_on, st.gaincap, st.median, isp_destripe_on(), isp_destripe_active(), st.connected,
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"

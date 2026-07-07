@@ -15,9 +15,11 @@
 
 static uint8_t g_lut[256];
 static int     g_lut_ready = 0;
-static volatile int g_destripe = 1;   /* row-noise correction on by default */
+static volatile int g_destripe = 1;   /* row-noise correction enabled (gated to dark scenes) */
+static volatile int g_ds_active = 0;  /* did the gate actually run it on the last frame? */
 void isp_set_destripe(int on) { g_destripe = on ? 1 : 0; }
 int  isp_destripe_on(void)    { return g_destripe; }
+int  isp_destripe_active(void){ return g_ds_active; }
 static void lut_init(void)
 {
     for (int i = 0; i < 256; i++) {
@@ -107,7 +109,8 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
      * row's offset = the high-freq part of its median (a boxcar low-pass keeps the vertical
      * scene gradient), clamped to +-EO_DESTRIPE_MAX so a real edge is never subtracted.
      * Gate + clamp both bound it: it cannot ghost a scene. A few M ops/frame, negligible. */
-    if (g_destripe && (p_hi - p_lo) < EO_DESTRIPE_GATE && oh >= 8) {
+    g_ds_active = (g_destripe && (p_hi - p_lo) < EO_DESTRIPE_GATE && oh >= 8);
+    if (g_ds_active) {
         static float *rmed = NULL; static int rmed_cap = 0;
         if (oh > rmed_cap) { free(rmed); rmed = malloc((size_t)oh * sizeof(float)); rmed_cap = rmed ? oh : 0; }
         if (rmed) {
