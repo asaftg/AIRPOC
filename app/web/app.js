@@ -159,6 +159,7 @@
   RADARC.forEach(function (c) {
     $("rd-" + c.key).oninput = function () { $("rv-" + c.key).textContent = c.fmt(parseFloat(this.value)); rcTouch = Date.now(); ctl("radar_" + c.key + "=" + this.value); };
   });
+  setTimeout(function () { if (!replaying) { rcTouch = Date.now(); ctl("radar_fov=60"); } }, 900);   /* default the radar FOV to ±60° on load */
   function pollRstats() {
     fetch(API.rstats).then(function (r) { return r.json(); }).then(function (d) {
       if (Date.now() - rcTouch < 1500) return;   /* don't fight an active drag */
@@ -330,6 +331,7 @@
     /* FOV wedge from the daemon's live fov_half_deg (tracks the FOV knob) + boresight */
     var fovDeg = (radar && typeof radar.fov_half_deg === "number") ? radar.fov_half_deg : 90;
     var fr = fovDeg * Math.PI / 180;
+    var inFov = function (x, y) { return Math.abs(Math.atan2(x, y)) <= fr; };   /* azimuth within ±FOV */
     ctx.fillStyle = "rgba(150,157,168,0.06)"; ctx.beginPath(); ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, maxR, -Math.PI / 2 - fr, -Math.PI / 2 + fr, false); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = "rgba(150,157,168,0.24)"; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
@@ -343,6 +345,7 @@
 
     /* raw returns — already gated server-side by the daemon (snr/speed/fov). v = +approaching */
     (radar.points || []).forEach(function (p) {
+      if (!inFov(p.x, p.y)) return;                 /* don't draw returns outside the FOV */
       var pc = W2C(p.x, p.y);
       ctx.fillStyle = pointStyle(p.v, p.snr);
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
@@ -354,6 +357,7 @@
     Object.keys(held).forEach(function (tid) {
       var hh = held[tid], t = hh.t, fade = Math.max(0, 1 - (now - hh.ts) / HOLD_MS);
       if (fade <= 0.02) return;
+      if (!inFov(t.x, t.y)) return;                 /* hide targets outside the FOV */
       var tc = W2C(t.x, t.y), locked = (t.tid === engagedTid);
       var col = locked ? css("--on") : tcolor(t.tid);
       var wpx = Math.max(6 * dpr, 2 * t.sx * scale), hpx = Math.max(6 * dpr, 2 * t.sy * scale);
