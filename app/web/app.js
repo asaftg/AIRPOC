@@ -33,14 +33,35 @@
   /* ── zoom ── the EO feed owns digital zoom; we forward zoom=N and drive the readout
    * optimistically. poll() reconciles from eo.zoom but is guarded for ~1.2s after a tap
    * so a slightly-stale /stats can't snap the label back mid-interaction. ── */
-  var zoomTouch = 0;
-  function setZoomLabel() { $("v-zval").textContent = zoom.toFixed(1) + "×"; }
+  var zoomTouch = 0, replayZoom = 1;
+  function setZoomLabel() { $("v-zval").textContent = (replaying ? replayZoom : zoom).toFixed(1) + "×"; }
+  /* replay has no live feed to crop, so zoom is a client-side digital zoom (CSS scale) on
+   * the recorded frame — you can magnify even though it was recorded at 1x. */
+  function applyReplayZoom() {
+    var v = $("video");
+    v.style.transform = replayZoom > 1 ? "scale(" + replayZoom + ")" : "";
+    if (replayZoom <= 1) v.style.transformOrigin = "center";
+    setZoomLabel();
+  }
+  function resetReplayZoom() { replayZoom = 1; var v = $("video"); v.style.transform = ""; v.style.transformOrigin = "center"; }
   document.querySelectorAll("[data-zoom]").forEach(function (b) {
     b.onclick = function () {
+      if (replaying) {
+        var ri = ZOOMS.indexOf(replayZoom) + parseInt(b.dataset.zoom, 10);
+        if (ri < 0 || ri >= ZOOMS.length) return;
+        replayZoom = ZOOMS[ri]; applyReplayZoom(); return;
+      }
       var i = ZOOMS.indexOf(zoom) + parseInt(b.dataset.zoom, 10);
       if (i < 0 || i >= ZOOMS.length) return;
       zoom = ZOOMS[i]; zoomTouch = Date.now(); ctl("zoom=" + zoom); setZoomLabel();
     };
+  });
+  /* click the zoomed replay image to recenter the zoom on that point */
+  $("video").addEventListener("click", function (e) {
+    if (!replaying || replayZoom <= 1) return;
+    var r = this.getBoundingClientRect();
+    this.style.transformOrigin = ((e.clientX - r.left) / r.width * 100).toFixed(1) + "% "
+                               + ((e.clientY - r.top) / r.height * 100).toFixed(1) + "%";
   });
 
   /* ── tracking mode ── */
@@ -655,6 +676,7 @@
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
+      resetReplayZoom(); setZoomLabel();
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
       replayHasEO = !!(s.bytes && ((s.bytes.display > 0) || (s.bytes.native > 0)));
@@ -680,6 +702,7 @@
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
     openRadarStream();                                   /* resume the live radar push */
+    resetReplayZoom(); setZoomLabel();
     $("library").hidden = false; loadLibrary();
   }
   $("rb-close").onclick = closeReplay;
