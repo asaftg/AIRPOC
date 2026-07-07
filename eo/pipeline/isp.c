@@ -113,7 +113,11 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
             for (int y = 0; y < oh; y++) {
                 int a0 = y - R, b0 = y + R; if (a0 < 0) a0 = 0; if (b0 >= oh) b0 = oh - 1;
                 float s = 0; for (int k = a0; k <= b0; k++) s += rmed[k];
+                /* clamp: a large row-median residual is real horizontal scene structure,
+                 * not the ~1 LSB row FPN — never subtract it (that ghosts the scene). */
                 int off = (int)lround(rmed[y] - s / (b0 - a0 + 1));
+                if (off >  EO_DESTRIPE_MAX) off =  EO_DESTRIPE_MAX;
+                if (off < -EO_DESTRIPE_MAX) off = -EO_DESTRIPE_MAX;
                 if (!off) continue;
                 uint16_t *r = sm + (size_t)y * ow;
                 int x = 0;

@@ -49,6 +49,13 @@
                                         * tone-map will stretch to full range;
                                         * below this the scene is flat/dim and
                                         * stretching just amplifies noise 6x+ */
+#define EO_DESTRIPE_MAX  3             /* max per-row correction (10-bit LSB). Row FPN is
+                                        * ~1 LSB; a larger row-median residual is REAL
+                                        * horizontal scene structure (a shelf, a window
+                                        * edge), not noise — clamping here guarantees the
+                                        * destripe can never subtract scene => no ghost
+                                        * bands, while still killing the small night FPN.
+                                        * <=3 LSB is <1 LSB in 8-bit: invisible by design. */
 
 /* duty = exposure_time / frame_time = exposure_lines / VMAX  (== NIR strobe duty) */
 #define EO_DUTY_PCT(exp_lines, vmax)  (100.0 * (exp_lines) / (double)(vmax))
