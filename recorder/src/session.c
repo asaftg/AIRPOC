@@ -497,11 +497,11 @@ void session_stats_json(char *buf, size_t len)
         Chan *c = &g_chan[i];
         o += (size_t)snprintf(buf + o, len - o,
             "%s{\"name\":\"%s\",\"connected\":%d,\"records\":%llu,\"bytes\":%llu,"
-            "\"mb_s\":%.1f,\"drops_ring\":%llu,\"drops_queue\":%llu}",
+            "\"mb_s\":%.1f,\"drops_ring\":%llu,\"drops_queue\":%llu,\"lost\":%d}",
             i ? "," : "", c->cfg->name,
             c->cfg->tap ? c->sub_ok : 1,
             (unsigned long long)c->records, (unsigned long long)c->bytes, c->mb_s,
-            (unsigned long long)c->drops_ring, (unsigned long long)c->drops_queue);
+            (unsigned long long)c->drops_ring, (unsigned long long)c->drops_queue, c->lost);
     }
     snprintf(buf + o, len - o, "]}\n");
 }

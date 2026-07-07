@@ -392,6 +392,31 @@ static void *housekeeper(void *arg)
                 c->mb_s = c->mb_s ? 0.7 * c->mb_s + 0.3 * inst : inst;
             }
             c->ema_bytes = b; c->ema_t_ns = t;
+
+            /* loss watchdog: a tap-fed channel that WAS producing but has gone
+             * silent >2 s mid-recording means the live feed died under us (e.g.
+             * the producer's shm tap vanished). Never let that be silent. */
+            if (c->cfg->tap && chan_recording() && c->records > 0 && c->last_rec_ns) {
+                if (!c->lost && t - c->last_rec_ns > 2000000000ull) {
+                    c->lost = 1;
+                    char ev[192];
+                    int n = snprintf(ev, sizeof ev,
+                        "{\"type\":\"channel_lost\",\"channel\":\"%s\",\"t_mono_ns\":%llu,"
+                        "\"last_frame_mono_ns\":%llu}", c->cfg->name,
+                        (unsigned long long)t, (unsigned long long)c->last_rec_ns);
+                    chan_submit(CH_EVENTS, ev, (uint32_t)n, t, NULL);
+                    fprintf(stderr, "rec: FEED LOST mid-recording: %s (no frames for %.1fs)\n",
+                            c->cfg->name, (t - c->last_rec_ns) / 1e9);
+                } else if (c->lost && t - c->last_rec_ns < 1000000000ull) {
+                    c->lost = 0;
+                    char ev[160];
+                    int n = snprintf(ev, sizeof ev,
+                        "{\"type\":\"channel_resumed\",\"channel\":\"%s\",\"t_mono_ns\":%llu}",
+                        c->cfg->name, (unsigned long long)t);
+                    chan_submit(CH_EVENTS, ev, (uint32_t)n, t, NULL);
+                    fprintf(stderr, "rec: feed resumed: %s\n", c->cfg->name);
+                }
+            }
         }
     }
     return NULL;
