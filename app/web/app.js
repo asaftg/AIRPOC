@@ -359,6 +359,12 @@
 
   /* ── canvas ── */
   function fit(cv) { var r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1; cv.width = Math.max(1, r.width * dpr | 0); cv.height = Math.max(1, r.height * dpr | 0); return { ctx: cv.getContext("2d"), w: cv.width, h: cv.height, dpr: dpr }; }
+  /* dark halo under on-video labels — thin text survives bright sky and dark bush alike
+   * (the standard OSD treatment; the marks get the same via a two-pass stroke) */
+  function haloText(ctx, txt, x, y, col, dpr) {
+    ctx.save(); ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.lineWidth = 3 * dpr; ctx.lineJoin = "round";
+    ctx.strokeText(txt, x, y); ctx.fillStyle = col; ctx.fillText(txt, x, y); ctx.restore();
+  }
 
   function drawEO() {
     var f = fit($("eo-ovl")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
@@ -391,14 +397,22 @@
         var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
         if (Math.abs(fx) > 1 || Math.abs(fy) > 1) return;      /* off-frame → not drawn */
         var lx = vx2 + (fx + 1) / 2 * vw2, ly = vy2 + (fy + 1) / 2 * vh2;
-        /* fixed-size ring + centre dot — the tracker's size estimates (sx/sy) jitter
-         * frame-to-frame, so size-coding made the marks pulse; position is stable.
-         * No engaged/LOCK styling: tracking isn't a thing yet — all marks are equal. */
-        var col = tcolor(t.tid), rr = 14 * dpr;
-        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.4 * dpr;
-        ctx.beginPath(); ctx.arc(lx, ly, rr, 0, 2 * Math.PI); ctx.stroke();
-        ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
-        ctx.fillText("R#" + t.tid + " " + t.rng.toFixed(0) + " m", lx + rr + 4 * dpr, ly - 4 * dpr);
+        /* BROKEN RING (fixed size) — four arcs with cardinal gaps over a dark halo, so
+         * the mark reads over bright sky and dark bush alike. Fixed size on purpose:
+         * the tracker's sx/sy estimates jitter, size-coding pulsed. No engaged/LOCK
+         * styling: tracking isn't a phase yet — all marks are equal. */
+        var col = tcolor(t.tid), rr = 14 * dpr, gp = 0.42;
+        [["rgba(0,0,0,0.85)", 5 * dpr], [col, 2.6 * dpr]].forEach(function (s) {
+          ctx.strokeStyle = s[0]; ctx.lineWidth = s[1]; ctx.lineCap = "round";
+          for (var k = 0; k < 4; k++) {
+            var a0 = k * Math.PI / 2 + gp, a1 = (k + 1) * Math.PI / 2 - gp;
+            ctx.beginPath(); ctx.arc(lx, ly, rr, a0, a1); ctx.stroke();
+          }
+        });
+        ctx.lineCap = "butt";
+        ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.beginPath(); ctx.arc(lx, ly, 3 * dpr, 0, 2 * Math.PI); ctx.fill();
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
+        haloText(ctx, "R#" + t.tid + " " + t.rng.toFixed(0) + " m", lx + rr + 5 * dpr, ly - 5 * dpr, col, dpr);
       });
     }
 
@@ -423,20 +437,26 @@
         var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
         var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
         if (bx + bw2 / 2 < vx || bx - bw2 / 2 > vx + vw || by + bh2 / 2 < vy || by - bh2 / 2 > vy + vh) return;
-        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.6 * dpr;
-        ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
         if (detStyle === "seeker") {
-          /* terminal-seeker mark: a small cross with a gap on the target centroid */
-          var a = 9 * dpr, g = 3 * dpr;
-          ctx.beginPath();
-          ctx.moveTo(bx - a, by); ctx.lineTo(bx - g, by); ctx.moveTo(bx + g, by); ctx.lineTo(bx + a, by);
-          ctx.moveTo(bx, by - a); ctx.lineTo(bx, by - g); ctx.moveTo(bx, by + g); ctx.lineTo(bx, by + a);
-          ctx.stroke(); ctx.setLineDash([]);
-          ctx.fillText(label, bx + a + 3 * dpr, by - 4 * dpr);
+          /* HEAVY HALO CROSS — short thick arms with a centre gap over a dark halo,
+           * readable on bright sky and dark bush (field pick, option E) */
+          var a = 11 * dpr, g = 3.5 * dpr;
+          [["rgba(0,0,0,0.85)", 6 * dpr], [col, 3 * dpr]].forEach(function (s) {
+            ctx.strokeStyle = s[0]; ctx.lineWidth = s[1]; ctx.lineCap = "round";
+            ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
+            ctx.beginPath();
+            ctx.moveTo(bx - a, by); ctx.lineTo(bx - g, by); ctx.moveTo(bx + g, by); ctx.lineTo(bx + a, by);
+            ctx.moveTo(bx, by - a); ctx.lineTo(bx, by - g); ctx.moveTo(bx, by + g); ctx.lineTo(bx, by + a);
+            ctx.stroke();
+          });
+          ctx.setLineDash([]); ctx.lineCap = "butt";
+          haloText(ctx, label, bx + a + 3 * dpr, by - 4 * dpr, col, dpr);
         } else {
+          ctx.strokeStyle = col; ctx.lineWidth = 1.6 * dpr;
+          ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
           ctx.strokeRect(bx - bw2 / 2, by - bh2 / 2, bw2, bh2);
           ctx.setLineDash([]);
-          ctx.fillText(label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr);
+          haloText(ctx, label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr, col, dpr);
         }
       };
       var seek = (detStyle === "seeker");

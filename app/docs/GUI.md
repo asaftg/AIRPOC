@@ -66,7 +66,7 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 
 ## Radar → EO overlay (console-owned render; NOT fusion)
 - Every radar target is projected onto the video from its az/el (radar frame) through the
-  camera's current hfov/vfov, drawn as a **fixed-size ring + centre dot** in its track
+  camera's current hfov/vfov, drawn as a **broken halo ring** (four arcs, dark halo underlay) in its track
   colour, labelled `R#tid range` (size-coding by the tracker's sx/sy was tried and pulsed —
   those estimates jitter; position is stable). No engaged/LOCK styling on the EO — all
   marks are equal until the tracking phase exists. Off-frame targets are not drawn.
@@ -86,9 +86,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   model-vs-motion overlap.
 - `px` boxes are in the **native** 1440×1088 frame; the console maps them through the
   current zoom crop + the letterboxed video rect, clipped to the video content.
-- **MARK style** (DEV → DETECTOR → MARK): `BOX` = full bounding boxes; `SEEKER` = a small
-  gapped cross on the target centroid with short labels (`V62` / `H55` / `M·7`) —
-  display-only, persisted per browser.
+- **MARK style** (DEV → DETECTOR → MARK): `BOX` = full bounding boxes; `SEEKER` = a heavy
+  gapped cross over a dark halo on the target centroid, short labels (`V62` / `H55` /
+  `M·7`). All labels get the dark halo in both modes — display-only, persisted per browser.
 - **Replay**: the console polls `/rec/replay/det` (timeline-aligned det message) and draws
   recorded boxes over the recorded video — mapping uses the recorded zoom for the display
   channel and no crop for NATIVE (full-frame) playback. Until the recorder ships the det
