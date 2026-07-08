@@ -225,7 +225,7 @@ int main(int argc, char **argv)
         /* Appearance model on this tick. */
         int nd = 0;
         if (engine) {
-            int nb = infer_run(engine, f.y10, f.w, f.h, (float)k.conf, 0.5f, k.max_dets,
+            int nb = infer_run(engine, f.y10, f.w, f.h, (float)k.conf, 0.65f, k.max_dets,
                                iboxes, MAX_DETS_CAP, &last_infer_ms);
             if (last_infer_ms > infer_ms_max) infer_ms_max = last_infer_ms;
             for (int i = 0; i < nb && nd < MAX_DETS_CAP; i++) {
