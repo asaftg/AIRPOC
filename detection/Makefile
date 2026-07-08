@@ -59,7 +59,18 @@ stab_ecc.o: src/stab_ecc.cpp $(DEPS)
 preproc.o: src/preproc.cu $(DEPS)
 	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
 
-clean:
-	rm -f $(BIN) $(OBJ)
+# Bench/build tools (not part of the daemon): INT8 engine builder + calib capture.
+TOOLS = build_engine capture_calib
+tools: $(TOOLS)
 
-.PHONY: all clean
+build_engine: tools/build_engine.cpp preproc.o
+	$(CXX) $(CXXFLAGS) -o $@ tools/build_engine.cpp preproc.o \
+	    -L$(CUDA_DIR)/lib64 -lnvinfer -lnvonnxparser -lcudart
+
+capture_calib: tools/capture_calib.c $(DEPS)
+	$(CC) $(CFLAGS) -o $@ tools/capture_calib.c -lrt
+
+clean:
+	rm -f $(BIN) $(OBJ) $(TOOLS)
+
+.PHONY: all tools clean

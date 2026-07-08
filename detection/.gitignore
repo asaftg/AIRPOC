@@ -1,6 +1,8 @@
 # Build artifacts
 *.o
 detectiond
+build_engine
+capture_calib
 
 # Model + engine binaries live under /data/detection, never in the repo
 *.onnx
