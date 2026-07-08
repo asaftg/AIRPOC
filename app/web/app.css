@@ -197,6 +197,7 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 .est{color:var(--amber);font-size:12px;letter-spacing:.5px;padding:6px 0}
 .kv{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;color:var(--muted)}
 .corefrac{color:var(--dim);font-size:11px;margin-left:6px}
+#dv-cadfps{font-style:normal;color:var(--dim);font-size:10px}   /* measured model runs/s beside CADENCE */
 .kv b{color:var(--fg);font-weight:600}
 .muted{color:var(--dim)}
 .sysbtns{display:flex;gap:8px;margin-top:8px}

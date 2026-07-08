@@ -250,6 +250,10 @@
     if (replaying) return;
     fetch("/dstats").then(function (r) { return r.json(); }).then(function (d) {
       var k = d.knobs || {};
+      /* measured model rate beside CADENCE (not 60/N — shows the truth when the GPU
+       * saturates at low cadence). Updated regardless of the drag guard below. */
+      var df = (d.det && typeof d.det.fps === "number") ? d.det.fps : null;
+      $("dv-cadfps").textContent = (df !== null) ? "· " + (Math.round(df * 10) / 10) + "/s" : "";
       if (Date.now() - dtTouch < 1500) return;   /* don't fight an active drag */
       DETC.forEach(function (c) {
         var v = k[c.key];
