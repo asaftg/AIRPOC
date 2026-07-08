@@ -109,7 +109,7 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
   border-radius:3px;background:var(--sub);cursor:pointer}
 .tgt-row:hover{border-color:var(--amber)}
 .tgt-row.eng{border-color:var(--on);border-left-color:var(--on);background:#13251a}
-.tgt-row.held{opacity:.5}
+
 .tgt-row.empty{background:transparent;border-style:dashed;border-left-color:var(--bd2);cursor:default}
 .tgt-row.empty .tid{color:var(--dim)}
 .tgt-row .tid{font-weight:600;font-size:12px}
