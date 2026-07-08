@@ -195,8 +195,11 @@ static void copy_output_to_host(IoBuf &b, cudaStream_t s)
     }
 }
 
-/* Greedy per-class NMS over decoded candidates. */
-struct Cand { int cls; float conf, x1, y1, x2, y2; };
+/* Greedy NMS over decoded candidates. `grp` is the TARGET class (human/vehicle),
+ * not the raw COCO class — so overlapping boxes that map to the same target (e.g.
+ * car+bicycle+motorcycle on one object, all "vehicle") suppress each other, while
+ * a human overlapping a vehicle is kept. */
+struct Cand { int cls, grp; float conf, x1, y1, x2, y2; };
 
 static float iou(const Cand &a, const Cand &b)
 {
@@ -227,10 +230,12 @@ static int decode_boxes(InferEngine *e, float conf_thresh, float nms_iou,
         int best = -1; float bestl = logit_thr;
         for (int c = 0; c < C; c++) if (cl[c] > bestl) { bestl = cl[c]; best = c; }
         if (best < 0) continue;
+        const char *ap = coco_to_airpoc(best);   /* drop non-target classes here */
+        if (!ap) continue;
         float score = 1.f / (1.f + expf(-bestl));
         const float *r = &REG.host[(size_t)i * 4];
         float cx = e->anchor_cx[i], cy = e->anchor_cy[i];
-        cands.push_back({best, score, cx - r[0], cy - r[1], cx + r[2], cy + r[3]});
+        cands.push_back({best, ap[0], score, cx - r[0], cy - r[1], cx + r[2], cy + r[3]});
     }
     std::sort(cands.begin(), cands.end(), [](const Cand &a, const Cand &b) { return a.conf > b.conf; });
 
@@ -240,7 +245,7 @@ static int decode_boxes(InferEngine *e, float conf_thresh, float nms_iou,
         if (dead[i]) continue;
         Cand &a = cands[i];
         for (size_t j = i + 1; j < cands.size(); j++)
-            if (!dead[j] && cands[j].cls == a.cls && iou(a, cands[j]) > nms_iou) dead[j] = 1;
+            if (!dead[j] && cands[j].grp == a.grp && iou(a, cands[j]) > nms_iou) dead[j] = 1;
         out[n].cls = a.cls;
         out[n].conf = a.conf;
         out[n].cx = 0.5f * (a.x1 + a.x2);
