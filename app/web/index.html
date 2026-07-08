@@ -98,38 +98,38 @@
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
       <div class="sec">STREAM</div>
-      <div class="srow"><label>QUALITY</label><div class="btns" id="res-btns">
+      <div class="srow" title="Video size sent to this screen. Smaller = smoother on a weak link. Recording and detection are not affected."><label>QUALITY</label><div class="btns" id="res-btns">
         <button data-res="low">PANIC</button><button data-res="med">FAST</button><button data-res="high" class="on">DEFAULT</button><button data-res="native">NATIVE</button>
       </div></div>
-      <div class="srow"><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
+      <div class="srow" title="Most video frames per second sent to this screen. Lower it to ease a weak link."><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
 
       <div class="sec">EO SENSOR</div>
-      <div class="srow"><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
-      <div class="srow"><label>EXP ms</label><input type="range" id="s-exp" min="0.02" max="33" step="0.02" value="16"><span class="val" id="o-exp">—</span></div>
-      <div class="srow"><label>GAIN</label><input type="range" id="s-gain" min="0" max="480" step="2" value="0"><span class="val" id="o-gain">—</span></div>
-      <div class="srow"><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
-      <div class="srow"><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
+      <div class="srow" title="AUTO: the camera brightens/darkens itself. MANUAL: you set it with the two sliders below."><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
+      <div class="srow" title="How long each frame collects light. Longer = brighter, but fast motion smears. The fps setting limits how long it can go."><label>EXP ms</label><input type="range" id="s-exp" min="0.02" max="33" step="0.02" value="16"><span class="val" id="o-exp">—</span></div>
+      <div class="srow" title="Electronic brightness boost. More = brighter but grainier. Prefer more exposure over more gain."><label>GAIN</label><input type="range" id="s-gain" min="0" max="480" step="2" value="0"><span class="val" id="o-gain">—</span></div>
+      <div class="srow" title="In AUTO, the highest gain the camera is allowed to use. Lower = less grain at night, but the image goes dim sooner."><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
+      <div class="srow" title="Removes single 'salt-and-pepper' noise pixels. Costs a tiny bit of sharpness."><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
 
       <div class="sec">ILLUMINATOR</div>
-      <div class="srow"><label>MODE</label><div class="btns" id="illum-btns"><button data-illum="auto" class="on">AUTO</button><button data-illum="man">MANUAL</button></div></div>
-      <div class="srow"><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
-      <div class="srow"><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
+      <div class="srow" title="AUTO: the IR beam follows the camera zoom at full power. MANUAL: you set power and beam width below."><label>MODE</label><div class="btns" id="illum-btns"><button data-illum="auto" class="on">AUTO</button><button data-illum="man">MANUAL</button></div></div>
+      <div class="srow" title="IR light output strength."><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
+      <div class="srow" title="IR beam width. Narrow = reaches farther but lights a smaller area; wide = covers the whole view up close."><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
 
       <div class="sec">RADAR</div>
-      <div class="srow"><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="60"><span class="val" id="rv-fov">60°</span></div>
-      <div class="srow"><label>MIN SNR</label><input type="range" id="rd-snrmin" min="0" max="60" step="1" value="16"><span class="val" id="rv-snrmin">16 dB</span></div>
-      <div class="srow"><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.7"><span class="val" id="rv-speed">0.7 m/s</span></div>
-      <div class="srow" title="velocity-coherence gate for merging co-located boxes"><label>MERGE GATE</label><input type="range" id="rd-doppler" min="0.5" max="20" step="0.5" value="1.2"><span class="val" id="rv-doppler">1.2 m/s</span></div>
-      <div class="srow" title="merges co-located boxes into one target"><label>DEDUP</label><input type="range" id="rd-eps" min="0.5" max="50" step="0.5" value="4.5"><span class="val" id="rv-eps">4.5 m</span></div>
-      <div class="srow"><label>MIN PTS</label><input type="range" id="rd-minpts" min="1" max="20" step="1" value="2"><span class="val" id="rv-minpts">2</span></div>
-      <div class="srow" title="M-of-N hits before a track appears — lower = faster/looser, higher = stricter"><label>CONFIRM</label><input type="range" id="rd-confirm" min="1" max="6" step="1" value="3"><span class="val" id="rv-confirm">3</span></div>
-      <div class="srow" title="seconds a track survives a dropout"><label>COAST</label><input type="range" id="rd-coast" min="0" max="3" step="0.1" value="0.4"><span class="val" id="rv-coast">0.4 s</span></div>
-      <div class="srow" title="seconds a stopped mover is held"><label>PARK HOLD</label><input type="range" id="rd-park" min="0" max="60" step="1" value="15"><span class="val" id="rv-park">15 s</span></div>
+      <div class="srow" title="Only show radar hits within this angle left/right of straight ahead."><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="60"><span class="val" id="rv-fov">60°</span></div>
+      <div class="srow" title="Hide radar returns weaker than this. The chip itself sends nothing below 16 dB, so 16 = everything; raise it to keep only strong reflectors."><label>MIN SNR</label><input type="range" id="rd-snrmin" min="16" max="60" step="1" value="16"><span class="val" id="rv-snrmin">16 dB</span></div>
+      <div class="srow" title="Ignore anything moving slower than this. Cuts swaying trees and ground clutter; too high misses walkers."><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.7"><span class="val" id="rv-speed">0.7 m/s</span></div>
+      <div class="srow" title="Partner of DEDUP: two nearby boxes only merge if their speeds differ by less than this. Keeps a car passing a parked car as two targets."><label>MERGE GATE</label><input type="range" id="rd-doppler" min="0.5" max="20" step="0.5" value="1.2"><span class="val" id="rv-doppler">1.2 m/s</span></div>
+      <div class="srow" title="Two boxes closer than this (and moving at a similar speed — see MERGE GATE) count as ONE target. Bigger = fewer, larger boxes."><label>DEDUP</label><input type="range" id="rd-eps" min="0.5" max="50" step="0.5" value="4.5"><span class="val" id="rv-eps">4.5 m</span></div>
+      <div class="srow" title="Radar hits needed to form a target at all. Higher = fewer false targets, but small/far things may not make the cut."><label>MIN PTS</label><input type="range" id="rd-minpts" min="1" max="20" step="1" value="2"><span class="val" id="rv-minpts">2</span></div>
+      <div class="srow" title="How many frames a NEW target must be seen before it appears: 3 means seen in 3 of the last 4 frames. Higher = fewer false pop-ups but slower to show."><label>CONFIRM</label><input type="range" id="rd-confirm" min="1" max="6" step="1" value="3"><span class="val" id="rv-confirm">3</span></div>
+      <div class="srow" title="Keep a target alive this many seconds after the radar briefly loses it (e.g. passing behind cover)."><label>COAST</label><input type="range" id="rd-coast" min="0" max="3" step="0.1" value="0.4"><span class="val" id="rv-coast">0.4 s</span></div>
+      <div class="srow" title="Keep a mover that STOPPED for this many seconds before dropping it (a car that parks stays boxed)."><label>PARK HOLD</label><input type="range" id="rd-park" min="0" max="60" step="1" value="15"><span class="val" id="rv-park">15 s</span></div>
 
       <div class="sec">SYSTEM</div>
-      <div class="kv">TEMP <b><span id="v-cpu">—</span>°</b></div>
-      <div class="kv">CPU <b><span id="v-cpupct">—</span>% <span class="corefrac" id="v-cores"></span></b></div>
-      <div class="kv">GPU <b><span id="v-gpupct">—</span>%</b></div>
+      <div class="kv" title="Jetson chip temperature (its hottest sensor). Throttling starts far above normal operating temps.">TEMP <b><span id="v-cpu">—</span>°</b></div>
+      <div class="kv" title="Total processor load — also shown as cores-worth used out of the 6 cores.">CPU <b><span id="v-cpupct">—</span>% <span class="corefrac" id="v-cores"></span></b></div>
+      <div class="kv" title="Graphics/AI processor load. Near zero until detection runs.">GPU <b><span id="v-gpupct">—</span>%</b></div>
       <div class="sysbtns"><button id="to-control">RETURN TO CONTROL</button></div>
     </div></aside>
 
