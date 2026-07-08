@@ -129,10 +129,13 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 - **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
 - **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM (client-side only; see *Radar → EO overlay*).
-- **DETECTOR** — CONF (min confidence to show a box), CADENCE (model runs every Nth
-  frame), MOTION on/off (the dashed-mover safety net), MAX DETS, MOT SENS (`mot_k` —
-  lower flags weaker motion), MOT HOLD (`mot_persist`). Forwarded namespaced
-  `det_<key>=` → detection daemon `/ctl`; readback from `/dstats` (values under `knobs`).
+- **DETECTOR** — MARK box/seeker (display-only), CONF (min confidence, default 0.5),
+  NMS (box-merge overlap threshold, default 0.45 — lower merges duplicates harder),
+  CADENCE (model runs every Nth frame, measured rate shown beside it), MOTION on/off
+  (the dashed-mover safety net — **default OFF**: it floods while the camera moves,
+  until ego-motion compensation exists), MAX DETS, MOT SENS (`mot_k`), MOT HOLD
+  (`mot_persist`). All except MARK forwarded namespaced `det_<key>=` → detection daemon
+  `/ctl`; readback from `/dstats` (values under `knobs`).
 - **RADAR** — the daemon's **nine** tracker knobs: FOV ± (default **60°**), MIN SNR,
   MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
   merge radius for co-located boxes), MIN PTS, CONFIRM (M-of-N hits before a track

@@ -447,7 +447,7 @@ static void handle_ctl(const char *req)
     if (dn > 0) { radar_ctl(dq); return; }
 
     /* detector controls: strip the det_ namespace and forward to the daemon's /ctl */
-    static const char *DET_KEYS[] = { "conf", "cadence", "motion", "max_dets", "mot_k", "mot_persist" };
+    static const char *DET_KEYS[] = { "conf", "cadence", "motion", "max_dets", "mot_k", "mot_persist", "nms" };
     char xq[256]; int xn = 0;
     for (unsigned k = 0; k < sizeof(DET_KEYS) / sizeof(DET_KEYS[0]); k++) {
         char pref[24]; int pl = snprintf(pref, sizeof pref, "det_%s=", DET_KEYS[k]);

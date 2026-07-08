@@ -248,6 +248,7 @@
    * comes from /dstats, where the applied values live under the nested "knobs" object. ── */
   var DETC = [
     { key: "conf",        fmt: function (v) { return v.toFixed(2); } },
+    { key: "nms",         fmt: function (v) { return v.toFixed(2); } },
     { key: "cadence",     fmt: function (v) { return String(v | 0); } },
     { key: "max_dets",    fmt: function (v) { return String(v | 0); } },
     { key: "mot_k",       fmt: function (v) { return v.toFixed(1); } },
