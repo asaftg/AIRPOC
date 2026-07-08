@@ -61,7 +61,7 @@ rebuildable by scanning segments.
 | eo_jpeg | display JPEG **byte-verbatim** as served to the operator | eo_seq, dw, dh, zoom, res_idx, 0 |
 | radar_raw | UART bytes exactly as `read()` returned (re-feedable to the TLV parser) | read_len |
 | radar_wire | the exact SSE frame JSON | frame_number, n_points, n_targets |
-| det_wire | the EO-detector frame JSON (verbatim) | n_detections |
+| det_wire | the EO-detector frame JSON (verbatim) | frame_id, n_dets, n_movers |
 | events | JSON `{"type":"eo_stats\|radar_stats\|app_stats\|clock_anchor\|marker\|channel_lost\|channel_resumed","t_mono_ns":…,"body":{…}}` | — |
 
 > `channel_lost`/`channel_resumed` are the loss watchdog (below): if a tap-fed

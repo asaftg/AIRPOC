@@ -26,7 +26,7 @@ const ChanCfg g_chan_cfg[CH_N] = {
     { "eo_jpeg",    "airpoc.eo_jpeg",    "jpeg", "eo_seq,dw,dh,zoom,res_idx,0",                             1, 1024 * 1024 },
     { "radar_raw",  "airpoc.radar_raw",  "tlv-bytes", "read_len,0,0,0,0,0",                                 0,   64 * 1024 },
     { "radar_wire", "airpoc.radar_wire", "json", "frame_number,n_points,n_targets,0,0,0",                   0,  256 * 1024 },
-    { "det_wire",   "airpoc.det_wire",   "json", "n_detections,0,0,0,0,0",                                  0,  256 * 1024 },
+    { "det_wire",   "airpoc.det_wire",   "json", "frame_id,n_dets,n_movers,0,0,0",                           0,  256 * 1024 },
     { "events",     NULL,                "json", "0,0,0,0,0,0",                                             0,   64 * 1024 },
 };
 
