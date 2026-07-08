@@ -52,7 +52,10 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
   pipeline time (EO-publish → we emit); `t_pub_ns`/`t_out_ns` are both
   CLOCK_MONOTONIC so the diff is valid.
 
-*Phase 1:* `model` is `"none"` and `dets`/`movers` are always empty.
+- `cls` values from the stock COCO model are `human` (person) and `vehicle`
+  (car/truck/bus/motorcycle/bicycle/train); `drone` arrives with the trained
+  model. With no engine loaded, `model` is `"none"` and `dets` is empty, but
+  `movers` still populates (the motion path runs regardless).
 
 ## Output — `GET /stats`
 ```json
@@ -64,7 +67,9 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
  "knobs":{"conf":0.35,"cadence":4,"motion":1,"max_dets":128,
           "mot_k":6.0,"mot_persist":3}}
 ```
-`det`/`motion` report `active:false` until those workers exist (later phases).
+`det.active` is true once an engine is loaded (`-e`); `motion.active` is true once
+the motion thread has processed a frame. `candidates` is the raw mover count
+before overlap suppression.
 
 ## Output — `GET /ctl?k=v&...`
 Sets live knobs; absent params keep their value; all clamped server-side;
