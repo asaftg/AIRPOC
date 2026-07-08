@@ -325,6 +325,11 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         if (replay_radar_json(big, sizeof big) == 0) send_json(fd, 200, big);
         else send_json(fd, 404, "{\"connected\":false,\"replay\":true}");
         pthread_mutex_unlock(&g_big_lk);
+    } else if (!strcmp(path, "/replay/det")) {
+        pthread_mutex_lock(&g_big_lk);
+        if (replay_det_json(big, sizeof big) == 0) send_json(fd, 200, big);
+        else send_json(fd, 404, "{\"connected\":false,\"replay\":true}");
+        pthread_mutex_unlock(&g_big_lk);
     } else if (!strcmp(path, "/replay/rstats")) {
         pthread_mutex_lock(&g_big_lk);
         if (replay_rstats_json(big, sizeof big) == 0) send_json(fd, 200, big);

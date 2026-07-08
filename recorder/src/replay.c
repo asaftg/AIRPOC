@@ -46,7 +46,7 @@ static struct {
     int playing;
     uint64_t anchor_ns;
     /* data */
-    RChan jpeg, radar, y10;
+    RChan jpeg, radar, y10, det;
     int has_native, has_display, video_native;    /* video source selection */
     int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
     int tonemap_match;                             /* replay tone map == record-time tone map */
@@ -397,6 +397,7 @@ static void rp_unload(void)
     rchan_free(&g_rp.jpeg);
     rchan_free(&g_rp.radar);
     rchan_free(&g_rp.y10);
+    rchan_free(&g_rp.det);
     nat_cache_drop();
     free(g_rp.evbuf);
     g_rp.evbuf = NULL;
@@ -428,12 +429,15 @@ static int rp_open(const char *sid)
     /* every channel is optional — replay whatever the session really has
      * (a radar-only session replays scope + stats; video shows no frames) */
     uint64_t t0_rd = 0, t0_y10 = 0;
+    uint64_t t0_det = 0;
     int has_jpeg = rchan_load(dir, "eo_jpeg", &g_rp.jpeg, &g_rp.t0_mono) == 0;
     int has_y10 = rchan_load(dir, "eo_y10", &g_rp.y10, &t0_y10) == 0;
     int has_radar = rchan_load(dir, "radar_wire", &g_rp.radar, &t0_rd) == 0;
+    int has_det = rchan_load(dir, "det_wire", &g_rp.det, &t0_det) == 0;
     if (!has_jpeg && has_y10) g_rp.t0_mono = t0_y10;
     else if (!has_jpeg && has_radar) g_rp.t0_mono = t0_rd;
-    if (!has_jpeg && !has_y10 && !has_radar) return -1;      /* nothing to replay */
+    else if (!has_jpeg && !has_y10 && !has_radar && has_det) g_rp.t0_mono = t0_det;
+    if (!has_jpeg && !has_y10 && !has_radar && !has_det) return -1;   /* nothing to replay */
     load_events(dir);
 
     /* native geometry + encoding for reconstruction */
@@ -473,6 +477,8 @@ static int rp_open(const char *sid)
         g_rp.dur_ms = g_rp.y10.t_ms[g_rp.y10.n - 1];
     if (g_rp.dur_ms <= 0 && g_rp.radar.n)
         g_rp.dur_ms = g_rp.radar.t_ms[g_rp.radar.n - 1];
+    if (g_rp.dur_ms <= 0 && g_rp.det.n)
+        g_rp.dur_ms = g_rp.det.t_ms[g_rp.det.n - 1];
     const char *rt = strstr(mf, "\"t_start\"");
     g_rp.t0_real = 0;
     if (rt) {
@@ -664,6 +670,28 @@ int replay_radar_json(char *buf, size_t len)
         return -1;
     }
     /* inject "replay":true, keep the recorded frame byte-verbatim otherwise */
+    size_t o = (size_t)snprintf(buf, len, "{\"replay\":true,");
+    memcpy(buf + o, p + 1, plen - 1);
+    buf[o + plen - 1] = 0;
+    pthread_mutex_unlock(&g_rp.lk);
+    return 0;
+}
+
+/* recorded EO detections at <= clock, byte-verbatim (same shape as live det). */
+int replay_det_json(char *buf, size_t len)
+{
+    pthread_mutex_lock(&g_rp.lk);
+    if (!g_rp.open) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    int64_t t = clock_now();
+    long i = rchan_at(&g_rp.det, t);
+    if (i < 0) i = g_rp.det.n ? 0 : -1;
+    if (i < 0) { pthread_mutex_unlock(&g_rp.lk); return -1; }
+    uint32_t plen;
+    const uint8_t *p = rchan_payload(&g_rp.det, i, &plen, NULL);
+    if (!p || plen < 2 || p[0] != '{' || plen + 20 > len) {
+        pthread_mutex_unlock(&g_rp.lk);
+        return -1;
+    }
     size_t o = (size_t)snprintf(buf, len, "{\"replay\":true,");
     memcpy(buf + o, p + 1, plen - 1);
     buf[o + plen - 1] = 0;

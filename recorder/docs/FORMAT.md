@@ -18,7 +18,7 @@ crash-safe by construction, ~300 lines of dependency-free C. An offline
   native.mp4                       cached H.264 of native replay (built on demand)
 ```
 
-Channels today: `eo_y10` `eo_jpeg` `radar_raw` `radar_wire` `events`.
+Channels today: `eo_y10` `eo_jpeg` `radar_raw` `radar_wire` `det_wire` `events`.
 New channels = new directory, same three files; no format change. `eo_y10`'s
 `channel.json` also carries `w`/`h`, `tonemap_version`, and `tonemap_hash`
 (the device tone-map signature — see REPLAY.md drift check).
@@ -61,6 +61,7 @@ rebuildable by scanning segments.
 | eo_jpeg | display JPEG **byte-verbatim** as served to the operator | eo_seq, dw, dh, zoom, res_idx, 0 |
 | radar_raw | UART bytes exactly as `read()` returned (re-feedable to the TLV parser) | read_len |
 | radar_wire | the exact SSE frame JSON | frame_number, n_points, n_targets |
+| det_wire | the EO-detector frame JSON (verbatim) | n_detections |
 | events | JSON `{"type":"eo_stats\|radar_stats\|app_stats\|clock_anchor\|marker\|channel_lost\|channel_resumed","t_mono_ns":…,"body":{…}}` | — |
 
 > `channel_lost`/`channel_resumed` are the loss watchdog (below): if a tap-fed

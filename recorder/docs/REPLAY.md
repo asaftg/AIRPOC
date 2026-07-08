@@ -111,6 +111,7 @@ Replay:
 | `GET /replay/ctl?video=native\|display` | choose the video source (default native when present) |
 | `GET /replay/stream` | paced MJPEG of the recorded display JPEGs |
 | `GET /replay/radar` | recorded radar frame JSON at ≤ clock (schema of radar/docs/INTEGRATION.md + `"replay":true`) |
+| `GET /replay/det` | recorded EO-detector frame JSON at ≤ clock (+ `"replay":true`); 404 if the session has no detections |
 | `GET /replay/rstats` | recorded radar daemon /stats at ≤ clock |
 | `GET /replay/stats` | `{replay:true, replay_state:{sid,name,t_ms,dur_ms,playing,rate,t_wall_ms,frame_i,frames}, eo:<recorded>, app:<recorded>}` |
 | `GET /replay/state` | just `replay_state` — the 150 ms transport-bar poll |

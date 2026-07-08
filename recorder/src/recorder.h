@@ -68,7 +68,7 @@ typedef struct {
 
 /* ---- channels ---- */
 
-typedef enum { CH_EO_Y10, CH_EO_JPEG, CH_RADAR_RAW, CH_RADAR_WIRE, CH_EVENTS, CH_N } ChanId;
+typedef enum { CH_EO_Y10, CH_EO_JPEG, CH_RADAR_RAW, CH_RADAR_WIRE, CH_DET_WIRE, CH_EVENTS, CH_N } ChanId;
 typedef enum { MODE_Y10P, MODE_RAW16, MODE_Y8 } VideoMode;
 
 /* per-frame illuminator, packed by the EO tap into eo_y10 meta[4] (present only
@@ -232,6 +232,7 @@ void replay_ctl(const char *qs, char *resp, size_t rlen);
 void replay_state_json(char *buf, size_t len);
 void replay_stats_json(char *buf, size_t len);
 int  replay_radar_json(char *buf, size_t len);   /* frame at <= clock */
+int  replay_det_json(char *buf, size_t len);     /* EO detections at <= clock */
 int  replay_rstats_json(char *buf, size_t len);
 void replay_stream(int fd);                      /* blocks: MJPEG pusher */
 int  replay_frame_copy(int64_t t_ms, uint8_t *buf, uint32_t cap, uint32_t *len);
