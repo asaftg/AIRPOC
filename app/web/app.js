@@ -434,12 +434,12 @@
       else { vw = w; vh = w / ar; vx = 0; vy = (h - vh) / 2; }
       ctx.save(); ctx.beginPath(); ctx.rect(vx, vy, vw, vh); ctx.clip();
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      var drawDet = function (b, dashed, col, label) {
+      var drawDet = function (b, dashed, col, label, forceBox) {
         if (!b.px || b.px.length < 4) return;
         var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
         var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
         if (bx + bw2 / 2 < vx || bx - bw2 / 2 > vx + vw || by + bh2 / 2 < vy || by - bh2 / 2 > vy + vh) return;
-        if (detStyle === "seeker") {
+        if (detStyle === "seeker" && !forceBox) {
           /* HEAVY HALO CROSS — short thick arms with a centre gap over a dark halo,
            * readable on bright sky and dark bush (field pick, option E) */
           var a = 11 * dpr, g = 3.5 * dpr;
@@ -468,10 +468,10 @@
                        : (d.cls || "?").toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
         drawDet(d, false, col, lab);
       });
-      /* motion-head marks: dashed + an explicit MOT tag so they can't be confused with
-       * the model's solid class marks (which read class+confidence) */
+      /* motion-head marks: ALWAYS a gentle thin dashed box (never the heavy cross), so a
+       * mover reads as a soft hint distinct from the model's class marks */
       (lastDet.movers || []).forEach(function (mv) {
-        drawDet(mv, true, "rgba(150,157,168,0.9)", (seek ? "M·" : "MOT ·") + (mv.age || 0));
+        drawDet(mv, true, "rgba(150,157,168,0.9)", "MOT ·" + (mv.age || 0), true);
       });
       ctx.restore();
     }
@@ -481,8 +481,18 @@
    * same 8 target colours, 2 px dots, SNR-scaled alpha, half-circle rings, amber 100 m
    * reference. We add the GUI's jobs the daemon leaves to us: display persistence
    * (hold+fade a dropped box ~300 ms) and the engaged-target LOCK. */
-  var TARGET_COLORS = ["#ff4d6d", "#40c4ff", "#ffd54f", "#81c784", "#ba68c8", "#ff8a65", "#4dd0e1", "#dce775"];
-  function tcolor(tid) { return TARGET_COLORS[((tid % 8) + 8) % 8]; }
+  /* 20 maximally-distinct colours so a target can be identified by COLOUR alone (matched
+   * between the EO marks, the scope, and the list). Collisions past 20 targets are fine. */
+  var TARGET_COLORS = ["#ff4d4d", "#ff8c1a", "#ffd11a", "#c2e01a", "#66cc33", "#1ac26a",
+    "#1ad1b0", "#1ab2e0", "#4d94ff", "#6d5cff", "#a64dff", "#e04dff", "#ff4dab", "#ff6f7d",
+    "#d98cff", "#8cff66", "#66ffd9", "#ffb84d", "#4dd2ff", "#ff99cc"];
+  /* accepts a number (radar tid) or a string key (e.g. "E3") — hashed so radar and EO
+   * ids don't systematically collide */
+  function tcolor(key) {
+    var s = String(key), h = 0;
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return TARGET_COLORS[((h % 20) + 20) % 20];
+  }
   function pointStyle(v, snr) {
     var s = (typeof snr === "number" && isFinite(snr)) ? Math.max(0.3, Math.min(1, (snr - 12) / 28)) : 0.7;
     if (Math.abs(v) < 0.2) return "rgba(150,157,168," + (s * 0.55) + ")";   /* static → titanium */
