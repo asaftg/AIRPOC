@@ -1,83 +1,118 @@
+/* Temporal multi-target tracker — see cluster.h. Port of the offline-validated
+ * radar_tracker (radar/tools). Fixed arrays, no heap on the hot path. */
 #include "cluster.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Tunables (match radar/clustering.py:ClusterParams) ── */
-/* eps, min-samples, speed, snr, fov, and the doppler gate are runtime fields on
- * RadarClusterer (live via /ctl, seeded from CLUSTER_DEFAULT_*); the rest below
- * are compile-time. */
-/* Range-adaptive spacing: a target's returns spread out with distance (the
- * radar's cross-range footprint = range x angular spread), so the "how close
- * counts as one object" distance must grow with range or far targets fail to
- * cluster. The eps_pos slider is the NEAR-field base; effective eps =
- * eps_pos + EPS_RANGE_SLOPE * range. At 0.06: +1.8 m @ 30 m, +6 m @ 100 m. */
-#define EPS_RANGE_SLOPE  0.06f
-/* Range-adaptive min-samples: near returns are dense (a real target gives many
- * dots; sparse near-clutter/multipath gives few), far returns are legitimately
- * sparse. So require MORE points to seed a cluster up close, tapering down to a
- * floor far away. The min_pts slider is the NEAR base; effective =
- * max(floor, base - MINPTS_RANGE_SLOPE*range). At 0.04, base 5: 4 @ 30 m,
- * floor @ ~75 m. Floor is min(base, 2) so slider=1 still means 1. */
-#define MINPTS_RANGE_SLOPE  0.04f
-#define MINPTS_FLOOR        2
-/* Dynamic-only + SNR gates are runtime fields (live via /ctl), seeded from
- * CLUSTER_DEFAULT_SPEED / _SNR: points too slow (static clutter) or too weak
- * never seed or join a cluster. See pt_ok(). */
-#define MIN_SIZE_M       0.25f
-#define MAX_SIZE_M       3.0f
-#define ASSOC_GATE_M     5.0f
-#define GATE_GROWTH      2.0f     /* m per s since last detection */
-#define MERGE_OVERLAP_M  5.0f
-#define CONFIRM_MIN_HITS 2
-#define CONFIRM_WINDOW   3
-#define Q_ACCEL_MPS2     3.0
-#define R_POS_M          0.4
-/* Internal-only: how many missed frames a track survives (frozen, NEVER
- * published) so its id/confirm-state stay stable across a brief dropout.
- * This is NOT coasting — undetected targets are never emitted. Real
- * motion-model coasting is the future tracking module's job. */
-#define TRACK_MAX_MISSES 5
+#define DEG (M_PI/180.0)
 
-#define MAX_TRACKS   RADAR_MAX_TARGETS
+/* ---- occupancy grid geometry (fresh-static channel) ---- */
+#define NR 92          /* (184-0)/2 range cells */
+#define NA 64          /* (32--32)/1 az cells   */
+#define GR_R0 0.0
+#define GR_DR 2.0
+#define GR_A0 (-32.0)
+#define GR_DA 1.0
+/* ---- per-track buffers ---- */
+#define HMAX 160        /* position-history ring */
+#define WMAX 12         /* hit/miss window (== st_conf_N) */
+#define MAX_TRK RADAR_MAX_TARGETS
+
+/* ---- fixed (non-knob) tracker params (== radar_tracker.py DEFAULTS) ---- */
+#define EL_LO (-9.0)
+#define EL_HI 2.5
+#define AZ_KEEP_CAP 90.0     /* input az also gated by the FOV knob */
+#define R_MIN 3.0
+#define OCC_FREE 0.35
+#define WARMUP_S 8.0
+#define LEARN_FAST 0.10
+#define LEARN 0.0003
+#define DECAY 0.00005
+#define ST_MIN_PTS 2
+#define ST_SUSTAIN_MV 1.2
+#define ST_MV_LO 0.35
+#define GATE_R 6.0
+#define GATE_CROSS 4.0
+#define AZ_GATE_MIN 1.0
+#define AZ_GATE_MAX 8.0
+#define SPEED_GATE_S 0.45
+#define MISS_GROW 0.30
+#define MISS_GROW_CAP 2.0
+#define CONF_M 3
+#define CONF_N 4
+#define MV_RATE_MIN 0.6
+#define JIT_MAX 2.6
+#define ST_CONF_M 8
+#define ST_CONF_N 12
+#define ST_JIT_MAX 1.8
+#define JIT_ALPHA 0.35
+#define TENT_MAX_MISS 3
+#define CONF_MAX_MISS 10
+#define EMIT_MAX_MISS 3
+#define PARK_DISP 1.8
+#define PARK_WIN 4.0
+#define PARK_TRAVEL 4.0
+#define PARK_MISS 390
+#define VEL_WIN 0.9
+#define VEL_MIN_SPAN 0.22
+#define SPEED_MAX 30.0
+#define ALPHA 0.55
+#define ALPHA_AZ 0.7
+#define EL_ALPHA 0.10
+#define SEED_LINK_R 5.0
+#define SEED_LINK_CROSS 3.5
+#define SEED_GUARD_R 5.0
+#define SEED_GUARD_AZ 2.5
+#define MERGE_R 12.0
+#define MERGE_CROSS 3.0
+#define DEDUP_R 12.0
+#define OUT_R_MAX 500.0
+#define EMIT_SPD 1.2
+#define EMIT_DISP 2.0
+#define DISP_WIN 5.0
+#define MIN_SIZE_M 0.25
+#define MAX_SIZE_M 3.0
 
 typedef struct {
-    int    used;
-    int    tid;
-    double p[3], v[3];       /* state per axis */
-    double P[3][2][2];       /* per-axis covariance */
-    double size_half[3];
-    int    hits, misses;
-    unsigned hist_bits;      /* rolling M-of-N window (bit0 = most recent) */
-    int    confirmed;
-    double last_hit_t;
+    int used, tid;
+    double r, az, el, vr, va;
+    double jit, mv_ewma, max_mv;
+    int misses, age, st_frames, hits_total;
+    int confirmed, disp_flag;
+    double r0, az0;
+    double ht[HMAX], hr[HMAX], ha[HMAX]; int hn, hhead;
+    int hit[WMAX], hitn;
+    double sx, sy, sz;           /* half-extents (m), from the frame's points */
 } Track;
 
 struct RadarClusterer {
-    Track  tracks[MAX_TRACKS];
-    int    next_tid;
-    float  eps_pos;          /* DBSCAN spacing, m (live via /ctl) */
-    int    min_samples;      /* DBSCAN min-samples (live via /ctl) */
-    float  speed_min;        /* dynamic-only gate, m/s (live via /ctl) */
-    float  snr_min;          /* min per-point SNR, dB; 0 = off (live via /ctl) */
-    float  fov_half;         /* azimuth half-angle gate, deg (live via /ctl) */
-    float  dop_gate;         /* doppler-similarity gate, m/s (live via /ctl) */
+    Track tracks[MAX_TRK];
+    int   next_tid;
+    float occ[NR][NA];
+    double t0; int have_t0;
+    /* live knobs */
+    float dedup_cross;   /* eps knob   */
+    int   min_pts;       /* min_pts    */
+    float vmin;          /* speed knob */
+    float snr_mv;        /* snr knob (static = +3) */
+    float fov_half;      /* fov knob   */
+    float merge_dv;      /* doppler knob */
 };
 
 RadarClusterer *cluster_new(void) {
     RadarClusterer *c = calloc(1, sizeof(RadarClusterer));
     if (c) {
-        c->eps_pos = (float)CLUSTER_DEFAULT_EPS_M;
-        c->min_samples = CLUSTER_DEFAULT_MIN_PTS;
-        c->speed_min = (float)CLUSTER_DEFAULT_SPEED;
-        c->snr_min = (float)CLUSTER_DEFAULT_SNR;
-        c->fov_half = (float)CLUSTER_DEFAULT_FOV;
-        c->dop_gate = (float)CLUSTER_DEFAULT_DOP;
+        c->dedup_cross = (float)CLUSTER_DEFAULT_EPS_M;
+        c->min_pts     = CLUSTER_DEFAULT_MIN_PTS;
+        c->vmin        = (float)CLUSTER_DEFAULT_SPEED;
+        c->snr_mv      = (float)CLUSTER_DEFAULT_SNR;
+        c->fov_half    = (float)CLUSTER_DEFAULT_FOV;
+        c->merge_dv    = (float)CLUSTER_DEFAULT_DOP;
     }
     return c;
 }
 void cluster_free(RadarClusterer *c) { free(c); }
-
 double cluster_fov(const RadarClusterer *c) { return c ? c->fov_half : CLUSTER_DEFAULT_FOV; }
 
 void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts) {
@@ -86,10 +121,8 @@ void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts) {
     if (eps_m > CLUSTER_EPS_MAX_M) eps_m = CLUSTER_EPS_MAX_M;
     if (min_pts < CLUSTER_MIN_PTS_MIN) min_pts = CLUSTER_MIN_PTS_MIN;
     if (min_pts > CLUSTER_MIN_PTS_MAX) min_pts = CLUSTER_MIN_PTS_MAX;
-    c->eps_pos = (float)eps_m;
-    c->min_samples = min_pts;
+    c->dedup_cross = (float)eps_m; c->min_pts = min_pts;
 }
-
 void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
                        double fov_half_deg, double doppler_gate_mps) {
     if (!c) return;
@@ -101,300 +134,293 @@ void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_d
     if (fov_half_deg > CLUSTER_FOV_MAX) fov_half_deg = CLUSTER_FOV_MAX;
     if (doppler_gate_mps < CLUSTER_DOP_MIN) doppler_gate_mps = CLUSTER_DOP_MIN;
     if (doppler_gate_mps > CLUSTER_DOP_MAX) doppler_gate_mps = CLUSTER_DOP_MAX;
-    c->speed_min = (float)speed_min_mps;
-    c->snr_min = (float)snr_min_db;
-    c->fov_half = (float)fov_half_deg;
-    c->dop_gate = (float)doppler_gate_mps;
+    c->vmin = (float)speed_min_mps; c->snr_mv = (float)snr_min_db;
+    c->fov_half = (float)fov_half_deg; c->merge_dv = (float)doppler_gate_mps;
 }
 
-/* ── per-axis Kalman ── */
-static void kf_predict(Track *t, double dt) {
-    double q = Q_ACCEL_MPS2 * Q_ACCEL_MPS2;
-    double dt2 = dt * dt, dt3 = dt2 * dt, dt4 = dt2 * dt2;
-    double Qpp = 0.25 * dt4 * q, Qpv = 0.5 * dt3 * q, Qvv = dt2 * q;
-    for (int a = 0; a < 3; a++) {
-        t->p[a] += t->v[a] * dt;
-        /* F=[[1,dt],[0,1]]; P = F P F^T + Q */
-        double p00 = t->P[a][0][0], p01 = t->P[a][0][1];
-        double p10 = t->P[a][1][0], p11 = t->P[a][1][1];
-        double n00 = p00 + dt * (p10 + p01) + dt2 * p11 + Qpp;
-        double n01 = p01 + dt * p11 + Qpv;
-        double n10 = p10 + dt * p11 + Qpv;
-        double n11 = p11 + Qvv;
-        t->P[a][0][0] = n00; t->P[a][0][1] = n01;
-        t->P[a][1][0] = n10; t->P[a][1][1] = n11;
-    }
+/* ---- helpers ---- */
+static double clampd(double v, double lo, double hi){ return v<lo?lo:(v>hi?hi:v); }
+static int dcmp(const void *a, const void *b){ double d=*(const double*)a-*(const double*)b; return (d>0)-(d<0); }
+static double med(double *v, int n){
+    static double a[RADAR_MAX_POINTS]; memcpy(a, v, n*sizeof(double));
+    qsort(a, n, sizeof(double), dcmp);
+    return (n&1) ? a[n/2] : 0.5*(a[n/2-1]+a[n/2]);
 }
-
-static void kf_update(Track *t, const double z[3]) {
-    double R = R_POS_M * R_POS_M;
-    for (int a = 0; a < 3; a++) {
-        double p00 = t->P[a][0][0], p01 = t->P[a][0][1];
-        double p10 = t->P[a][1][0], p11 = t->P[a][1][1];
-        double S = p00 + R;
-        double K0 = p00 / S, K1 = p10 / S;
-        double y = z[a] - t->p[a];
-        t->p[a] += K0 * y;
-        t->v[a] += K1 * y;
-        /* P = (I - K H) P, H = [1 0] */
-        t->P[a][0][0] = (1 - K0) * p00;
-        t->P[a][0][1] = (1 - K0) * p01;
-        t->P[a][1][0] = p10 - K1 * p00;
-        t->P[a][1][1] = p11 - K1 * p01;
-    }
+static void hist_push(Track *t, double tm, double r, double a){
+    t->ht[t->hhead]=tm; t->hr[t->hhead]=r; t->ha[t->hhead]=a;
+    t->hhead=(t->hhead+1)%HMAX; if(t->hn<HMAX) t->hn++;
 }
-
-static void track_init(Track *t, int tid, const double c[3], const double v[3],
-                       const double half[3], double now_t) {
-    memset(t, 0, sizeof(*t));
-    t->used = 1; t->tid = tid;
-    for (int a = 0; a < 3; a++) {
-        t->p[a] = c[a]; t->v[a] = v[a];
-        t->P[a][0][0] = R_POS_M * R_POS_M;
-        t->P[a][1][1] = 25.0;         /* (5 m/s)^2 — unknown */
-        t->size_half[a] = half[a];
-    }
-    t->hits = 1; t->misses = 0; t->hist_bits = 1; t->confirmed = 0;
-    t->last_hit_t = now_t;
+static void hit_push(Track *t, int v){
+    if(t->hitn<WMAX) t->hit[t->hitn++]=v;
+    else { memmove(t->hit, t->hit+1, (WMAX-1)*sizeof(int)); t->hit[WMAX-1]=v; }
 }
-
-static void hist_push(Track *t, int hit) {
-    t->hist_bits = (t->hist_bits << 1) | (hit ? 1u : 0u);
-    unsigned mask = (1u << CONFIRM_WINDOW) - 1u;
-    if (hit) {
-        t->hits++; t->misses = 0;
-        if (!t->confirmed &&
-            __builtin_popcount(t->hist_bits & mask) >= CONFIRM_MIN_HITS)
-            t->confirmed = 1;
-    } else {
-        t->misses++;
-    }
+static int hit_sum_last(Track *t, int k){
+    int s=0, n=t->hitn; if(k>n)k=n;
+    for(int i=n-k;i<n;i++) s+=t->hit[i];
+    return s;
 }
-
-/* Squared range-adaptive spacing between two points (see EPS_RANGE_SLOPE). */
-static inline float eps2_pair(float eps_base, float ri, float rj) {
-    float e = eps_base + EPS_RANGE_SLOPE * 0.5f * (ri + rj);
-    return e * e;
+static double trk_travel(Track *t){
+    return hypot(t->r - t->r0, (t->az - t->az0)*DEG * t->r);
 }
-
-/* Range-adaptive min-samples for a seed at range r (see MINPTS_RANGE_SLOPE). */
-static inline int minpts_at(int base, float range) {
-    int floor = base < MINPTS_FLOOR ? base : MINPTS_FLOOR;
-    int m = (int)lroundf((float)base - MINPTS_RANGE_SLOPE * range);
-    return m < floor ? floor : m;
+static double recent_disp(Track *t, double tnow, double win){
+    double hr[HMAX], ha[HMAX]; int n=0;
+    for(int i=0;i<t->hn;i++){ int idx=(t->hhead-1-i+HMAX)%HMAX; if(tnow-t->ht[idx]<=win){ hr[n]=t->hr[idx]; ha[n]=t->ha[idx]; n++; } }
+    if(n<9) return 0.0;
+    for(int i=0;i<n/2;i++){ double tr=hr[i]; hr[i]=hr[n-1-i]; hr[n-1-i]=tr; double ta=ha[i]; ha[i]=ha[n-1-i]; ha[n-1-i]=ta; }
+    int k=n/3; double r1=0,r2=0,a1=0,a2=0;
+    for(int i=0;i<k;i++){ r1+=hr[i]; a1+=ha[i]; }
+    for(int i=n-k;i<n;i++){ r2+=hr[i]; a2+=ha[i]; }
+    r1/=k; a1/=k; r2/=k; a2/=k;
+    double cross=(a2-a1)*DEG*0.5*(r1+r2);
+    return hypot(r2-r1, cross);
 }
-
-/* A point is eligible to seed/join a cluster if it's dynamic enough AND (when
- * an SNR gate is set and SNR is known) strong enough. Static clutter and weak
- * returns are excluded. Unknown SNR (NaN, no SideInfo) is never gated out. */
-static inline int pt_ok(const RadarPoint *p, float speed_min, float snr_min, float fov_half) {
-    if (fabsf(p->doppler) < speed_min) return 0;
-    if (snr_min > 0.0f && !isnan(p->snr) && p->snr < snr_min) return 0;
-    if (fabsf(p->az) > fov_half) return 0;
-    return 1;
+static int trk_displaced(Track *t, double tnow){
+    if(t->disp_flag) return 1;
+    if(hypot(t->vr, t->va*DEG*t->r) >= EMIT_SPD){ t->disp_flag=1; return 1; }
+    if(recent_disp(t, tnow, DISP_WIN) >= EMIT_DISP) t->disp_flag=1;
+    return t->disp_flag;
 }
-
-/* ── DBSCAN (hand-rolled, O(N^2), N is a few hundred) ── */
-static int dbscan(const RadarPoint *pts, int n, int *labels,
-                  float eps_pos, int min_samples, float speed_min, float snr_min,
-                  float fov_half, float dop_gate) {
-    static uint8_t nbr[RADAR_MAX_POINTS];   /* scratch neighbour row */
-    uint8_t *visited = calloc(n, 1);
-    if (!visited) return 0;
-    for (int i = 0; i < n; i++) labels[i] = -1;
-    int next = 0;
-
-    /* FIFO of indices — bounded by initial neighbours (<=n) plus each
-     * point added at most once on expansion (<=n), so 2*N is a safe cap. */
-    static int queue[2 * RADAR_MAX_POINTS];
-    const int QCAP = 2 * RADAR_MAX_POINTS;
-    for (int i = 0; i < n; i++) {
-        if (visited[i]) continue;
-        visited[i] = 1;
-        if (!pt_ok(&pts[i], speed_min, snr_min, fov_half)) continue;   /* ineligible: never seeds */
-        /* count neighbours of i (ineligible points can't be neighbours) */
-        int cnt = 0;
-        for (int j = 0; j < n; j++) {
-            float dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, dz = pts[i].z - pts[j].z;
-            int ok = pt_ok(&pts[j], speed_min, snr_min, fov_half) &&
-                     (dx*dx + dy*dy + dz*dz) <= eps2_pair(eps_pos, pts[i].range, pts[j].range) &&
-                     fabsf(pts[i].doppler - pts[j].doppler) <= dop_gate;
-            nbr[j] = ok; cnt += ok;
-        }
-        if (cnt < minpts_at(min_samples, pts[i].range)) continue;
-        labels[i] = next;
-        int qn = 0;
-        for (int j = 0; j < n; j++) if (nbr[j]) { if (labels[j] == -1) labels[j] = next; if (qn < QCAP) queue[qn++] = j; }
-        int qi = 0;
-        while (qi < qn) {
-            int jj = queue[qi++];
-            if (visited[jj]) continue;
-            visited[jj] = 1;
-            int cnt2 = 0;
-            static uint8_t nbr2[RADAR_MAX_POINTS];
-            for (int k = 0; k < n; k++) {
-                float dx = pts[jj].x - pts[k].x, dy = pts[jj].y - pts[k].y, dz = pts[jj].z - pts[k].z;
-                int ok = pt_ok(&pts[k], speed_min, snr_min, fov_half) &&
-                         (dx*dx + dy*dy + dz*dz) <= eps2_pair(eps_pos, pts[jj].range, pts[k].range) &&
-                         fabsf(pts[jj].doppler - pts[k].doppler) <= dop_gate;
-                nbr2[k] = ok; cnt2 += ok;
-            }
-            if (cnt2 >= minpts_at(min_samples, pts[jj].range)) {
-                for (int k = 0; k < n; k++)
-                    if (nbr2[k] && labels[k] == -1) { labels[k] = next; if (qn < QCAP) queue[qn++] = k; }
-            } else if (labels[jj] == -1) {
-                labels[jj] = next;
+static void refit_vel(Track *t, double tnow){
+    double tt[HMAX], rr[HMAX], aa[HMAX]; int n=0;
+    for(int i=0;i<t->hn;i++){ int idx=(t->hhead-1-i+HMAX)%HMAX; if(tnow-t->ht[idx]<=VEL_WIN){ tt[n]=t->ht[idx]; rr[n]=t->hr[idx]; aa[n]=t->ha[idx]; n++; } }
+    if(n<3) return;
+    if(tt[0]-tt[n-1] < VEL_MIN_SPAN) return;     /* newest-first: tt[0] latest */
+    double mt=0,mr=0,ma=0; for(int i=0;i<n;i++){ mt+=tt[i]; mr+=rr[i]; ma+=aa[i]; } mt/=n; mr/=n; ma/=n;
+    double den=0,nr=0,na=0;
+    for(int i=0;i<n;i++){ double dm=tt[i]-mt; den+=dm*dm; nr+=dm*(rr[i]-mr); na+=dm*(aa[i]-ma); }
+    if(den<=0) return;
+    t->vr=clampd(nr/den, -SPEED_MAX, SPEED_MAX);
+    double valim=(SPEED_MAX/(t->r>10.0?t->r:10.0))/DEG;
+    t->va=clampd(na/den, -valim, valim);
+}
+/* flood-fill cluster on (r,az); fills label[], returns ncluster */
+static int cluster_pts(double *r, double *az, int n, double link_r, double link_cross, int *label){
+    for(int i=0;i<n;i++) label[i]=-1;
+    static int stk[RADAR_MAX_POINTS]; int nc=0;
+    for(int i=0;i<n;i++){
+        if(label[i]>=0) continue;
+        int sp=0; stk[sp++]=i; label[i]=nc;
+        while(sp){
+            int j=stk[--sp];
+            for(int k=0;k<n;k++){
+                if(label[k]>=0) continue;
+                if(fabs(r[k]-r[j])<link_r){
+                    double cross=fabs((az[k]-az[j])*DEG)*0.5*(r[k]+r[j]);
+                    if(cross<link_cross){ label[k]=nc; stk[sp++]=k; }
+                }
             }
         }
-        next++;
+        nc++;
     }
-    free(visited);
-    return next;
-}
-
-/* Cluster summary for association. */
-typedef struct { double c[3], v[3], half[3]; int npts; int cid; } Cl;
-
-static int find_best_track(RadarClusterer *R, const double c[3], double now_t,
-                           const int *excluded) {
-    double best = INFINITY; int best_tid = -1;
-    for (int i = 0; i < MAX_TRACKS; i++) {
-        Track *t = &R->tracks[i];
-        if (!t->used || excluded[i]) continue;
-        double dt_since = now_t - t->last_hit_t; if (dt_since < 0) dt_since = 0;
-        double speed = sqrt(t->v[0]*t->v[0] + t->v[1]*t->v[1] + t->v[2]*t->v[2]);
-        double gate = ASSOC_GATE_M + (GATE_GROWTH + speed) * dt_since;
-        double dx = t->p[0]-c[0], dy = t->p[1]-c[1], dz = t->p[2]-c[2];
-        double d2 = dx*dx + dy*dy + dz*dz;
-        if (d2 < gate*gate && d2 < best) { best = d2; best_tid = i; }
-    }
-    return best_tid;
-}
-
-static int overlaps_matched(RadarClusterer *R, const double c[3], const int *matched) {
-    double g2 = MERGE_OVERLAP_M * MERGE_OVERLAP_M;
-    for (int i = 0; i < MAX_TRACKS; i++) {
-        if (!matched[i]) continue;
-        Track *t = &R->tracks[i];
-        double dx = t->p[0]-c[0], dy = t->p[1]-c[1], dz = t->p[2]-c[2];
-        if (dx*dx + dy*dy + dz*dz < g2) return 1;
-    }
-    return 0;
-}
-
-static Track *alloc_track(RadarClusterer *R) {
-    for (int i = 0; i < MAX_TRACKS; i++) if (!R->tracks[i].used) return &R->tracks[i];
-    return NULL;
-}
-
-static void reap(RadarClusterer *R) {
-    for (int i = 0; i < MAX_TRACKS; i++) {
-        Track *t = &R->tracks[i];
-        if (t->used && t->misses > TRACK_MAX_MISSES) t->used = 0;
-    }
-}
-
-/* Emit ONLY tracks detected (matched) this frame and confirmed. A track not
- * matched this frame is never published — no coasting, no dead-reckoning. */
-static int publish(RadarClusterer *R, RadarTarget *out, int max_out) {
-    int n = 0;
-    for (int i = 0; i < MAX_TRACKS && n < max_out; i++) {
-        Track *t = &R->tracks[i];
-        if (!t->used || !t->confirmed || t->misses > 0) continue;
-        double conf = t->hits / 10.0; if (conf > 1.0) conf = 1.0;
-        RadarTarget *o = &out[n++];
-        o->tid = t->tid;
-        o->x = t->p[0]; o->y = t->p[1]; o->z = t->p[2];
-        o->vx = t->v[0]; o->vy = t->v[1]; o->vz = t->v[2];
-        o->sx = t->size_half[0]; o->sy = t->size_half[1]; o->sz = t->size_half[2];
-        o->conf = (float)conf; o->num_points = t->hits;
-    }
-    return n;
+    return nc;
 }
 
 int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                  double now_t, double dt, RadarTarget *out, int max_out) {
     if (dt <= 0) dt = 0.05;
-    /* Predict only tracks detected last frame (to gate this frame's clusters).
-     * Missed tracks freeze — no motion-model extrapolation of undetected
-     * targets. */
-    for (int i = 0; i < MAX_TRACKS; i++)
-        if (R->tracks[i].used && R->tracks[i].misses == 0) kf_predict(&R->tracks[i], dt);
+    if (!R->have_t0){ R->t0 = now_t; R->have_t0 = 1; }
+    int warm = (now_t - R->t0) < WARMUP_S;
+    double snr_st = R->snr_mv + 3.0f;
+    double fov = R->fov_half; if (fov > AZ_KEEP_CAP) fov = AZ_KEEP_CAP;
 
-    if (n <= 0) {
-        for (int i = 0; i < MAX_TRACKS; i++) if (R->tracks[i].used) hist_push(&R->tracks[i], 0);
-        reap(R);
-        return publish(R, out, max_out);
+    for (int i=0;i<n;i++) pts[i].tid = 255;
+
+    /* ---- channel split (index-parallel to pts for tid tagging) ---- */
+    static double rs[RADAR_MAX_POINTS], azs[RADAR_MAX_POINTS], els[RADAR_MAX_POINTS];
+    static int ismv[RADAR_MAX_POINTS], srcpt[RADAR_MAX_POINTS];
+    static double ar[RADAR_MAX_POINTS], aa_[RADAR_MAX_POINTS];
+    int m=0, nmv=0, nall=0;
+    /* moving first (so ismv split is contiguous), then fresh-static */
+    static int st_idx[RADAR_MAX_POINTS]; static double st_r[RADAR_MAX_POINTS], st_a[RADAR_MAX_POINTS], st_e[RADAR_MAX_POINTS]; int nst=0;
+    for (int i=0;i<n;i++){
+        double r=pts[i].range, az=pts[i].az, el=pts[i].el, v=pts[i].doppler, snr=pts[i].snr;
+        if (r<R_MIN || fabs(az)>fov) continue;
+        if (!(el>=EL_LO && el<=EL_HI)) continue;
+        ar[nall]=r; aa_[nall]=az; nall++;
+        int snr_known = !isnan(snr);
+        if (fabs(v)>=R->vmin && (!snr_known || snr>=R->snr_mv)) {
+            rs[m]=r; azs[m]=az; els[m]=el; ismv[m]=1; srcpt[m]=i; m++; nmv++;
+        } else if (snr_known && snr>=snr_st) {
+            st_idx[nst]=i; st_r[nst]=r; st_a[nst]=az; st_e[nst]=el; nst++;
+        }
+    }
+    /* ---- fresh-static: high-SNR returns in historically-empty cells ---- */
+    if (!warm && nst){
+        static double cr[RADAR_MAX_POINTS], ca[RADAR_MAX_POINTS]; static int cidx[RADAR_MAX_POINTS]; static double ce[RADAR_MAX_POINTS]; int nc=0;
+        for (int i=0;i<nst;i++){
+            int ir=(int)((st_r[i]-GR_R0)/GR_DR), ia=(int)((st_a[i]-GR_A0)/GR_DA);
+            if (ir>=0&&ir<NR&&ia>=0&&ia<NA){
+                float nb=0; int i0=ir-1<0?0:ir-1,i1=ir+1>=NR?NR-1:ir+1,j0=ia-1<0?0:ia-1,j1=ia+1>=NA?NA-1:ia+1;
+                for(int a=i0;a<=i1;a++) for(int b=j0;b<=j1;b++) if(R->occ[a][b]>nb) nb=R->occ[a][b];
+                if (nb<OCC_FREE){ cr[nc]=st_r[i]; ca[nc]=st_a[i]; ce[nc]=st_e[i]; cidx[nc]=st_idx[i]; nc++; }
+            }
+        }
+        if (nc){
+            static int lbl[RADAR_MAX_POINTS]; int k=cluster_pts(cr,ca,nc,SEED_LINK_R,SEED_LINK_CROSS,lbl);
+            static int cnt[RADAR_MAX_POINTS]; for(int c=0;c<k;c++) cnt[c]=0; for(int i=0;i<nc;i++) cnt[lbl[i]]++;
+            for(int i=0;i<nc;i++) if(cnt[lbl[i]]>=ST_MIN_PTS && m<RADAR_MAX_POINTS){
+                rs[m]=cr[i]; azs[m]=ca[i]; els[m]=ce[i]; ismv[m]=0; srcpt[m]=cidx[i]; m++;
+            }
+        }
     }
 
-    static int labels[RADAR_MAX_POINTS];
-    int nlab = dbscan(pts, n, labels, R->eps_pos, R->min_samples,
-                      R->speed_min, R->snr_min, R->fov_half, R->dop_gate);
-
-    /* per-cluster stats */
-    static Cl cls[RADAR_MAX_TARGETS];
-    int ncl = 0;
-    for (int lbl = 0; lbl < nlab && ncl < RADAR_MAX_TARGETS; lbl++) {
-        double sx=0,sy=0,sz=0,sd=0; int cnt=0;
-        double sxx=0,syy=0,szz=0;
-        for (int i = 0; i < n; i++) if (labels[i] == lbl) {
-            sx+=pts[i].x; sy+=pts[i].y; sz+=pts[i].z; sd+=pts[i].doppler; cnt++;
-        }
-        if (cnt == 0) continue;
-        Cl *c = &cls[ncl++];
-        c->cid = lbl; c->npts = cnt;
-        c->c[0]=sx/cnt; c->c[1]=sy/cnt; c->c[2]=sz/cnt;
-        for (int i = 0; i < n; i++) if (labels[i] == lbl) {
-            double dx=pts[i].x-c->c[0], dy=pts[i].y-c->c[1], dz=pts[i].z-c->c[2];
-            sxx+=dx*dx; syy+=dy*dy; szz+=dz*dz;
-        }
-        double stdx = cnt>1 ? sqrt(sxx/(cnt-1)) : MIN_SIZE_M;
-        double stdy = cnt>1 ? sqrt(syy/(cnt-1)) : MIN_SIZE_M;
-        double stdz = cnt>1 ? sqrt(szz/(cnt-1)) : MIN_SIZE_M;
-        double h[3] = {1.5*stdx, 1.5*stdy, 1.5*stdz};
-        for (int a=0;a<3;a++){ if(h[a]<MIN_SIZE_M)h[a]=MIN_SIZE_M; if(h[a]>MAX_SIZE_M)h[a]=MAX_SIZE_M; c->half[a]=h[a]; }
-        double dmean = sd/cnt;
-        double r = sqrt(c->c[0]*c->c[0]+c->c[1]*c->c[1]+c->c[2]*c->c[2]); if (r<1e-3) r=1e-3;
-        for (int a=0;a<3;a++) c->v[a] = c->c[a]/r * dmean;
+    /* ---- predictions ---- */
+    static double PR[MAX_TRK], PAZ[MAX_TRK], RG[MAX_TRK], AZG[MAX_TRK];
+    for (int ti=0;ti<MAX_TRK;ti++){
+        if(!R->tracks[ti].used) continue;
+        Track *t=&R->tracks[ti];
+        double pr=t->r+t->vr*dt, paz=t->az+t->va*dt;
+        double g=1.0+MISS_GROW*t->misses; if(g>MISS_GROW_CAP)g=MISS_GROW_CAP;
+        double cs=fabs(t->va*DEG)*pr;
+        double rg=(GATE_R+fabs(t->vr)*SPEED_GATE_S)*g;
+        double cg=(GATE_CROSS+cs*SPEED_GATE_S)*g;
+        double azg=atan2(cg, pr>5.0?pr:5.0)/DEG;
+        double lo=AZ_GATE_MIN*g; if(azg<lo)azg=lo; if(azg>AZ_GATE_MAX)azg=AZ_GATE_MAX;
+        PR[ti]=pr; PAZ[ti]=paz; RG[ti]=rg; AZG[ti]=azg;
     }
-
-    /* largest clusters first (greedy) */
-    for (int i = 0; i < ncl; i++) for (int j = i+1; j < ncl; j++)
-        if (cls[j].npts > cls[i].npts) { Cl tmp = cls[i]; cls[i] = cls[j]; cls[j] = tmp; }
-
-    int matched[MAX_TRACKS]; memset(matched, 0, sizeof(matched));
-    int cid_to_track[RADAR_MAX_TARGETS];
-    for (int i = 0; i < RADAR_MAX_TARGETS; i++) cid_to_track[i] = -1;
-
-    for (int i = 0; i < ncl; i++) {
-        Cl *c = &cls[i];
-        int ti = find_best_track(R, c->c, now_t, matched);
-        if (ti < 0) {
-            if (overlaps_matched(R, c->c, matched)) continue;
-            Track *t = alloc_track(R);
-            if (!t) continue;
-            track_init(t, R->next_tid++, c->c, c->v, c->half, now_t);
-            ti = (int)(t - R->tracks);
+    /* ---- per-point nearest-track association ---- */
+    static int owner[RADAR_MAX_POINTS]; static double bestd[RADAR_MAX_POINTS];
+    for(int i=0;i<m;i++){ owner[i]=-1; bestd[i]=1e9; }
+    for(int ti=0;ti<MAX_TRK;ti++){
+        if(!R->tracks[ti].used) continue;
+        int st_ok = R->tracks[ti].max_mv >= ST_SUSTAIN_MV;
+        for(int i=0;i<m;i++){
+            if(!ismv[i] && !st_ok) continue;
+            double dr=fabs(rs[i]-PR[ti])/RG[ti], da=fabs(azs[i]-PAZ[ti])/AZG[ti];
+            if(dr<1.0 && da<1.0){ double d=dr+da; if(d<bestd[i]){ bestd[i]=d; owner[i]=ti; } }
+        }
+    }
+    /* ---- update tracks ---- */
+    static double gr[RADAR_MAX_POINTS], ga[RADAR_MAX_POINTS], ge[RADAR_MAX_POINTS];
+    for(int ti=0;ti<MAX_TRK;ti++){
+        if(!R->tracks[ti].used) continue;
+        Track *t=&R->tracks[ti]; int ng=0, nmv_hit=0;
+        for(int i=0;i<m;i++) if(owner[i]==ti){ gr[ng]=rs[i]; ga[ng]=azs[i]; ge[ng]=els[i]; if(ismv[i])nmv_hit++; if(srcpt[i]>=0&&srcpt[i]<n) pts[srcpt[i]].tid=t->tid; ng++; }
+        if(ng){
+            double mr=med(gr,ng), maz=med(ga,ng), mel=med(ge,ng);
+            double jd=hypot(mr-PR[ti], (maz-PAZ[ti])*DEG*mr);
+            t->jit=(1-JIT_ALPHA)*t->jit + JIT_ALPHA*jd;
+            t->mv_ewma=0.85*t->mv_ewma + 0.15*(double)nmv_hit;
+            if(t->mv_ewma>t->max_mv) t->max_mv=t->mv_ewma;
+            t->st_frames = (t->mv_ewma>=ST_MV_LO)?0:t->st_frames+1;
+            t->r=ALPHA*mr+(1-ALPHA)*PR[ti];
+            t->az=ALPHA_AZ*maz+(1-ALPHA_AZ)*PAZ[ti];
+            t->el=(1-EL_ALPHA)*t->el + EL_ALPHA*mel;
+            /* half-extents from the frame's points (for the wire box) */
+            double mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
+            for(int i=0;i<m;i++) if(owner[i]==ti){
+                double rr=rs[i], a=azs[i]*DEG, e=els[i]*DEG, rh=rr*cos(e);
+                double x=rh*sin(a), y=rh*cos(a), z=rr*sin(e);
+                mnx=fmin(mnx,x); mxx=fmax(mxx,x);
+                mny=fmin(mny,y); mxy=fmax(mxy,y);
+                mnz=fmin(mnz,z); mxz=fmax(mxz,z);
+            }
+            t->sx=clampd((mxx-mnx)/2, MIN_SIZE_M, MAX_SIZE_M);
+            t->sy=clampd((mxy-mny)/2, MIN_SIZE_M, MAX_SIZE_M);
+            t->sz=clampd((mxz-mnz)/2, MIN_SIZE_M, MAX_SIZE_M);
+            hist_push(t, now_t, t->r, t->az);
+            refit_vel(t, now_t);
+            hit_push(t, 1); t->misses=0; t->age++; t->hits_total++;
         } else {
-            Track *t = &R->tracks[ti];
-            kf_update(t, c->c);
-            for (int a=0;a<3;a++) t->size_half[a] = 0.5*c->half[a] + 0.5*t->size_half[a];
-            hist_push(t, 1);
-            t->last_hit_t = now_t;
-            matched[ti] = 1;
+            if(t->confirmed && t->disp_flag && trk_travel(t)>=PARK_TRAVEL
+               && recent_disp(t,now_t,PARK_WIN)<PARK_DISP){ t->vr=0; t->va=0; }
+            else { t->r=PR[ti]; t->az=PAZ[ti]; }
+            hit_push(t, 0); t->misses++; t->age++;
+            t->mv_ewma*=0.85; if(t->mv_ewma<ST_MV_LO) t->st_frames++;
         }
-        if (c->cid >= 0 && c->cid < RADAR_MAX_TARGETS) cid_to_track[c->cid] = R->tracks[ti].tid;
     }
-
-    for (int i = 0; i < MAX_TRACKS; i++)
-        if (R->tracks[i].used && !matched[i]) hist_push(&R->tracks[i], 0);
-
-    reap(R);
-
-    for (int i = 0; i < n; i++) {
-        int lbl = labels[i];
-        pts[i].tid = (lbl >= 0 && lbl < RADAR_MAX_TARGETS && cid_to_track[lbl] >= 0)
-                     ? cid_to_track[lbl] : 255;
+    /* ---- lifecycle + confirmation ---- */
+    for(int ti=0;ti<MAX_TRK;ti++){
+        Track *t=&R->tracks[ti]; if(!t->used) continue;
+        if(!t->confirmed && t->misses>TENT_MAX_MISS){ t->used=0; continue; }
+        if(t->confirmed && t->misses>CONF_MAX_MISS){
+            int parked = t->disp_flag && t->vr==0.0 && t->va==0.0 && t->misses<=PARK_MISS;
+            if(!parked){ t->used=0; continue; }
+        }
+        if(!t->confirmed){
+            if(hit_sum_last(t,CONF_N)>=CONF_M && t->mv_ewma>=MV_RATE_MIN && t->jit<JIT_MAX) t->confirmed=1;
+            else if(t->hitn>=ST_CONF_N && hit_sum_last(t,ST_CONF_N)>=ST_CONF_M && t->jit<ST_JIT_MAX) t->confirmed=1;
+        }
     }
-    return publish(R, out, max_out);
+    /* ---- merge duplicates (keep the elder: confirmed first, then oldest) ---- */
+    for(int i=0;i<MAX_TRK;i++){
+        Track *a=&R->tracks[i]; if(!a->used) continue;
+        for(int j=0;j<MAX_TRK;j++){
+            if(i==j) continue;
+            Track *b=&R->tracks[j]; if(!b->used) continue;
+            /* keep a if a is (confirmed>b) or (same conf and older/equal age) */
+            int a_better = (a->confirmed>b->confirmed) ||
+                           (a->confirmed==b->confirmed && (a->age>b->age || (a->age==b->age && i<j)));
+            if(!a_better) continue;
+            double cross=fabs((a->az-b->az)*DEG)*0.5*(a->r+b->r);
+            if(fabs(a->r-b->r)<MERGE_R && cross<MERGE_CROSS && fabs(a->vr-b->vr)<R->merge_dv)
+                b->used=0;
+        }
+    }
+    /* ---- seed from unclaimed MOVING points ---- */
+    if(m){
+        static double sr[RADAR_MAX_POINTS], sa[RADAR_MAX_POINTS], se[RADAR_MAX_POINTS]; int ns=0;
+        for(int i=0;i<m;i++) if(owner[i]<0 && ismv[i]){ sr[ns]=rs[i]; sa[ns]=azs[i]; se[ns]=els[i]; ns++; }
+        if(ns){
+            static int lbl[RADAR_MAX_POINTS]; int k=cluster_pts(sr,sa,ns,SEED_LINK_R,SEED_LINK_CROSS,lbl);
+            for(int c=0;c<k;c++){
+                double sumr=0,suma=0; int cnt=0; static double eb[RADAR_MAX_POINTS]; int ne=0;
+                for(int i=0;i<ns;i++) if(lbl[i]==c){ sumr+=sr[i]; suma+=sa[i]; eb[ne++]=se[i]; cnt++; }
+                if(cnt<R->min_pts) continue;
+                double crr=sumr/cnt, caz=suma/cnt, cel=med(eb,ne);
+                int guarded=0;
+                for(int ti=0;ti<MAX_TRK;ti++) if(R->tracks[ti].used && fabs(R->tracks[ti].r-crr)<SEED_GUARD_R && fabs(R->tracks[ti].az-caz)<SEED_GUARD_AZ){ guarded=1; break; }
+                if(guarded) continue;
+                for(int ti=0;ti<MAX_TRK;ti++) if(!R->tracks[ti].used){
+                    Track *t=&R->tracks[ti]; memset(t,0,sizeof(*t));
+                    t->used=1; t->tid=R->next_tid++; t->r=crr; t->az=caz; t->el=cel; t->r0=crr; t->az0=caz;
+                    t->sx=t->sy=t->sz=MIN_SIZE_M;
+                    hist_push(t,now_t,crr,caz); hit_push(t,1); t->age=1; t->hits_total=1;
+                    break;
+                }
+            }
+        }
+    }
+    /* ---- occupancy update ---- */
+    double lr = warm ? LEARN_FAST : LEARN;
+    static char hitcell[NR][NA]; memset(hitcell,0,sizeof(hitcell));
+    for(int i=0;i<nall;i++){ int ir=(int)((ar[i]-GR_R0)/GR_DR), ia=(int)((aa_[i]-GR_A0)/GR_DA);
+        if(ir>=0&&ir<NR&&ia>=0&&ia<NA) hitcell[ir][ia]=1; }
+    for(int a=0;a<NR;a++) for(int b=0;b<NA;b++){ R->occ[a][b]*=(float)(1.0-DECAY); if(hitcell[a][b]) R->occ[a][b]=(float)(R->occ[a][b]*(1-lr)+lr); }
+
+    /* ---- emit: confirmed + in-band, strength-sorted, spatial dedup ---- */
+    static int ci[MAX_TRK]; int ncand=0;
+    for(int ti=0;ti<MAX_TRK;ti++){
+        Track *t=&R->tracks[ti]; if(!t->used) continue;
+        int okmiss = t->misses<=EMIT_MAX_MISS || (t->disp_flag && t->vr==0.0 && t->va==0.0 && t->misses<=PARK_MISS);
+        if(t->confirmed && okmiss && trk_displaced(t,now_t)
+           && fabs(t->az)<=R->fov_half && t->r<=OUT_R_MAX) ci[ncand++]=ti;
+    }
+    for(int i=1;i<ncand;i++){ int key=ci[i]; Track *tk=&R->tracks[key];
+        double ks=tk->mv_ewma+0.001*(tk->age<500?tk->age:500); int j=i-1;
+        while(j>=0){ Track *tj=&R->tracks[ci[j]]; double js=tj->mv_ewma+0.001*(tj->age<500?tj->age:500);
+            if(js<ks){ci[j+1]=ci[j];j--;}else break; } ci[j+1]=key; }
+    int nout=0;
+    for(int i=0;i<ncand && nout<max_out;i++){
+        Track *t=&R->tracks[ci[i]]; int dup=0;
+        /* spatial dedup against already-emitted (recover r,az from x,y) */
+        for(int e=0;e<nout;e++){
+            double ex=out[e].x, ey=out[e].y, er=hypot(ex,ey), eazd=atan2(ex,ey)/DEG;
+            double cross=fabs((eazd-t->az)*DEG)*0.5*(er+t->r);
+            if(cross<R->dedup_cross && fabs(er-t->r)<DEDUP_R){ dup=1; break; }
+        }
+        if(dup) continue;
+        double rr=t->r, a=t->az*DEG, e=t->el*DEG, rh=rr*cos(e);
+        double vrad=t->vr, vaz=t->va*DEG;
+        RadarTarget *o=&out[nout++];
+        o->tid=t->tid;
+        o->x=(float)(rh*sin(a)); o->y=(float)(rh*cos(a)); o->z=(float)(rr*sin(e));
+        o->vx=(float)(vrad*sin(a)+rr*cos(a)*vaz);
+        o->vy=(float)(vrad*cos(a)-rr*sin(a)*vaz);
+        o->vz=0.0f;
+        o->sx=(float)t->sx; o->sy=(float)t->sy; o->sz=(float)t->sz;
+        double conf=t->hits_total/10.0; if(conf>1.0)conf=1.0;
+        o->conf=(float)conf; o->num_points=t->hits_total;
+    }
+    return nout;
 }

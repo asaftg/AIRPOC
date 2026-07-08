@@ -1,17 +1,24 @@
-/* DBSCAN + constant-velocity Kalman tracker for the AWR2944P point cloud.
+/* Temporal multi-target tracker for the AWR2944P point cloud.
  *
- * Port of the ground bench's radar/clustering.py — the PRIMARY box source
- * while the firmware has no on-chip Group Tracker (see docs/FIRMWARE.md).
- * Per frame: DBSCAN over (x,y,z,doppler) -> per-cluster centroid/extent ->
- * greedy gated NN association (stable ids) -> CV Kalman update (velocity) ->
- * M-of-N confirm. Emits ONLY targets detected this frame — no coasting.
- * Motion-model coasting/persistence is the future tracking module + GUI.
+ * Replaces the earlier per-frame DBSCAN+Kalman (ground-bench clustering.py port).
+ * Class-agnostic track-before-detect: velocity from position history (range-rate
+ * / angle-rate, never ambiguous Doppler); nearest-track association (one physical
+ * target -> one track, no fragmentation); a moving channel plus a fresh-static
+ * occupancy channel so a car that drives in and parks keeps its box; fast M-of-N
+ * confirm; short coast; spatial dedup so co-located tracks emit one box.
+ * Validated offline against the ground-truth recording (host tool: radar/tools).
  *
- * The 6-state [p,v] Kalman of the original is block-diagonal per axis, so
- * this is implemented as three independent 2-state (pos,vel) filters —
- * identical maths, much simpler in C. This module is deliberately behind
- * a clean interface so on-chip gtrack TLVs (308/309) can replace it later
- * without touching the parser or the previewer. */
+ * Behind the SAME interface as before, so on-chip gtrack TLVs (308/309) can
+ * replace it later without touching the parser, wire, or previewer.
+ *
+ * The GUI /ctl knobs map onto the tracker as:
+ *   CLUSTER eps  -> dedup radius (co-located tracks -> one box)
+ *   MIN PTS      -> points needed to seed a track
+ *   MIN SPD      -> Doppler motion threshold (moving channel)
+ *   MIN SNR      -> point strength gate (static channel = +3 dB)
+ *   FOV          -> azimuth gate (input + emit)
+ *   DOPPLER      -> velocity-coherence gate for the duplicate-merge
+ */
 #ifndef AIRPOC_CLUSTER_H
 #define AIRPOC_CLUSTER_H
 
@@ -19,14 +26,15 @@
 
 typedef struct RadarClusterer RadarClusterer;
 
-/* Live-tunable DBSCAN knobs — defaults + clamp bounds, settable via the
- * daemon's /ctl endpoint (CLUSTER eps + MIN PTS sliders in the GUI). */
-#define CLUSTER_DEFAULT_EPS_M    8.0
-#define CLUSTER_DEFAULT_MIN_PTS  2
-#define CLUSTER_DEFAULT_SPEED    0.4    /* m/s  — dynamic-only gate */
-#define CLUSTER_DEFAULT_SNR      0.0    /* dB   — 0 = no SNR gate (publish-max) */
-#define CLUSTER_DEFAULT_FOV      90.0   /* deg  — azimuth half-angle gate (90 = full) */
-#define CLUSTER_DEFAULT_DOP      3.0    /* m/s  — doppler-similarity gate */
+/* Live-tunable knobs — defaults (GUI slider start positions) + clamp bounds,
+ * settable via the daemon's /ctl endpoint. Defaults are the offline-validated
+ * tracker operating point. */
+#define CLUSTER_DEFAULT_EPS_M    4.5    /* m   — dedup radius (was DBSCAN eps) */
+#define CLUSTER_DEFAULT_MIN_PTS  2      /*     — points to seed a track */
+#define CLUSTER_DEFAULT_SPEED    0.7    /* m/s — Doppler motion threshold */
+#define CLUSTER_DEFAULT_SNR      16.0   /* dB  — point strength gate */
+#define CLUSTER_DEFAULT_FOV      90.0   /* deg — azimuth half-angle gate (90 = full) */
+#define CLUSTER_DEFAULT_DOP      1.2    /* m/s — merge velocity-coherence gate */
 #define CLUSTER_EPS_MIN_M        0.5
 #define CLUSTER_EPS_MAX_M        50.0
 #define CLUSTER_MIN_PTS_MIN      1
@@ -43,26 +51,24 @@ typedef struct RadarClusterer RadarClusterer;
 RadarClusterer *cluster_new(void);
 void            cluster_free(RadarClusterer *c);
 
-/* Set DBSCAN spacing (eps, metres) and min-samples live. Clamped to sane
- * ranges. A single scalar store per field — safe to call from the HTTP
- * thread while the radar thread clusters (worst case: one frame uses a
- * just-changed value). */
+/* eps -> dedup radius (m); min_pts -> seed points. Clamped. A single scalar
+ * store per field — safe from the HTTP thread while the radar thread runs
+ * (worst case: one frame uses a just-changed value). */
 void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
 
-/* Set the four live gates: min |radial speed| (m/s, dynamic-only), min
- * per-point SNR (dB; 0=off), azimuth half-angle (deg; |az|>fov excluded),
- * and the doppler-similarity gate (m/s). Clamped. Same thread-safety note. */
+/* speed -> Doppler motion threshold (m/s); snr -> point strength gate (dB;
+ * 0=off, static channel uses +3); fov -> azimuth half-angle (deg); doppler ->
+ * merge velocity-coherence gate (m/s). Clamped. Same thread-safety note. */
 void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
                        double fov_half_deg, double doppler_gate_mps);
 
 /* Current azimuth-gate half-angle (deg) — published on the wire for the wedge. */
 double cluster_fov(const RadarClusterer *c);
 
-/* Cluster+track one frame. `pts`/`n` are updated in place (each point's
- * .tid is set to its cluster/track id, or 255). `now_s` is a monotonic
- * timestamp (seconds); `dt` is seconds since the previous step. Confirmed
- * targets detected THIS frame are written to `out` up to `max_out`; returns
- * the count. */
+/* Track one frame. `pts`/`n` are updated in place (each point's .tid is set to
+ * its owning track id, or 255). `now_s` is a monotonic timestamp (seconds);
+ * `dt` is seconds since the previous step. Emitted (confirmed, in-band) targets
+ * are written to `out` up to `max_out`; returns the count. */
 int cluster_step(RadarClusterer *c, RadarPoint *pts, int n,
                  double now_s, double dt,
                  RadarTarget *out, int max_out);

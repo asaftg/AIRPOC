@@ -2,9 +2,10 @@
 
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA1000**. The chip runs our
 mmw_demoDDM firmware and emits a TLV point cloud over UART; this module
-pushes the profile, parses that stream with **zero frame loss**, clusters it
-into **class-less** target boxes, and serves a PPI previewer. Person/vehicle
-labelling is **not** done here — that is the fusion module's job.
+pushes the profile, parses that stream with **zero frame loss**, runs a
+**temporal multi-target tracker** producing **class-less** target boxes, and
+serves a PPI previewer. Person/vehicle labelling is **not** done here — that is
+the fusion module's job.
 
 ## I/O contract
 
@@ -19,9 +20,12 @@ labelling is **not** done here — that is the fusion module's job.
 - `GET /stats` → fps, drops, counts, connected, profile, max_range, plus the
   six live control values (`cluster_eps_m`, `cluster_min_pts`, `speed_min_mps`,
   `snr_min_db`, `fov_half_deg`, `doppler_gate_mps`).
-- `GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` → set the host
-  clustering live (`200 ok`). Six knobs; see
-  [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for ranges/defaults.
+- `GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` → set the tracker live
+  (`200 ok`). Same six knobs, remapped to the tracker (see
+  [`docs/TUNING.md`](docs/TUNING.md) for meanings/ranges/defaults):
+  `eps`→dedup radius, `minpts`→seed points, `speed`→Doppler motion threshold,
+  `snrmin`→point-strength gate, `fov`→azimuth gate, `doppler`→merge
+  velocity-coherence.
 
 **Produces** — recorder taps (shared memory; protocol per
 [`recorder/docs/TAP.md`](../recorder/docs/TAP.md) v1; vendored header
@@ -39,13 +43,20 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
   points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
   targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
 ```
-Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres. `snr` is
-the per-point SNR in dB (live; `null` only if a firmware without SideInfo is
-flashed). `class` is always `radar_detection`.
-`targets` are **per-frame detections only** — a box is emitted only for a
-cluster seen this frame (**no coasting**); `tid` is stable across frames via
-association. Display persistence and motion-model coasting are the GUI's and
-the future tracking module's jobs, not the radar's.
+Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres (`z` carries
+elevation). `snr` is the per-point SNR in dB (live; `null` only if a firmware
+without SideInfo is flashed). `class` is always `radar_detection`. `tid` is a
+stable per-target id.
+
+> Note: azimuth/elevation are the radar's own frame — the radar↔EO calibration
+> offsets are applied by the GUI/fusion, not baked into the wire.
+
+`targets` are **confirmed temporal tracks**: a target is emitted after it passes
+an M-of-N confirmation (fast for Doppler-backed movers, slower + consistency for
+static-born ones), and it **coasts briefly** through short dropouts; a track
+that moved then stopped is held (parked-car persistence). Ids are stable across
+frames. Longer-horizon fusion (person/vehicle labelling, cross-sensor) remains
+downstream.
 
 ## Build & run (on the Jetson, native aarch64)
 
@@ -77,7 +88,7 @@ relative to the binary), `-b` data baud, `-p` port, `-w` webroot (default:
 `../web` relative to the binary), `-n` skip cfg push, `-s` simulate.
 
 **Develop without hardware.** `-s` feeds a synthetic scene (walking person +
-receding vehicle + static clutter) through the real parser/clusterer/wire path
+receding vehicle + static clutter) through the real parser/tracker/wire path
 and serves the same endpoints — so the previewer and the GUI can be built with
 the Jetson off. The GUI integration contract is in
 [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
@@ -90,36 +101,33 @@ Standalone-runnable: with no board present it serves the page and reports
 The **heavy DSP runs on the AWR2944P** — range/Doppler FFT, CFAR detection, and
 angle-of-arrival are all in the mmw_demo firmware. The Jetson never does an FFT;
 it receives the finished point cloud over UART. The host daemon only does
-**drop-free parse + per-frame clustering (light association for stable ids +
-velocity, no coasting) + serialize**, which is cheap:
+**drop-free parse + temporal tracking + serialize**, which is cheap:
 
 | Host work per frame | Cost (Orin est., ~2–3× the x86 measurement) |
 |---|---|
-| Full path, typical ~100-pt frame | ~50 µs |
-| DBSCAN + association, worst case 500 pts | ~1 ms |
+| Full path, typical ~250-pt frame | ~0.4 ms |
 
-That is **~1–2 % of one core at 30 Hz**, <1 MB RAM, and adds **<1 ms** latency —
-the end-to-end latency floor is the chip's frame period, not this code. The only
-superlinear cost is DBSCAN's O(N²); fine at mmw_demo point counts, swap to a
-spatial-grid O(N) if counts ever spike. (Reproduce with the microbench under
-`src/` — not shipped.)
+That is **~1 % of one core at 26–30 Hz**, <1 MB RAM, and adds well under a
+millisecond of latency — the end-to-end floor is the chip's frame period, not
+this code. Everything is O(points × tracks) with fixed buffers and no heap on
+the hot path; point counts are a few hundred, track counts a few tens.
 
-**Migration to fully on-chip:** host-side clustering exists only because today's
+**Migration to fully on-chip:** host-side tracking exists only because today's
 firmware has no Group Tracker. The parser already handles the tracker TLVs
 (308/309), so once Phase-2 firmware links `gtrack`, the chip emits target boxes
-directly and this daemon drops to a pure parse-and-forward — no rewrite. (Full
-tracking — motion-model coasting, long-term ids — is the downstream **tracking**
-module regardless; the radar only ever emits per-frame detections.) See
+directly and this daemon drops to a pure parse-and-forward — no rewrite, because
+the tracker sits behind the same `cluster_step` interface. See
 [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 
 ## Layout
 - `src/` — C daemon (`serial`, `cfg_push`, `tlv`, `cluster`, `wire`, `http`,
-  `sim`). `-s` = simulation (no board); read-first startup (won't re-push to a
-  live chip).
+  `sim`). `cluster` is the temporal multi-target tracker (class-less). `-s` =
+  simulation (no board); read-first startup (won't re-push to a live chip).
 - `cfg/awr2944P_ag.cfg` — the shipped A/G long-range profile (LVDS off,
   per-point SNR on).
 - `web/` — PPI previewer (`index.html`, `radar_view.js`) with a live tuning panel.
-- `tools/radar_tlv_probe.py` — bench TLV dumper (diagnostic only).
+- `tools/` — `radar_tlv_probe.py` (bench TLV dumper) and the offline tracker
+  reference + golden-replay validator (diagnostic only, Python).
 - `docs/` —
   [`HARDWARE`](docs/HARDWARE.md) ·
   [`FIRMWARE`](docs/FIRMWARE.md) ·
