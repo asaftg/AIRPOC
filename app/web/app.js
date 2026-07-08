@@ -407,8 +407,10 @@
         var col = d.cls === "human" ? "#40c4ff" : amber;
         drawDet(d, false, col, (d.cls || "?").toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%");
       });
+      /* motion-head boxes: dashed + an explicit MOT tag so they can't be confused with
+       * the model's solid class boxes (which read e.g. VEHICLE 54%) */
       (lastDet.movers || []).forEach(function (mv) {
-        drawDet(mv, true, "rgba(150,157,168,0.9)", "MOV·" + (mv.age || 0));
+        drawDet(mv, true, "rgba(150,157,168,0.9)", "MOT ·" + (mv.age || 0));
       });
       ctx.restore();
     }
@@ -516,19 +518,20 @@
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
     });
 
-    /* target boxes — the daemon's tracker output drawn verbatim (it confirms/coasts/
-     * dedups server-side; tids are stable). No engaged/LOCK styling — tracking isn't a
-     * phase yet, and every track keeps ONE colour across scope, list and EO overlay. */
+    /* target marks — the daemon's tracker output drawn verbatim (it confirms/coasts/
+     * dedups server-side; tids are stable). Fixed ring + centre dot like the EO overlay
+     * (the sx/sy extent estimates jitter, so size-coding pulsed); velocity stays as a
+     * vector line. One colour per track across scope, list and EO overlay. */
     ctx.font = (11 * dpr) + "px ui-monospace, monospace";
     targets(radar).forEach(function (t) {
       if (!inFov(t.x, t.y)) return;                 /* hide targets outside the FOV */
-      var tc = W2C(t.x, t.y), col = tcolor(t.tid);
-      var wpx = Math.max(6 * dpr, 2 * t.sx * scale), hpx = Math.max(6 * dpr, 2 * t.sy * scale);
+      var tc = W2C(t.x, t.y), col = tcolor(t.tid), rr = 10 * dpr;
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5 * dpr;
-      ctx.strokeRect(tc[0] - wpx / 2, tc[1] - hpx / 2, wpx, hpx);
+      ctx.beginPath(); ctx.arc(tc[0], tc[1], rr, 0, 2 * Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.arc(tc[0], tc[1], 1.6 * dpr, 0, 2 * Math.PI); ctx.fill();
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
       var spd = Math.hypot(t.vx, t.vy);
-      ctx.fillText("R#" + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] - wpx / 2 + 2 * dpr, tc[1] - hpx / 2 - 3 * dpr);
+      ctx.fillText("R#" + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] + rr + 3 * dpr, tc[1] - rr - 3 * dpr);
     });
   }
 

@@ -81,7 +81,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 - Live boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:8094`).
   `dets[]` = classified model boxes (solid; **human** cyan, **vehicle** amber, label =
   class + confidence). `movers[]` = motion-only "something moving" (dashed titanium,
-  `MOV·age`). One box per target — the daemon dedups model-vs-motion overlap.
+  `MOT ·age` tag above the box — that tag is how you tell a motion-head box from a model
+  box, which reads class+confidence instead). One box per target — the daemon dedups
+  model-vs-motion overlap.
 - `px` boxes are in the **native** 1440×1088 frame; the console maps them through the
   current zoom crop + the letterboxed video rect, clipped to the video content.
 - Live-only for now (no recorded det channel yet); the stream closes in replay.
