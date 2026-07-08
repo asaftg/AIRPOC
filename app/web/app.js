@@ -289,9 +289,8 @@
     for (var i = 0; i < 5; i++) {
       if (i < rows.length) {
         var r = rows[i], t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
-        var eng = (t.tid === engagedTid), cls = "tgt-row" + (eng ? " eng" : "");
-        out.push('<li class="' + cls + '" data-tid="' + t.tid + '" style="border-left-color:' + (eng ? "var(--on)" : col) + '">'
-          + '<span class="tid" style="color:' + (eng ? "var(--on)" : col) + '">R#' + t.tid + '</span>'
+        out.push('<li class="tgt-row" data-tid="' + t.tid + '" style="border-left-color:' + col + '">'
+          + '<span class="tid" style="color:' + col + '">R#' + t.tid + '</span>'
           + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
           + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>');
       } else {
@@ -514,21 +513,18 @@
     });
 
     /* target boxes — the daemon's tracker output drawn verbatim (it confirms/coasts/
-     * dedups server-side; tids are stable) + the engaged LOCK */
+     * dedups server-side; tids are stable). No engaged/LOCK styling — tracking isn't a
+     * phase yet, and every track keeps ONE colour across scope, list and EO overlay. */
     ctx.font = (11 * dpr) + "px ui-monospace, monospace";
     targets(radar).forEach(function (t) {
       if (!inFov(t.x, t.y)) return;                 /* hide targets outside the FOV */
-      var tc = W2C(t.x, t.y), locked = (t.tid === engagedTid);
-      var col = locked ? css("--on") : tcolor(t.tid);
+      var tc = W2C(t.x, t.y), col = tcolor(t.tid);
       var wpx = Math.max(6 * dpr, 2 * t.sx * scale), hpx = Math.max(6 * dpr, 2 * t.sy * scale);
-      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
-      if (locked) {
-        var cc = 8 * dpr, x0 = tc[0] - wpx / 2, y0 = tc[1] - hpx / 2;
-        [[x0, y0, 1, 1], [x0 + wpx, y0, -1, 1], [x0, y0 + hpx, 1, -1], [x0 + wpx, y0 + hpx, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
-      } else ctx.strokeRect(tc[0] - wpx / 2, tc[1] - hpx / 2, wpx, hpx);
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeRect(tc[0] - wpx / 2, tc[1] - hpx / 2, wpx, hpx);
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
       var spd = Math.hypot(t.vx, t.vy);
-      ctx.fillText((locked ? "LOCK #" : "R#") + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] - wpx / 2 + 2 * dpr, tc[1] - hpx / 2 - 3 * dpr);
+      ctx.fillText("R#" + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] - wpx / 2 + 2 * dpr, tc[1] - hpx / 2 - 3 * dpr);
     });
   }
 

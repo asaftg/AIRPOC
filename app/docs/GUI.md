@@ -26,7 +26,7 @@ full-screen (see `app.css` media query).
   boxes, zoom **±** (bottom-left), the control cluster (bottom-centre). Scrim shows
   **EO · NOT CONNECTED** / **NO VIDEO RECORDED** (replay of a radar-only session).
 - **Target list (right, top):** class-less radar targets straight from the frame (the
-  daemon's tracker confirms/coasts, so rows don't flicker); engaged target green; tap a
+  daemon's tracker confirms/coasts, so rows don’t flicker); tap a
   row → MANUAL-select it.
 - **Radar scope (right, bottom):** see *Radar rendering* below. Expand button flips it to
   the big view (EO drops to a PIP).
@@ -58,8 +58,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   = adaptive stretch (grows to fit the farthest target); the presets pin the range. Grey
   metric range-grid rings + **constant amber reference rings at 100 m and 250 m** on every
   zoom.
-- Doppler colours (red inbound / blue outbound / static), per-point SNR alpha, green
-  engaged LOCK, dashed FOV wedge + boresight. **No GUI-side persistence** — the daemon is
+- Doppler colours (red inbound / blue outbound / static), per-point SNR alpha, dashed FOV
+  wedge + boresight. No engaged/LOCK styling anywhere (scope, list, EO) until the tracking
+  phase exists — a track wears ONE colour everywhere. **No GUI-side persistence** — the daemon is
   a temporal tracker (stable tids, M-of-N confirm, coast, park-hold), so target boxes and
   list rows are drawn verbatim from the frame; a GUI hold would double-persist.
 
