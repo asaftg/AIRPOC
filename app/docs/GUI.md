@@ -62,6 +62,17 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   a temporal tracker (stable tids, M-of-N confirm, coast, park-hold), so target boxes and
   list rows are drawn verbatim from the frame; a GUI hold would double-persist.
 
+## EO detector overlay (console-owned render; detection module owns the boxes)
+- Live boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:8094`).
+  `dets[]` = classified model boxes (solid; **human** cyan, **vehicle** amber, label =
+  class + confidence). `movers[]` = motion-only "something moving" (dashed titanium,
+  `MOV·age`). One box per target — the daemon dedups model-vs-motion overlap.
+- `px` boxes are in the **native** 1440×1088 frame; the console maps them through the
+  current zoom crop + the letterboxed video rect, clipped to the video content.
+- Live-only for now (no recorded det channel yet); the stream closes in replay.
+- Heads-up: until the trained mono model lands, the stock COCO placeholder emits false
+  "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
+
 ## Tracking — AUTO / MANUAL (cluster `TRACK`)
 - **AUTO** engages the most important target (fused → nearer → confidence; radar-only for
   now). **MANUAL** engages the target you tap (EO, mapped via the feed's FOV, or the
@@ -88,6 +99,10 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native).
 - **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
+- **DETECTOR** — CONF (min confidence to show a box), CADENCE (model runs every Nth
+  frame), MOTION on/off (the dashed-mover safety net), MAX DETS, MOT SENS (`mot_k` —
+  lower flags weaker motion), MOT HOLD (`mot_persist`). Forwarded namespaced
+  `det_<key>=` → detection daemon `/ctl`; readback from `/dstats` (values under `knobs`).
 - **RADAR** — the daemon's **nine** tracker knobs: FOV ± (default **60°**), MIN SNR,
   MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
   merge radius for co-located boxes), MIN PTS, CONFIRM (M-of-N hits before a track
@@ -105,9 +120,12 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 | `/stream` | EO module's JPEG frames **relayed** as MJPEG multipart, fanned to every screen |
 | `/radar` | the radar daemon's latest frame **verbatim** (one-shot poll; used in replay) |
 | `/radar/stream` | **SSE** push of each radar frame at native rate (`data: {…}`); the live path |
-| `/rstats` | the radar daemon's `/stats` (its 6 control values + fps/drops) for slider init |
+| `/det/stream` | **SSE** push of each detector message (~15/s); the live det-box path |
+| `/det` | the detector's latest message verbatim (one-shot poll) |
+| `/dstats` | the detector's `/stats` (health + `knobs`) for slider init |
+| `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |
-| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → daemon (`/ctl`); the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/res`) → the EO feed |
+| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/res`) → the EO feed |
 | `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export`, `/rec/replay/*` |
 
 `/stats` top-level: `eo_connected`, `mbps`, `tx_fps`, `link_type`, `rssi_dbm`, `link_mbps`,

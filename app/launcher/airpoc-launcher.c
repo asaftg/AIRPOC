@@ -112,12 +112,12 @@ static const char *PAGE =
 "<button class=danger onclick=shutdownJetson()>\\u23fb SHUTDOWN JETSON</button>"
 "<script>"
 "function poll(){fetch('/status').then(r=>r.json()).then(d=>{"
-"var n=(d.app?1:0)+(d.eo?1:0)+(d.radar?1:0);var dot=document.getElementById('dot');"
+"var n=(d.app?1:0)+(d.eo?1:0)+(d.radar?1:0)+(d.det?1:0);var dot=document.getElementById('dot');"
 "var bad=(d.eo&&!d.eo_rec)||(d.radar&&!d.radar_rec);"  /* feed live but recorder tap dead */
-"dot.className='dot'+(n===3&&!bad?' up':n>0?' part':'');"
-"document.getElementById('stat').textContent=n===0?'SYSTEM OFF':bad?'REC BUS DOWN':n===3?'SYSTEM UP':'STARTING\\u2026';"
+"dot.className='dot'+(n===4&&!bad?' up':n>0?' part':'');"
+"document.getElementById('stat').textContent=n===0?'SYSTEM OFF':bad?'REC BUS DOWN':n===4?'SYSTEM UP':'STARTING\\u2026';"
 "var fx=function(f,r){return f?(r?'\\u2713':'\\u2713 rec\\u2717'):'\\u2717';};"
-"document.getElementById('sub').textContent='app '+(d.app?'\\u2713':'\\u2717')+'  \\u00b7  eo '+fx(d.eo,d.eo_rec)+'  \\u00b7  radar '+fx(d.radar,d.radar_rec);"
+"document.getElementById('sub').textContent='app '+(d.app?'\\u2713':'\\u2717')+'  \\u00b7  eo '+fx(d.eo,d.eo_rec)+'  \\u00b7  radar '+fx(d.radar,d.radar_rec)+'  \\u00b7  det '+(d.det?'\\u2713':'\\u2717');"
 "document.getElementById('recw').textContent=bad?'\\u26a0 feed is live but the recorder tap is DOWN \\u2014 recordings will be EMPTY. Press START to re-attach.':'';"
 "}).catch(()=>{document.getElementById('stat').textContent='launcher unreachable';});}"
 "function go(a){document.getElementById('stat').textContent=(a==='start'?'STARTING':'STOPPING')+'\\u2026';"
@@ -161,10 +161,11 @@ static void handle_conn(int fd)
         reply(fd, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
     } else if (!strncmp(req, "GET /status", 11)) {
         int eo = port_up(8091), rad = port_up(8092);
-        char b[256];
+        char b[320];
         snprintf(b, sizeof b,
-                 "{\"app\":%s,\"eo\":%s,\"radar\":%s,\"eo_rec\":%s,\"radar_rec\":%s}",
+                 "{\"app\":%s,\"eo\":%s,\"radar\":%s,\"det\":%s,\"eo_rec\":%s,\"radar_rec\":%s}",
                  port_up(8080) ? "true" : "false", eo ? "true" : "false", rad ? "true" : "false",
+                 port_up(8094) ? "true" : "false",
                  (eo && rec_chan_up("eo_y10")) ? "true" : "false",
                  (rad && rec_chan_up("radar_raw")) ? "true" : "false");
         reply(fd, "application/json", b);

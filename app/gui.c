@@ -13,6 +13,7 @@
 #include "gui.h"
 #include "eo_client.h"
 #include "radar.h"
+#include "det.h"
 #include "web_assets.h"
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -272,6 +273,48 @@ static void handle_radar_stream(int fd)
     free(b);
 }
 
+/* Push detector messages to the browser as SSE at the daemon's tick rate (~15/s) —
+ * same event-driven shape as /radar/stream. Idle beat = {"connected":false}. */
+static void handle_det_stream(int fd)
+{
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\nConnection: close\r\n\r\n");
+    int cap = 262144;
+    char *b = malloc(cap);
+    if (!b) return;
+    unsigned seq = 0;
+    for (;;) {
+        int n = det_wait_frame(&seq, b, cap, 1500);
+        const char *payload = (n > 0) ? b : "{\"connected\":false}";
+        if (dprintf(fd, "data: %s\n\n", payload) < 0) break;
+    }
+    free(b);
+}
+
+/* latest det message verbatim (one-shot poll) */
+static void handle_det(int fd)
+{
+    int cap = 262144;
+    char *b = malloc(cap);
+    if (!b) { close(fd); return; }
+    int n = det_get_frame_json(b, cap);
+    if (n <= 0 || !det_connected())
+        n = snprintf(b, cap, "{\"connected\":false,\"dets\":[],\"movers\":[]}\n");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n", n);
+    ssize_t w = write(fd, b, n); (void)w;
+    free(b);
+}
+
+/* the detector's /stats (health + its knobs object), for slider init + readback */
+static void handle_dstats(int fd)
+{
+    char s[8192]; int n = det_get_stats(s, sizeof s);
+    if (n <= 0) n = snprintf(s, sizeof s, "{}");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
+}
+
 /* the daemon's /stats (its 6 control values + fps/drops), for slider init + readback */
 static void handle_rstats(int fd)
 {
@@ -358,6 +401,21 @@ static void handle_ctl(const char *req)
     }
     if (dn > 0) { radar_ctl(dq); return; }
 
+    /* detector controls: strip the det_ namespace and forward to the daemon's /ctl */
+    static const char *DET_KEYS[] = { "conf", "cadence", "motion", "max_dets", "mot_k", "mot_persist" };
+    char xq[256]; int xn = 0;
+    for (unsigned k = 0; k < sizeof(DET_KEYS) / sizeof(DET_KEYS[0]); k++) {
+        char pref[24]; int pl = snprintf(pref, sizeof pref, "det_%s=", DET_KEYS[k]);
+        char *rp = strstr(query, pref);
+        if (!rp) continue;
+        rp += pl;
+        char val[24]; int vi = 0;
+        while (rp[vi] && rp[vi] != '&' && vi < (int)sizeof(val) - 1) { val[vi] = rp[vi]; vi++; }
+        val[vi] = 0;
+        xn += snprintf(xq + xn, sizeof(xq) - (size_t)xn, "%s%s=%s", xn ? "&" : "", DET_KEYS[k], val);
+    }
+    if (xn > 0) { det_ctl(xq); return; }
+
     for (unsigned k = 0; k < sizeof(EO_KEYS) / sizeof(EO_KEYS[0]); k++)
         if (strstr(query, EO_KEYS[k])) { eo_ctl(query); break; }   /* forward EO controls */
 }
@@ -399,6 +457,9 @@ static void *client(void *arg)
     else if (has(req, "/stats"))     handle_stats(fd);
     else if (has(req, "/radar/stream")) handle_radar_stream(fd);
     else if (has(req, "/radar"))     handle_radar(fd);
+    else if (has(req, "/det/stream")) handle_det_stream(fd);
+    else if (has(req, "/dstats"))    handle_dstats(fd);
+    else if (has(req, "/det"))       handle_det(fd);
     else if (has(req, "/ctl")) {
         handle_ctl(req);
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";

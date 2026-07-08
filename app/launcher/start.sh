@@ -80,7 +80,7 @@ sleep 2   # let the feeds bind before the console dials into them
 
 # --- Operator console (consumer; no shm tap) ---
 if up 8080; then echo ":8080 already up — skip"
-else launch 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093; fi
+else launch 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094; fi
 
 # Recorder re-attach: if we (re)started a producer, its shm is fresh; bounce the always-on
 # recorder so its taps bind to the live feeds (else it records 0 bytes). Only on a real

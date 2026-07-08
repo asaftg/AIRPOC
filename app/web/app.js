@@ -229,6 +229,36 @@
     }).catch(function () {});
   }
 
+  /* ── detector controls — the detection daemon's knobs (detection/docs/INTEGRATION.md).
+   * Sent namespaced det_<key>= (the app strips the prefix → daemon :8094 /ctl); readback
+   * comes from /dstats, where the applied values live under the nested "knobs" object. ── */
+  var DETC = [
+    { key: "conf",        fmt: function (v) { return v.toFixed(2); } },
+    { key: "cadence",     fmt: function (v) { return String(v | 0); } },
+    { key: "max_dets",    fmt: function (v) { return String(v | 0); } },
+    { key: "mot_k",       fmt: function (v) { return v.toFixed(1); } },
+    { key: "mot_persist", fmt: function (v) { return String(v | 0); } }
+  ];
+  var dtTouch = 0;
+  DETC.forEach(function (c) {
+    $("dt-" + c.key).oninput = function () { $("dv-" + c.key).textContent = c.fmt(parseFloat(this.value)); dtTouch = Date.now(); ctl("det_" + c.key + "=" + this.value); };
+  });
+  document.querySelectorAll("#mot-btns [data-mot]").forEach(function (b) {
+    b.onclick = function () { dtTouch = Date.now(); ctl("det_motion=" + b.dataset.mot); setSeg("mot-btns", b); };
+  });
+  function pollDstats() {
+    if (replaying) return;
+    fetch("/dstats").then(function (r) { return r.json(); }).then(function (d) {
+      var k = d.knobs || {};
+      if (Date.now() - dtTouch < 1500) return;   /* don't fight an active drag */
+      DETC.forEach(function (c) {
+        var v = k[c.key];
+        if (typeof v === "number" && document.activeElement !== $("dt-" + c.key)) { $("dt-" + c.key).value = v; $("dv-" + c.key).textContent = c.fmt(v); }
+      });
+      if (typeof k.motion === "number") { var mb = document.querySelector('#mot-btns [data-mot="' + k.motion + '"]'); if (mb) setSeg("mot-btns", mb); }
+    }).catch(function () {});
+  }
+
   /* ── reserved ── */
   $("to-control").onclick = function () { location.href = "http://" + location.hostname + ":8088/"; };  /* back to the START/STOP launcher */
 
@@ -323,6 +353,41 @@
           ctx.restore(); ctx.globalAlpha = 1;
         }
       }
+    }
+
+    /* EO detector boxes — px = [cx,cy,w,h] in the NATIVE frame (msg.img, 1440x1088).
+     * The display shows a centered 1/zoom crop of native, letterboxed into the panel
+     * (object-fit: contain) — map native -> crop -> content rect. dets[] solid with
+     * class+conf; movers[] dashed class-less. Live-only (guarded off in replay). */
+    if (!replaying && lastDet && (lastDet.dets || lastDet.movers)) {
+      var im = lastDet.img || { w: 1440, h: 1088 };
+      var z = es.zoom || 1;
+      var cw = im.w / z, ch = im.h / z, ox = (im.w - cw) / 2, oy = (im.h - ch) / 2;
+      var sw = es.dw || cw, sh = es.dh || ch, ar = sw / sh;   /* streamed frame sets the letterbox */
+      var vw, vh, vx, vy;
+      if (w / h > ar) { vh = h; vw = h * ar; vx = (w - vw) / 2; vy = 0; }
+      else { vw = w; vh = w / ar; vx = 0; vy = (h - vh) / 2; }
+      ctx.save(); ctx.beginPath(); ctx.rect(vx, vy, vw, vh); ctx.clip();
+      ctx.font = (10 * dpr) + "px ui-monospace, monospace";
+      var drawDet = function (b, dashed, col, label) {
+        if (!b.px || b.px.length < 4) return;
+        var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
+        var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
+        if (bx + bw2 / 2 < vx || bx - bw2 / 2 > vx + vw || by + bh2 / 2 < vy || by - bh2 / 2 > vy + vh) return;
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.6 * dpr;
+        ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
+        ctx.strokeRect(bx - bw2 / 2, by - bh2 / 2, bw2, bh2);
+        ctx.setLineDash([]);
+        ctx.fillText(label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr);
+      };
+      (lastDet.dets || []).forEach(function (d) {
+        var col = d.cls === "human" ? "#40c4ff" : amber;
+        drawDet(d, false, col, (d.cls || "?").toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%");
+      });
+      (lastDet.movers || []).forEach(function (mv) {
+        drawDet(mv, true, "rgba(150,157,168,0.9)", "MOV·" + (mv.age || 0));
+      });
+      ctx.restore();
     }
   }
 
@@ -576,6 +641,21 @@
     fetch(API.radar).then(function (r) { return r.json(); }).then(onRadarFrame).catch(function () {});
   }
 
+  /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
+   * model boxes) + movers[] (motion-only); drawn over the video in drawEO. Live-only for
+   * now (no replay channel yet). {"connected":false} heartbeat clears the boxes. */
+  var lastDet = null, detES = null;
+  function openDetStream() {
+    if (detES) { detES.close(); detES = null; }
+    detES = new EventSource("/det/stream");
+    detES.onmessage = function (e) {
+      if (replaying) return;
+      try { var m = JSON.parse(e.data); lastDet = (m && m.connected === false) ? null : m; } catch (x) {}
+      drawEO();
+    };
+    detES.onerror = function () { if (!replaying) { lastDet = null; drawEO(); } };   /* auto-reconnects */
+  }
+
   /* Reflect the EO feed's ISP state into the DEV panel (guarded so a poll never fights a
    * control the operator is actively touching). */
   function updateISP(eo) {
@@ -761,6 +841,7 @@
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
+      if (detES) { detES.close(); detES = null; } lastDet = null;   /* no live det boxes over a recording */
       resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
@@ -787,6 +868,7 @@
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
     openRadarStream();                                   /* resume the live radar push */
+    openDetStream();                                     /* resume the live det boxes */
     resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
     $("library").hidden = false; loadLibrary();
   }
@@ -844,6 +926,8 @@
   setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
+  openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
   setInterval(pollRstats, 400); pollRstats();
+  setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();
 })();

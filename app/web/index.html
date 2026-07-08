@@ -115,6 +115,14 @@
       <div class="srow" title="IR light output strength."><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
       <div class="srow" title="IR beam width. Narrow = reaches farther but lights a smaller area; wide = covers the whole view up close."><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
 
+      <div class="sec">DETECTOR</div>
+      <div class="srow" title="Minimum model confidence to show a box. Lower = more boxes but more false ones; higher = only sure calls."><label>CONF</label><input type="range" id="dt-conf" min="0.05" max="0.95" step="0.05" value="0.5"><span class="val" id="dv-conf">0.50</span></div>
+      <div class="srow" title="The model runs on every Nth video frame. 1 = every frame (most GPU), 8 = lightest. Motion boxes still update every frame."><label>CADENCE</label><input type="range" id="dt-cadence" min="1" max="8" step="1" value="4"><span class="val" id="dv-cadence">4</span></div>
+      <div class="srow" title="Safety net that flags ANYTHING moving that the model didn't classify — shown as dashed boxes with no class."><label>MOTION</label><div class="btns" id="mot-btns"><button data-mot="0">OFF</button><button data-mot="1" class="on">ON</button></div></div>
+      <div class="srow" title="Most boxes reported per frame."><label>MAX DETS</label><input type="range" id="dt-max_dets" min="8" max="256" step="8" value="128"><span class="val" id="dv-max_dets">128</span></div>
+      <div class="srow" title="Motion sensitivity. LOWER flags weaker motion (more movers, more false ones); higher = only strong motion."><label>MOT SENS</label><input type="range" id="dt-mot_k" min="1" max="20" step="0.5" value="6"><span class="val" id="dv-mot_k">6.0</span></div>
+      <div class="srow" title="Frames a mover must keep moving before it's shown. Higher = fewer flickery false movers, slower to appear."><label>MOT HOLD</label><input type="range" id="dt-mot_persist" min="1" max="10" step="1" value="3"><span class="val" id="dv-mot_persist">3</span></div>
+
       <div class="sec">RADAR</div>
       <div class="srow" title="Only show radar hits within this angle left/right of straight ahead."><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="60"><span class="val" id="rv-fov">60°</span></div>
       <div class="srow" title="Hide radar returns weaker than this. The chip itself sends nothing below 16 dB, so 16 = everything; raise it to keep only strong reflectors."><label>MIN SNR</label><input type="range" id="rd-snrmin" min="16" max="60" step="1" value="16"><span class="val" id="rv-snrmin">16 dB</span></div>
