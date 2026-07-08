@@ -1,37 +1,46 @@
 # Radar module — status & future work
 
-## Status (2026-07-04)
+## Status (2026-07-08)
 
 Working and **verified on the board**: aarch64 build, cfg push, 3.125 Mbaud
 UART, **26 Hz / 0 dropped frames** (zero-compromise dead-time trim — see
 [`FRAMERATE.md`](FRAMERATE.md)), per-point **SNR live** (~16–50 dB), the chip's
-own DSP timing surfaced in `/stats` (`dsp_proc_ms`/`dsp_margin_ms`),
-range-adaptive DBSCAN → class-less per-frame boxes, SSE previewer with a live
-tuning panel (6 live `/ctl` knobs: ε / min-pts / min-speed / min-SNR / FOV /
-doppler gate). Consumed end-to-end by the GUI (`app/radar_client.c` → `:8092`).
-Detections are class-less; no coasting (that's the tracking module's job). Daemon
-runs at ~1.9% CPU / ~1 MB RSS. See [`README.md`](../README.md).
+own DSP timing surfaced in `/stats` (`dsp_proc_ms`/`dsp_margin_ms`), a
+**temporal multi-target tracker** → class-less target boxes (velocity from
+position history, M-of-N confirm, short coast, park-hold, spatial dedup), SSE
+previewer with a live tuning panel (**9** live `/ctl` knobs: dedup / min-pts /
+min-speed / min-SNR / FOV / merge-gate / confirm / coast / park). Consumed
+end-to-end by the GUI (`app/radar_client.c` → `:8092`). Detections are
+class-less; the tracker confirms/coasts/park-holds, so the GUI no longer adds
+its own persistence. Offline-validated against the session recording (detect
+0.70, matches the Python reference). Daemon runs at ~1% CPU / <1 MB RSS. See
+[`README.md`](../README.md) and [`TUNING.md`](TUNING.md).
 
 ## Future work — ordered by value / readiness
 
-### 1. Tune the detector against real returns (near-term, high value, cheap)
-Nothing here needs new code — it needs the board and moving targets. Walk
-people and drive vehicles at known ranges and set the parameters empirically
-(procedure + which knobs in [`TUNING.md`](TUNING.md)). Priorities: the
-`min SNR` default (now that SNR is live), the `ε range slope` (0.06, unverified),
-and the doppler gate (3). This is the single best next step.
+### 1. Re-tune across more recordings (near-term, high value)
+Every tracker parameter was tuned against **one** recording (see the caveat in
+[`TUNING.md`](TUNING.md)). As we capture more scenes — open field, heavy
+clutter, faster movers, different mount height — re-validate and adjust. Tune the
+live knobs first; touch the fixed numbers only when a whole behaviour is wrong;
+and re-check **all** recordings before shipping a change so a fix for one scene
+doesn't regress another. Single best next step; pairs with #2.
 
-### 2. Record + replay (enables repeatable tuning/regression)
-Add a way to record the raw TLV stream to a file and replay it through the
-daemon (a `-r <file>` mode next to `-s` sim). Lets us tune and regression-test
-offline against captured scenes instead of needing a live walk every time. The
-ground bench had recordings; we should too.
+### 2. Offline scorer / regression harness (enables repeatable tuning)
+Recording + replay already exist (the recorder taps raw radar + the wire; replay
+serves recorded frames). What's missing is the **scorer**: a committed `tools/`
+utility that replays a recording through the tracker and diffs the result
+against ground truth (detect / false / latency / one-box-per-target). That is
+what makes #1 repeatable — the tracker was validated exactly this way with bench
+scaffolding; productizing it lets every future change (and the gtrack migration)
+be regression-checked before it lands.
 
-### 3. Expose the last fixed knobs live (small)
-The doppler gate and FOV are now live `/ctl` params (done). Remaining fixed
-`#define`s worth promoting for live tuning: `EPS_RANGE_SLOPE` (0.06) and
-`MINPTS_RANGE_SLOPE` (0.04) — the two range-taper rates — so we can tune the
-near-vs-far behaviour from the previewer without rebuilds.
+### 3. (done) Live control surface
+The tracker exposes **9** live `/ctl` knobs (dedup, min-pts, min-speed, min-SNR,
+FOV, merge-gate, confirm, coast, park). The remaining fixed internals (confirm
+window, jitter gates, occupancy rates, association gates) are documented in
+[`TUNING.md`](TUNING.md) and rarely need live tuning; promote one only if a real
+scene shows it's needed.
 
 ### 4. Sensitivity: use SNR to trade false-alarms vs range (medium)
 Now that per-point SNR is live, explore: lower the CFAR floor (toward ~16 dB)

@@ -1,55 +1,84 @@
-# Radar detection parameters & tuning
+# Radar tracker — parameters, decisions & tuning
 
-The pipeline, then every knob: what it does, where it lives, whether it's live,
-and whether its value is **principled** or an **inherited default that still
-needs tuning against real returns**.
+The clusterer is a **temporal multi-target tracker** (`src/cluster.c`). This doc
+lists every knob and every fixed internal number, what it does, and **why it is
+set where it is**.
+
+> Pitfall: **every value here was tuned against a single recording** (the garage
+> + street session). They are a validated *starting point*, not universal
+> constants. Re-tune as more recordings arrive — see "Re-tuning" below.
+
+## Pipeline
 
 ```
-chip CFAR → point cloud (+per-point SNR) → point gates → DBSCAN
-  (range-adaptive) → NN association (stable ids) → per-frame boxes
+chip CFAR → point cloud (+per-point SNR)
+  → point gates (SNR / speed / FOV / elevation band)
+  → moving channel  +  fresh-static channel (occupancy map)
+  → predict + nearest-track association (velocity from position history)
+  → M-of-N confirm → short coast / park-hold → spatial dedup → target boxes
 ```
 
-## Where each knob lives
+Velocity comes from a least-squares fit of each track's own position history
+(range-rate + angle-rate), **never** from the ambiguous Doppler — that is the
+core design choice that makes the tracker class-agnostic.
 
-- **Live** — set at runtime via `GET /ctl?...` (previewer sliders or the GUI);
-  no restart. Echoed in `/stats`.
-- **Fixed** — compile-time `#define` in `src/cluster.c`; change = rebuild.
-- **cfg** — in `cfg/awr2944P_ag.cfg`, applied on the chip; change needs a
-  **radar power-cycle** (this firmware takes one cfg per power-cycle).
+## Where each parameter lives
 
-## The knobs
+- **Live** — `GET /ctl?...` (sliders / GUI), no restart, echoed in `/stats`.
+- **Fixed** — `#define` in `src/cluster.c`; changing it means a rebuild.
+- **cfg** — `cfg/awr2944P_ag.cfg`, applied on the chip; needs a radar power-cycle.
 
-| Knob | Value | Where | Basis | Effect / how to tune |
+## Live knobs (the 9 on `/ctl` + `/stats`)
+
+| Knob | `/ctl` key | Default | Range | Effect |
 |---|---|---|---|---|
-| **cluster ε** (near base) | 8 m | live | inherited (ground bench `eps_pos`) | "how close = same object" at the sensor. ↑ merges more, ↓ splits. |
-| **ε range slope** | 0.06 | fixed (`EPS_RANGE_SLOPE`) | **my estimate** (~target angular spread ≈ 3.4°) | ε grows `+slope·range` (dots spread with range). **Unverified** — walk a person at 30/60/100 m, measure real cluster spread, set to match. |
-| **min pts @near** | 2 | live | new, **range-adaptive** | points needed to seed a cluster **at the sensor**; auto-tapers with range down to a floor of 2 (`MINPTS_RANGE_SLOPE` 0.04). ↑ to reject sparse near clutter/multipath (a real close target is dense) **without** losing faint far targets (which are legitimately sparse). |
-| min pts range slope | 0.04 | fixed (`MINPTS_RANGE_SLOPE`) | new estimate | how fast the near `min pts` decays to the floor with range (reaches floor ~75 m at near=5). Tune with real data. |
-| **min speed** | 0.4 m/s | live | inherited (`speed_min`) | dynamic-only gate; slower dots = static clutter, excluded. Walking humans are 0.5–2 m/s. |
-| **min SNR** | 0 dB (off) | live | **new** | per-dot confidence gate *on top of* the chip's ~17 dB CFAR floor. 0 = trust CFAR only. ↑ to reject weak/noise, ↓ to reach for faint far dots. Unknown-SNR dots always pass. |
-| **FOV** | 90° (full) | live | **new** | azimuth half-angle gate: dots with `|az| > fov` don't cluster (no boxes off-axis); the wedge follows it. Narrow toward the ~±60° useful-AoA to drop unreliable wide-angle detections. |
-| **doppler gate** | 3 m/s | **live** | inherited value | two dots only join if radial speeds within this. Too small → one target (limbs / rigid-body spread) fragments; too large → different-speed objects merge. **Raise it to hold a passing vehicle together.** |
-| **CFAR floor** | 17 dB (range) | cfg | inherited, **UNVERIFIED** | the chip's detection threshold = hardware sensitivity floor. The "17 = floor, chip floods below" claim is a ground-bench comment we have **not tested on this board**. Step it down (17→15→13…) with a power-cycle each and watch stability / point-count / achieved range. Pair a lower CFAR with a host `min SNR`. See ROADMAP #4. |
-| size clamp | 0.25–3.0 m | fixed | inherited | box half-extent limits. |
-| assoc gate | 5 m (+growth) | fixed | inherited | NN association radius for stable ids. |
-| M-of-N confirm | 2 of 3 | fixed | inherited | a new track must hit 2 of 3 frames before it's published (kills 1-frame noise boxes). |
-| track miss budget | 5 frames | fixed | new | how long an unmatched track survives *internally* (never published) for id continuity. Not coasting. |
+| Dedup radius | `eps` | 4.5 m | 0.5–50 | co-located tracks emit **one** box; ↑ merges more. |
+| Min points | `minpts` | 2 | 1–20 | radar dots needed to start a track; ↑ = stricter, rejects sparse noise. |
+| Min speed | `speed` | 0.7 m/s | 0–5 | Doppler motion threshold; slower dots ignored as static clutter. |
+| Min SNR | `snrmin` | 16 dB | 0–60 | dot strength gate (static channel uses +3). Chip already floors at ~16. |
+| FOV | `fov` | 90° | 5–90 | azimuth gate, input **and** emit; the radar's real AoA limit is ±30°. |
+| Merge gate | `doppler` | 1.2 m/s | 0.5–20 | two co-located tracks merge only if their speeds agree within this. |
+| Confirm | `confirm` | 3 | 1–6 | M-of-N fast-confirm hits (window N = M+1). ↓ = appears faster, more false. |
+| Coast | `coast` | 0.4 s | 0–3 | how long a confirmed track survives a dropout. |
+| Park hold | `park` | 15 s | 0–60 | how long a moved-then-stopped track is held. |
 
-## How to tune (empirical, once we have the board + targets)
+## Fixed internal numbers — the decisions
 
-1. Open the previewer (`:8092`), walk a person and drive a vehicle at known
-   ranges (10 / 30 / 60 / 100 m).
-2. **min SNR:** slide up from 0 and watch weak clutter dots drop while the
-   target (strong, ~40–55 dB) holds. Set the default just below where the target
-   starts to thin out.
-3. **ε + ε-slope:** confirm one box per target across the whole range sweep —
-   if a far target fragments, raise the slope; if two near targets merge, lower ε.
-4. **min speed / doppler gate:** confirm a slow-walking person still clusters
-   and a person near a vehicle stays a separate box.
-5. Record the values that work and fold the *fixed* ones (`EPS_RANGE_SLOPE`,
-   `EPS_DOP_MPS`) back into `cluster.c`; the *live* ones become the shipped
-   defaults in `cluster.h`.
+All **empirical** (tuned against the recording) unless marked *physical*. These
+are the "why 8-of-12 and not 8-of-20" answers.
 
-> None of the inherited defaults (8, 3, 0.4, 17) has been re-validated for
-> AIRPOC's sensor mount and scene yet. Treat this doc's values as a starting
-> point, not ground truth. See [`ROADMAP.md`](ROADMAP.md).
+| Number | Value | Why this value |
+|---|---|---|
+| Fast-confirm window | N = M+1 | at most **one miss** allowed → a clean mover confirms almost immediately; keeping it tight is what stops noise from confirming fast. |
+| Slow/static confirm | **8 of 12** | backup path for a flickery or parked target the fast path would miss. 12 frames ≈ 0.5 s (a sensible recent window); 8/12 ≈ two-thirds = "clearly present more than a coin-flip → real, not noise." 8-of-20 would confirm sparser things, slower, and admit more noise. |
+| Jitter gate (fast / slow) | 2.6 m / 1.8 m | a track only confirms if its measured position is **consistent** frame-to-frame; noise jumps around, a real target does not. |
+| Occupancy learn (warm / run) | 0.10 / 0.0003 | how fast a static return becomes "background." After the 8 s warm-up a new static needs ~17 s+ to fade in, so an **idling car stays "fresh"** and keeps its box while true scenery is ignored. |
+| Occupancy decay / free | 5e-5 / 0.35 | a cell counts as historically empty below 0.35; slow decay so the map is stable. |
+| Association gate | 6 m range, 4 m cross, +0.45·speed, ×miss-growth | how far from its prediction a track will claim points; grows with speed and consecutive misses. |
+| Velocity-fit window | 0.9 s, min span 0.22 s | least-squares slope of position history → range-rate / angle-rate. |
+| Position blend | r 0.55, az 0.70, el 0.10 | measurement-vs-prediction smoothing; az tracks faster, **el is heavily smoothed** because the 2-row array's elevation is noisy. |
+| Seed link / guard | 5 m, 3.5 m cross / 5 m, 2.5° | how dots group into a new track; don't seed on top of an existing one. |
+| Elevation band / min range | −9°…+2.5° / 3 m | *physical*: ground-target elevation window; ignore returns closer than 3 m. |
+| Emit range / FOV | 500 m / the FOV knob | full radar coverage — no artificial clamp. |
+| Frame rate assumption | 26 Hz (`TRK_FPS`) | converts the coast/park **seconds** knobs to frames; matches the A/G profile. |
+
+## Re-tuning (as we get more recordings)
+
+The numbers above fit **one** scene. Different scenes (open field vs. clutter,
+faster movers, drones, different mount height) will want different values. The
+loop:
+
+1. **Record** the new scene with the recorder (raw radar + EO together), so
+   there's ground truth to score against.
+2. **Score** each recording offline: replay it through the tracker and compare
+   against the EO track of what was really there (detect rate, false rate,
+   confirm latency, one-box-per-target).
+3. **Adjust** live knobs first (they cover most cases); only touch the fixed
+   numbers if a whole behavior is wrong.
+4. **Re-validate across *all* recordings** before shipping a change — a value
+   that fixes scene B must not regress scene A.
+
+> The offline scorer used to validate this tracker (replay a recording → run the
+> tracker → diff vs. ground truth) currently exists only as bench scaffolding,
+> not a committed tool. Productizing it under `tools/` is what makes step 2
+> repeatable across a growing set of recordings. See [`ROADMAP.md`](ROADMAP.md).
