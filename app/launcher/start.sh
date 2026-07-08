@@ -62,6 +62,17 @@ else
   fi
 fi
 
+# --- Detection consumer (reads airpoc.eo_y10 read-only, serves :8094, shm tap:
+# airpoc.det_wire). EO object detector: publishes per-frame target boxes for the console
+# and tracker over /stream + /stats + /ctl. No device of its own; needs the EO tap but
+# self-heals if EO isn't up yet, so launch order after EO is enough. ---
+if healthy 8094 /dev/shm/airpoc.det_wire; then
+  echo ":8094 healthy — skip"
+else
+  ensure_gone "detectiond"
+  launch 8094 "$BASE/detection" ./detectiond -p 8094 && restarted=1
+fi
+
 sleep 2   # let the feeds bind before the console dials into them
 
 # --- Operator console (consumer; no shm tap) ---
