@@ -48,6 +48,7 @@ static volatile unsigned long long g_stream_frames = 0; /* total frames written 
 static char            g_wifi_if[32] = "";              /* WiFi iface name, or "" if none associated */
 static volatile double g_rssi = 0, g_link_mbps = -1;    /* RSSI dBm + negotiated PHY rate (Mb/s) */
 static volatile double g_cpu_pct = -1;                  /* aggregate CPU busy %, sampled ~1s */
+static volatile double g_gpu_pct = -1;                  /* GPU load %, 1s mean of 100ms samples */
 static pthread_t       g_net_th;
 static int             g_net_ok = 0;
 
@@ -157,7 +158,16 @@ static void *net_poller(void *a)
             snprintf(g_wifi_if, sizeof g_wifi_if, "%s", ifn); g_rssi = rssi; g_link_mbps = lr;
         } else { g_wifi_if[0] = 0; g_link_mbps = -1.0; }
         g_cpu_pct = read_cpu_pct();      /* ~1s window per loop */
-        for (int i = 0; i < 10 && g_run; i++) usleep(100000);
+        /* GPU load is a square wave (the detector fires inference in bursts: raw sysfs
+         * flips 0 <-> ~997 permille within 50 ms), so an instantaneous read is noise.
+         * Sample every 100 ms across this loop and publish the 1 s mean, like CPU. */
+        double gsum = 0; int gn = 0;
+        for (int i = 0; i < 10 && g_run; i++) {
+            double g = read_gpu_pct();
+            if (g >= 0) { gsum += g; gn++; }
+            usleep(100000);
+        }
+        g_gpu_pct = gn ? gsum / gn : -1.0;
     }
     return NULL;
 }
@@ -208,7 +218,7 @@ static void handle_stats(int fd)
     double cpu = read_temp_c("/sys/class/thermal/thermal_zone8/temp");
     if (cpu < 0) cpu = read_temp_c("/sys/class/thermal/thermal_zone0/temp");
     char cpu_s[16]; if (cpu < 0) snprintf(cpu_s, sizeof cpu_s, "null"); else snprintf(cpu_s, sizeof cpu_s, "%.0f", cpu);
-    double cpupct = g_cpu_pct, gpupct = read_gpu_pct();
+    double cpupct = g_cpu_pct, gpupct = g_gpu_pct;
     char cpp_s[16], gpp_s[16];
     if (cpupct < 0) snprintf(cpp_s, sizeof cpp_s, "null"); else snprintf(cpp_s, sizeof cpp_s, "%.0f", cpupct);
     if (gpupct < 0) snprintf(gpp_s, sizeof gpp_s, "null"); else snprintf(gpp_s, sizeof gpp_s, "%.0f", gpupct);
