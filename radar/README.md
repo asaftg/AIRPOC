@@ -18,14 +18,17 @@ the fusion module's job.
 - `GET /` → PPI previewer page; `GET /radar_view.js` → its script.
 - `GET /stream` → **Server-Sent Events**, one JSON frame per radar frame.
 - `GET /stats` → fps, drops, counts, connected, profile, max_range, plus the
-  six live control values (`cluster_eps_m`, `cluster_min_pts`, `speed_min_mps`,
-  `snr_min_db`, `fov_half_deg`, `doppler_gate_mps`).
-- `GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` → set the tracker live
-  (`200 ok`). Same six knobs, remapped to the tracker (see
-  [`docs/TUNING.md`](docs/TUNING.md) for meanings/ranges/defaults):
+  nine live control values (`cluster_eps_m`, `cluster_min_pts`, `speed_min_mps`,
+  `snr_min_db`, `fov_half_deg`, `doppler_gate_mps`, `confirm`, `coast_s`,
+  `park_s`).
+- `GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=&confirm=&coast=&park=` →
+  set the live tracker knobs (`200 ok`; absent params keep their value). Meanings
+  (see [`docs/TUNING.md`](docs/TUNING.md) for ranges/defaults):
   `eps`→dedup radius, `minpts`→seed points, `speed`→Doppler motion threshold,
   `snrmin`→point-strength gate, `fov`→azimuth gate, `doppler`→merge
-  velocity-coherence.
+  velocity-coherence, `confirm`→M-of-N confirm hits (latency vs false alarms),
+  `coast`→seconds a track survives a dropout, `park`→seconds a stopped mover is
+  held.
 
 **Produces** — recorder taps (shared memory; protocol per
 [`recorder/docs/TAP.md`](../recorder/docs/TAP.md) v1; vendored header

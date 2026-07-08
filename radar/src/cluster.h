@@ -18,6 +18,9 @@
  *   MIN SNR      -> point strength gate (static channel = +3 dB)
  *   FOV          -> azimuth gate (input + emit)
  *   DOPPLER      -> velocity-coherence gate for the duplicate-merge
+ *   CONFIRM      -> M-of-N hits to confirm a track (latency vs false alarms)
+ *   COAST        -> seconds a confirmed track survives a dropout
+ *   PARK         -> seconds a moved-then-stopped track is held
  */
 #ifndef AIRPOC_CLUSTER_H
 #define AIRPOC_CLUSTER_H
@@ -47,6 +50,16 @@ typedef struct RadarClusterer RadarClusterer;
 #define CLUSTER_FOV_MAX          90.0
 #define CLUSTER_DOP_MIN          0.5
 #define CLUSTER_DOP_MAX          20.0
+/* Temporal-track knobs. */
+#define CLUSTER_DEFAULT_CONFIRM  3      /*     — M-of-N fast-confirm hits (window = M+1) */
+#define CLUSTER_DEFAULT_COAST_S  0.4    /* s   — a confirmed track survives a dropout this long */
+#define CLUSTER_DEFAULT_PARK_S   15.0   /* s   — a moved-then-stopped (parked) track is held this long */
+#define CLUSTER_CONFIRM_MIN      1
+#define CLUSTER_CONFIRM_MAX      6
+#define CLUSTER_COAST_MIN        0.0
+#define CLUSTER_COAST_MAX        3.0
+#define CLUSTER_PARK_MIN         0.0
+#define CLUSTER_PARK_MAX         60.0
 
 RadarClusterer *cluster_new(void);
 void            cluster_free(RadarClusterer *c);
@@ -61,6 +74,11 @@ void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
  * merge velocity-coherence gate (m/s). Clamped. Same thread-safety note. */
 void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
                        double fov_half_deg, double doppler_gate_mps);
+
+/* confirm_m -> M-of-N fast-confirm hits (window = M+1); coast_s -> seconds a
+ * confirmed track coasts through a dropout before it dies; park_s -> seconds a
+ * moved-then-stopped track is held. Clamped. Same thread-safety note. */
+void cluster_set_track(RadarClusterer *c, int confirm_m, double coast_s, double park_s);
 
 /* Current azimuth-gate half-angle (deg) — published on the wire for the wedge. */
 double cluster_fov(const RadarClusterer *c);

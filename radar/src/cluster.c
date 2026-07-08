@@ -39,8 +39,6 @@
 #define SPEED_GATE_S 0.45
 #define MISS_GROW 0.30
 #define MISS_GROW_CAP 2.0
-#define CONF_M 3
-#define CONF_N 4
 #define MV_RATE_MIN 0.6
 #define JIT_MAX 2.6
 #define ST_CONF_M 8
@@ -48,12 +46,11 @@
 #define ST_JIT_MAX 1.8
 #define JIT_ALPHA 0.35
 #define TENT_MAX_MISS 3
-#define CONF_MAX_MISS 10
 #define EMIT_MAX_MISS 3
 #define PARK_DISP 1.8
 #define PARK_WIN 4.0
 #define PARK_TRAVEL 4.0
-#define PARK_MISS 390
+#define TRK_FPS 26.0     /* A/G profile frame rate: coast/park seconds -> frames */
 #define VEL_WIN 0.9
 #define VEL_MIN_SPAN 0.22
 #define SPEED_MAX 30.0
@@ -98,6 +95,9 @@ struct RadarClusterer {
     float snr_mv;        /* snr knob (static = +3) */
     float fov_half;      /* fov knob   */
     float merge_dv;      /* doppler knob */
+    int   conf_m;        /* confirm knob (M-of-N, window = M+1) */
+    double coast_s;      /* coast knob (seconds) */
+    double park_s;       /* park-hold knob (seconds) */
 };
 
 RadarClusterer *cluster_new(void) {
@@ -109,6 +109,9 @@ RadarClusterer *cluster_new(void) {
         c->snr_mv      = (float)CLUSTER_DEFAULT_SNR;
         c->fov_half    = (float)CLUSTER_DEFAULT_FOV;
         c->merge_dv    = (float)CLUSTER_DEFAULT_DOP;
+        c->conf_m      = CLUSTER_DEFAULT_CONFIRM;
+        c->coast_s     = CLUSTER_DEFAULT_COAST_S;
+        c->park_s      = CLUSTER_DEFAULT_PARK_S;
     }
     return c;
 }
@@ -136,6 +139,16 @@ void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_d
     if (doppler_gate_mps > CLUSTER_DOP_MAX) doppler_gate_mps = CLUSTER_DOP_MAX;
     c->vmin = (float)speed_min_mps; c->snr_mv = (float)snr_min_db;
     c->fov_half = (float)fov_half_deg; c->merge_dv = (float)doppler_gate_mps;
+}
+void cluster_set_track(RadarClusterer *c, int confirm_m, double coast_s, double park_s) {
+    if (!c) return;
+    if (confirm_m < CLUSTER_CONFIRM_MIN) confirm_m = CLUSTER_CONFIRM_MIN;
+    if (confirm_m > CLUSTER_CONFIRM_MAX) confirm_m = CLUSTER_CONFIRM_MAX;
+    if (coast_s < CLUSTER_COAST_MIN) coast_s = CLUSTER_COAST_MIN;
+    if (coast_s > CLUSTER_COAST_MAX) coast_s = CLUSTER_COAST_MAX;
+    if (park_s < CLUSTER_PARK_MIN) park_s = CLUSTER_PARK_MIN;
+    if (park_s > CLUSTER_PARK_MAX) park_s = CLUSTER_PARK_MAX;
+    c->conf_m = confirm_m; c->coast_s = coast_s; c->park_s = park_s;
 }
 
 /* ---- helpers ---- */
@@ -222,6 +235,9 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     int warm = (now_t - R->t0) < WARMUP_S;
     double snr_st = R->snr_mv + 3.0f;
     double fov = R->fov_half; if (fov > AZ_KEEP_CAP) fov = AZ_KEEP_CAP;
+    int conf_m = R->conf_m, conf_n = conf_m + 1;          /* live confirm knob */
+    int coast_frames = (int)lround(R->coast_s * TRK_FPS); /* live coast knob   */
+    int park_frames  = (int)lround(R->park_s * TRK_FPS);  /* live park knob    */
 
     for (int i=0;i<n;i++) pts[i].tid = 255;
 
@@ -333,12 +349,12 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     for(int ti=0;ti<MAX_TRK;ti++){
         Track *t=&R->tracks[ti]; if(!t->used) continue;
         if(!t->confirmed && t->misses>TENT_MAX_MISS){ t->used=0; continue; }
-        if(t->confirmed && t->misses>CONF_MAX_MISS){
-            int parked = t->disp_flag && t->vr==0.0 && t->va==0.0 && t->misses<=PARK_MISS;
+        if(t->confirmed && t->misses>coast_frames){
+            int parked = t->disp_flag && t->vr==0.0 && t->va==0.0 && t->misses<=park_frames;
             if(!parked){ t->used=0; continue; }
         }
         if(!t->confirmed){
-            if(hit_sum_last(t,CONF_N)>=CONF_M && t->mv_ewma>=MV_RATE_MIN && t->jit<JIT_MAX) t->confirmed=1;
+            if(hit_sum_last(t,conf_n)>=conf_m && t->mv_ewma>=MV_RATE_MIN && t->jit<JIT_MAX) t->confirmed=1;
             else if(t->hitn>=ST_CONF_N && hit_sum_last(t,ST_CONF_N)>=ST_CONF_M && t->jit<ST_JIT_MAX) t->confirmed=1;
         }
     }
@@ -392,7 +408,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     static int ci[MAX_TRK]; int ncand=0;
     for(int ti=0;ti<MAX_TRK;ti++){
         Track *t=&R->tracks[ti]; if(!t->used) continue;
-        int okmiss = t->misses<=EMIT_MAX_MISS || (t->disp_flag && t->vr==0.0 && t->va==0.0 && t->misses<=PARK_MISS);
+        int okmiss = t->misses<=EMIT_MAX_MISS || (t->disp_flag && t->vr==0.0 && t->va==0.0 && t->misses<=park_frames);
         if(t->confirmed && okmiss && trk_displaced(t,now_t)
            && fabs(t->az)<=R->fov_half && t->r<=OUT_R_MAX) ci[ncand++]=ti;
     }
