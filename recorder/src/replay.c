@@ -282,9 +282,6 @@ static void tonemap_verify_vs_display(void)
     /* native frame at the same instant */
     long ni = rchan_at(&g_rp.y10, g_rp.jpeg.t_ms[pick]);
     if (ni < 0) ni = 0;
-    uint32_t npl;
-    const uint8_t *nraw = rchan_payload(&g_rp.y10, ni, &npl, NULL);
-    if (!nraw) return;
 
     int nw = g_rp.nat_w, nh = g_rp.nat_h;
     uint8_t *disp = malloc((size_t)dw * dh);
@@ -292,10 +289,29 @@ static void tonemap_verify_vs_display(void)
     uint8_t *nds  = malloc((size_t)dw * dh);
     EoToneState st = { 0, 0, 0 };
     int ddw = 0, ddh = 0;
+    /* Warm my tone-map EMA to the phase the live feed's was in when it wrote this
+     * display JPEG: seed ~16 frames back and advance forward so the stretch
+     * endpoints settle. Comparing a single cold-seeded frame against EO's
+     * continuously-warm EMA reads as drift on any brightness transition (e.g. the
+     * illuminator) even when the math is identical — only true tone-map
+     * divergence should trip the alarm. */
+    int warm_ok = 0;
     if (disp && nat && nds &&
         render_decode_jpeg_gray(djpg, djlen, disp, (uint32_t)dw * dh, &ddw, &ddh) == 0 &&
-        ddw == dw && ddh == dh &&
-        render_native_gray8(nraw, npl, nw, nh, g_rp.nat_mode, 0, &st, 1, nat) == 0) {
+        ddw == dw && ddh == dh) {
+        long w0 = ni - 16; if (w0 < 0) w0 = 0;
+        int seeded = 0;
+        for (long wi = w0; wi <= ni; wi++) {
+            uint32_t wpl;
+            const uint8_t *wraw = rchan_payload(&g_rp.y10, wi, &wpl, NULL);
+            if (!wraw) continue;
+            warm_ok = render_native_gray8(wraw, wpl, nw, nh, g_rp.nat_mode, 0,
+                                          &st, !seeded, nat) == 0;
+            seeded = 1;
+            if (!warm_ok) break;
+        }
+    }
+    if (warm_ok) {
         /* box-average downscale native -> display res (matches EO at zoom=1) */
         double sum = 0;
         for (int oy = 0; oy < dh; oy++) {
