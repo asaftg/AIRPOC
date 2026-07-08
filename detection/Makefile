@@ -59,8 +59,9 @@ stab_ecc.o: src/stab_ecc.cpp $(DEPS)
 preproc.o: src/preproc.cu $(DEPS)
 	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
 
-# Bench/build tools (not part of the daemon): INT8 engine builder + calib capture.
-TOOLS = build_engine capture_calib
+# Bench/build tools (not part of the daemon): engine builder, calib capture, and a
+# still-image inference probe. infer_probe reuses the daemon's real infer/preproc.
+TOOLS = build_engine capture_calib infer_probe
 tools: $(TOOLS)
 
 build_engine: tools/build_engine.cpp preproc.o
@@ -69,6 +70,11 @@ build_engine: tools/build_engine.cpp preproc.o
 
 capture_calib: tools/capture_calib.c $(DEPS)
 	$(CC) $(CFLAGS) -o $@ tools/capture_calib.c -lrt
+
+infer_probe: tools/infer_probe.cpp infer.o preproc.o $(DEPS)
+	$(CXX) $(CXXFLAGS) $(OPENCV_CFLAGS) -o $@ tools/infer_probe.cpp infer.o preproc.o \
+	    -L$(CUDA_DIR)/lib64 -lnvinfer -lnvinfer_plugin -lcudart \
+	    -lopencv_core -lopencv_imgproc -lopencv_imgcodecs
 
 clean:
 	rm -f $(BIN) $(OBJ) $(TOOLS)

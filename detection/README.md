@@ -90,6 +90,22 @@ detection/
        main.c                 lifecycle + two-path merge
   tools/ build_engine.cpp     ONNX -> TRT engine (FP16 / INT8 w/ entropy calibrator)
          capture_calib.c      grab Y10 frames from the tap for INT8 calibration
+         infer_probe.cpp      run a still image through the real infer path (model sanity check)
 ```
 Models + engines live under `/data/detection/` and are never committed.
+
+## Verify the model (bench sanity check)
+`infer_probe` runs a still image through the **exact** runtime path (preproc.cu +
+the engine + raw-head decode + NMS) and prints the boxes — so you can confirm the
+model and our decode are correct without a live target in front of the camera:
+```
+make tools
+./infer_probe /data/detection/engines/rtmdet-t-raw.fp16.trt10.engine demo.jpg
+#   car      (car           ) 0.81  px=(760,339,187,86)
+#   ...
+```
+It reads the image as mono and stretches it to the model input, then packs Y10
+exactly as the tap does. Use a known image (e.g. mmdetection's `demo.jpg`): a
+correct pipeline reports the obvious cars/people at sensible confidence. This is
+how the current stock engine was verified.
 ```
