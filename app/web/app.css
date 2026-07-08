@@ -52,6 +52,12 @@ body.day{
 .pill.on b{color:var(--on)}
 .pill.err{background:#4d1a1a;color:var(--err);border-color:#7a2a2a}
 .pill.err .dot{background:var(--err)}
+/* SAT — the link can't carry the selected video (delivered < half produced): amber wins
+ * over the green .on so a starving link is unmistakable */
+.pill.sat{background:#4a3413;color:#e0a94a;border-color:#8a6420}
+.pill.sat b{color:#e0a94a}
+.satlab{font-weight:700;letter-spacing:1.5px;margin-left:6px}
+.satlab:empty{display:none}
 .icb{background:transparent;border:1px solid var(--bd2);color:var(--muted);border-radius:3px;
   padding:0 12px;height:30px;font:inherit;font-size:11px;letter-spacing:1px;cursor:pointer}
 .icb:hover{background:var(--sub);color:var(--fg)}

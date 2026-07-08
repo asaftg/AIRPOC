@@ -119,7 +119,13 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 
 ## DEV panel
 - **STREAM** — QUALITY presets `PANIC / FAST / DEFAULT / NATIVE` + FPS CAP (forwarded to
-  the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native).
+  the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native). Measured
+  bitrates: PANIC@15fps ≈ 2 Mb/s · PANIC@60 ≈ 8 · DEFAULT@60 ≈ 28 · NATIVE@60 ≈ 123 Mb/s —
+  NATIVE does not fit the USB tether (~25 Mb/s) or a weak AP moment; pair it with a low
+  FPS CAP. **LINK MANUAL/AUTO**: when the link chip shows **SAT** (delivered < half of
+  produced — the "frozen EO" symptom), AUTO steps QUALITY down a rung after ~2 s and
+  probes back up after ~20 s clean, never above the operator's chosen QUALITY (the
+  ceiling); MANUAL (default) never touches settings.
 - **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
 - **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM (client-side only; see *Radar → EO overlay*).

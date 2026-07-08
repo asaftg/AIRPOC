@@ -194,8 +194,22 @@
   var ispTouch = 0, fpsTouch = 0;
 
   /* stream bandwidth levers — res (display size) + fps cap, both live on the EO feed */
+  /* link auto-quality — OPT-IN: when the link is saturated (SAT), step QUALITY down one
+   * rung until the video flows again, and probe back up when the link stays clean; the
+   * operator's chosen QUALITY is the ceiling AUTO never exceeds. MANUAL (default) never
+   * touches settings. Persisted per browser. */
+  var linkAuto = 0, linkCeil = "high", lkSatN = 0, lkCleanN = 0, lkStepT = 0, lkUpHold = 0;
+  try { var lks = JSON.parse(localStorage.getItem("linkAuto") || "{}");
+        if (lks.a === 0 || lks.a === 1) linkAuto = lks.a;
+        if (typeof lks.c === "string") linkCeil = lks.c; } catch (x) {}
+  function saveLka() { try { localStorage.setItem("linkAuto", JSON.stringify({ a: linkAuto, c: linkCeil })); } catch (x) {} }
+  function initLka() { var b = document.querySelector('#lka-btns [data-lka="' + linkAuto + '"]'); if (b) setSeg("lka-btns", b); }
+  document.querySelectorAll("#lka-btns [data-lka]").forEach(function (b) {
+    b.onclick = function () { linkAuto = parseInt(b.dataset.lka, 10); setSeg("lka-btns", b); saveLka(); };
+  });
+
   document.querySelectorAll("#res-btns [data-res]").forEach(function (b) {
-    b.onclick = function () { setSeg("res-btns", b); ctl("res=" + b.dataset.res); };
+    b.onclick = function () { setSeg("res-btns", b); linkCeil = b.dataset.res; saveLka(); ctl("res=" + b.dataset.res); };
   });
   $("s-fps").oninput = function () { $("o-fps").textContent = this.value; fpsTouch = Date.now(); ctl("fps=" + this.value); };
 
@@ -620,6 +634,25 @@
       $("v-txfps").innerHTML = (eoc && d.tx_fps != null) ? "&nbsp;·&nbsp;" + Math.round(d.tx_fps) + " fps" : "";
       $("v-sig").innerHTML = signalSVG(d.rssi_dbm);
       $("p-link").classList.add("on");   /* steady green while connected — catch() clears it if the poll fails */
+      /* SAT = the link delivers less than half the video being produced (live only) —
+       * the chip goes amber so a starving link reads as a LINK problem, not a frozen EO */
+      var prodFps = eo.sfps || eo.fps || 0;
+      var sat = !replaying && eoc && typeof d.tx_fps === "number" && prodFps > 0 && d.tx_fps < prodFps * 0.5;
+      $("p-link").classList.toggle("sat", !!sat);
+      $("v-sat").textContent = sat ? "SAT" : "";
+      /* LINK AUTO (opt-in): ~2s of SAT → step QUALITY down a rung; ~20s clean → probe one
+       * rung back up (never above the operator's chosen ceiling; 60s hold after a step
+       * down so probing can't flap) */
+      if (linkAuto && !replaying && eoc) {
+        if (sat) { lkSatN++; lkCleanN = 0; } else { lkCleanN++; lkSatN = 0; }
+        var ORD = ["low", "med", "high", "native"], cur = ORD.indexOf(eo.res), ceil = ORD.indexOf(linkCeil), nowL = Date.now();
+        if (ceil < 0) ceil = 2;
+        if (lkSatN >= 12 && cur > 0 && nowL - lkStepT > 3000) {
+          lkStepT = nowL; lkUpHold = nowL + 60000; lkSatN = 0; ctl("res=" + ORD[cur - 1]);
+        } else if (lkCleanN >= 125 && cur >= 0 && cur < ceil && nowL > lkUpHold && nowL - lkStepT > 3000) {
+          lkStepT = nowL; lkCleanN = 0; ctl("res=" + ORD[cur + 1]);
+        }
+      } else { lkSatN = 0; lkCleanN = 0; }
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
       /* live EO telemetry on the EO display: EFFECTIVE resolution (real sensor detail in
        * view) + zoom + FOV on line 1; sensor fps/exposure/gain on line 2. Prefer the feed's
@@ -1006,6 +1039,7 @@
   openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
   initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
+  initLka();                                        /* link MANUAL/AUTO quality mode (persisted) */
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();
