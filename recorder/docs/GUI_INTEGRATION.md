@@ -97,6 +97,13 @@ relays the replay MJPEG stream). On connect failure: `502` with
     recorder auto-detected its tone map diverging from the EO feed), show a small
     caveat badge ("tone map differs from live feed") instead of presenting it as
     exact. `unchecked` just means no comparable frame existed — no badge needed.
+- **Detection boxes in replay:** poll `/rec/replay/det` exactly like the live
+  detector feed — it returns the recorded EO-detector frame JSON at ≤ the
+  playback clock (same schema: `dets[]` with `cls`/`conf`/`px`/`ang`, plus
+  `"replay":true`), so point your existing detection overlay at it and the boxes
+  draw with no other change. `px` is native 1440×1088 pixels; apply the same
+  zoom/letterbox mapping you use live. 404 = the session has no detections
+  (hide the overlay). Detections follow the same seek/scrub/pause clock as video.
 - Transport bar under the video: play/pause → `/rec/replay/ctl?play=1|pause=1`;
   rate cycle 0.5/1/2/4× → `rate=`; frame step ⏮⏭ → `step=-1|1`; range-input
   timeline (`max=dur_ms`, `oninput` throttled ≥80 ms → `seek=<ms>`, suppress

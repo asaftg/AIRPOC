@@ -25,16 +25,20 @@ seek/jump.
 
 Three layers, so a divergence can never pass unnoticed:
 1. **Automatic EO comparison (catches EO changing its process).** At replay
-   open (~10 ms, once) the recorder compares one native frame — rendered through
+   open (~10 ms, once) the recorder compares a native frame — rendered through
    its own tone map — against the operator's recorded display JPEG, which came
-   from the EO feed's *real* tone map, at a zoom=1 frame downscaled to match. If
-   they diverge beyond JPEG noise, `/replay/state` reports
-   `tonemap_vs_eo:"drift"` (with the mean pixel `tonemap_vs_eo_diff`) and
-   `tonemap_match:false`. This is the direct check: if EO changes its tone map
-   and this copy wasn't mirrored, the recorder catches it by itself. Verified:
-   matched tone maps → `"ok"`, diff ~0.4; a changed tone map → `"drift"`, diff
-   ~40. Reports `"unchecked"` only when a session has no zoom=1 display frame to
-   compare against (e.g. radar-only, or always-zoomed).
+   from the EO feed's *real* tone map, at a zoom=1 frame downscaled to match. The
+   check first warms its tone-map EMA over ~16 preceding frames so it sits at the
+   same steady state the live feed's did when it wrote that JPEG — otherwise a
+   brightness transition (e.g. the illuminator) would read as drift even when the
+   math is identical. If they still diverge beyond JPEG/downscale noise
+   (threshold mean diff 8), `/replay/state` reports `tonemap_vs_eo:"drift"` (with
+   the mean pixel `tonemap_vs_eo_diff`) and `tonemap_match:false`. This is the
+   direct check: if EO changes its tone map and this copy wasn't mirrored, the
+   recorder catches it by itself. Verified: matched tone maps → `"ok"`, diff a
+   few counts; a changed tone map → `"drift"`, diff ~40. Reports `"unchecked"`
+   only when a session has no zoom=1 display frame to compare against (e.g.
+   radar-only, or always-zoomed).
 2. **Device drift signature.** The recorder also stamps `tonemap_version` +
    `tonemap_hash` into `eo_y10/channel.json` at record time and re-checks at
    replay, catching the recorder's own tone map changing between record and
