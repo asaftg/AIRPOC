@@ -21,8 +21,9 @@ full-screen (see `app.css` media query).
 - **Top bar:** `FAZE-01`, link chip (signal bars · type USB/WIFI · live Mb/s · delivered
   fps), BATT/ALT (reserved), ZULU (client UTC), NIGHT (day/night theme), **ROI**,
   LIBRARY, DEV.
-- **EO (left):** proxied video, amber cross reticle, FOV/zoom + BRG/RNG lines, the engaged
-  **LOCK** box, zoom **±** (bottom-left), the control cluster (bottom-centre). Scrim shows
+- **EO (left):** proxied video, amber cross reticle, FOV/zoom + BRG/RNG lines, the
+  **radar→EO overlay** (all radar targets projected onto the video — see below), detector
+  boxes, zoom **±** (bottom-left), the control cluster (bottom-centre). Scrim shows
   **EO · NOT CONNECTED** / **NO VIDEO RECORDED** (replay of a radar-only session).
 - **Target list (right, top):** class-less radar targets straight from the frame (the
   daemon's tracker confirms/coasts, so rows don't flicker); engaged target green; tap a
@@ -62,6 +63,18 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   a temporal tracker (stable tids, M-of-N confirm, coast, park-hold), so target boxes and
   list rows are drawn verbatim from the frame; a GUI hold would double-persist.
 
+## Radar → EO overlay (console-owned render; NOT fusion)
+- Every radar target is projected onto the video from its az/el (radar frame) through the
+  camera's current hfov/vfov, drawn as a bracket sized to the target's real angular extent,
+  labelled `R#tid range`. The engaged target is green (`LOCK R#`) and keeps an off-frame
+  edge arrow; others use their track colour and clip at the video edge.
+- **DEV → RADAR ON EO**: OVERLAY on/off + **AZ TRIM / EL TRIM** (±10°, 0.1° steps) — the
+  radar↔camera mount alignment, persisted per browser (localStorage). No rig calibration
+  is stored anywhere yet (the radar module's README leaves radar↔EO calibration to the
+  consumer), so defaults are 0 — nudge until a mark sits on its real object.
+- Works in replay too (video + radar both come from the recording), and the trim knobs
+  stay usable there — aligning against a recording is the calibration workflow.
+
 ## EO detector overlay (console-owned render; detection module owns the boxes)
 - Live boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:8094`).
   `dets[]` = classified model boxes (solid; **human** cyan, **vehicle** amber, label =
@@ -99,6 +112,7 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native).
 - **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
+- **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM (client-side only; see *Radar → EO overlay*).
 - **DETECTOR** — CONF (min confidence to show a box), CADENCE (model runs every Nth
   frame), MOTION on/off (the dashed-mover safety net), MAX DETS, MOT SENS (`mot_k` —
   lower flags weaker motion), MOT HOLD (`mot_persist`). Forwarded namespaced

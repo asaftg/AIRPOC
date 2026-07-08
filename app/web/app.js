@@ -266,7 +266,7 @@
   function targets(radar) {
     if (!radar || !radar.targets) return [];
     return radar.targets.map(function (t) {
-      return { tid: t.tid, x: t.x, y: t.y, z: t.z, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, conf: t.conf,
+      return { tid: t.tid, x: t.x, y: t.y, z: t.z, vx: t.vx, vy: t.vy, sx: t.sx, sy: t.sy, sz: t.sz, conf: t.conf,
                rng: Math.hypot(t.x, t.y),
                az: Math.atan2(t.x, t.y) * 180 / Math.PI,                 /* azimuth from radar */
                el: Math.atan2(t.z || 0, Math.hypot(t.x, t.y)) * 180 / Math.PI };  /* elevation from radar z */
@@ -309,6 +309,27 @@
     if (tid !== sentEngage) { sentEngage = tid; ctl("engage=" + (tid === null ? -1 : tid)); }
   }
 
+  /* ── radar→EO overlay settings — pure client-side render (not fusion). AZ/EL trim is
+   * the radar↔camera mount alignment in degrees; persisted per browser. No stored rig
+   * calibration exists yet (radar README: calibration is the consumer's job), so the
+   * defaults are 0 — dial the trims until a mark sits on its real object. ── */
+  var radarOv = { on: 1, az: 0, el: 0 };
+  try { var rvs = JSON.parse(localStorage.getItem("radarOv") || "{}");
+        if (typeof rvs.on === "number") radarOv.on = rvs.on;
+        if (typeof rvs.az === "number") radarOv.az = rvs.az;
+        if (typeof rvs.el === "number") radarOv.el = rvs.el; } catch (x) {}
+  function saveRadarOv() { try { localStorage.setItem("radarOv", JSON.stringify(radarOv)); } catch (x) {} }
+  function initRadarOv() {
+    var b = document.querySelector('#rov-btns [data-rov="' + radarOv.on + '"]'); if (b) setSeg("rov-btns", b);
+    $("rov-az").value = radarOv.az; $("rovv-az").textContent = radarOv.az.toFixed(1) + "°";
+    $("rov-el").value = radarOv.el; $("rovv-el").textContent = radarOv.el.toFixed(1) + "°";
+  }
+  document.querySelectorAll("#rov-btns [data-rov]").forEach(function (b) {
+    b.onclick = function () { radarOv.on = parseInt(b.dataset.rov, 10); setSeg("rov-btns", b); saveRadarOv(); drawEO(); };
+  });
+  $("rov-az").oninput = function () { radarOv.az = parseFloat(this.value); $("rovv-az").textContent = radarOv.az.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
+  $("rov-el").oninput = function () { radarOv.el = parseFloat(this.value); $("rovv-el").textContent = radarOv.el.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
+
   /* ── canvas ── */
   function fit(cv) { var r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1; cv.width = Math.max(1, r.width * dpr | 0); cv.height = Math.max(1, r.height * dpr | 0); return { ctx: cv.getContext("2d"), w: cv.width, h: cv.height, dpr: dpr }; }
 
@@ -325,26 +346,35 @@
     [[m, m, 1, 1], [w - m, m, -1, 1], [m, h - m, 1, -1], [w - m, h - m, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * L); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * L, c[1]); ctx.stroke(); });
     ctx.globalAlpha = 1;
 
-    /* engaged-target lock projected into the EO frame from the RADAR's azimuth (→ x, via
-     * camera hfov) AND elevation (→ y, via camera vfov). The radar owns both angles; we
-     * only map them to pixels. Off-frame → an edge arrow pointing the true 2-D direction. */
+    /* Radar → EO overlay: EVERY radar target projected onto the video from its azimuth
+     * (→ x, via camera hfov) and elevation (→ y, via camera vfov), plus the operator's
+     * AZ/EL trim (radar↔camera mount alignment). Not fusion — a raw geometric overlay.
+     * Bracket size = the target's real angular extent at its range. The engaged target
+     * is green and keeps an off-frame edge arrow; the rest clip at the video edge.
+     * Works in replay too — both video and radar come from the recording there. */
     var es = lastStats.eo || {};
     var eoHfov = es.hfov || 0, eoVfov = es.vfov || (eoHfov * 0.75);   /* 4:3 fallback */
-    if (engagedTid !== null && eoHfov) {
-      var t = targets(lastRadar).filter(function (x) { return x.tid === engagedTid; })[0];
-      if (t) {
-        var fx = t.az / (eoHfov / 2), fy = -t.el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
-        var col = css("--on");
+    if (radarOv.on && eoHfov && lastRadar && lastRadar.connected) {
+      var sw2 = es.dw || 4, sh2 = es.dh || 3, ar2 = sw2 / sh2, vw2, vh2, vx2, vy2;
+      if (w / h > ar2) { vh2 = h; vw2 = h * ar2; vx2 = (w - vw2) / 2; vy2 = 0; }
+      else { vw2 = w; vh2 = w / ar2; vx2 = 0; vy2 = (h - vh2) / 2; }
+      ctx.font = (10 * dpr) + "px ui-monospace, monospace";
+      targets(lastRadar).forEach(function (t) {
+        var az = t.az + radarOv.az, el = t.el + radarOv.el;
+        var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
+        var locked = (t.tid === engagedTid);
+        var col = locked ? css("--on") : tcolor(t.tid);
         if (Math.abs(fx) <= 1 && Math.abs(fy) <= 1) {
-          var lx = cx + fx * (w / 2), ly = cy + fy * (h / 2);
-          var bw = 72 * dpr, bh = 92 * dpr;
-          ctx.strokeStyle = col; ctx.lineWidth = 2 * dpr;
-          var cc = 14 * dpr, x0 = lx - bw / 2, y0 = ly - bh / 2;
+          var lx = vx2 + (fx + 1) / 2 * vw2, ly = vy2 + (fy + 1) / 2 * vh2;
+          /* bracket sized to the target's angular extent (min floor so far ones stay visible) */
+          var wdeg = 2 * Math.atan2(t.sx || 1, t.rng) * 180 / Math.PI;
+          var hdeg = 2 * Math.atan2(t.sz || t.sy || 1, t.rng) * 180 / Math.PI;
+          var bw = Math.max(30 * dpr, wdeg / eoHfov * vw2), bh = Math.max(30 * dpr, hdeg / eoVfov * vh2);
+          ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2 : 1.4) * dpr;
+          var cc = Math.min(12 * dpr, bw / 3), x0 = lx - bw / 2, y0 = ly - bh / 2;
           [[x0, y0, 1, 1], [x0 + bw, y0, -1, 1], [x0, y0 + bh, 1, -1], [x0 + bw, y0 + bh, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
-          ctx.beginPath(); ctx.moveTo(lx - 8 * dpr, ly); ctx.lineTo(lx + 8 * dpr, ly); ctx.moveTo(lx, ly - 8 * dpr); ctx.lineTo(lx, ly + 8 * dpr); ctx.stroke();
-          ctx.fillStyle = col; ctx.font = (11 * dpr) + "px ui-monospace, monospace";
-          ctx.fillText("LOCK #" + t.tid + "  " + t.rng.toFixed(0) + " m", x0, y0 - 4 * dpr);
-        } else {
+          ctx.fillText((locked ? "LOCK R#" : "R#") + t.tid + " " + t.rng.toFixed(0) + " m", x0, y0 - 3 * dpr);
+        } else if (locked) {   /* engaged target off-frame → edge arrow pointing at it */
           var ex = cx + Math.max(-1, Math.min(1, fx)) * (w / 2 - 24 * dpr);
           var ey = cy + Math.max(-1, Math.min(1, fy)) * (h / 2 - 24 * dpr);
           ctx.fillStyle = col; ctx.globalAlpha = 0.9;
@@ -352,7 +382,7 @@
           ctx.beginPath(); ctx.moveTo(15 * dpr, 0); ctx.lineTo(-11 * dpr, -10 * dpr); ctx.lineTo(-11 * dpr, 10 * dpr); ctx.closePath(); ctx.fill();
           ctx.restore(); ctx.globalAlpha = 1;
         }
-      }
+      });
     }
 
     /* EO detector boxes — px = [cx,cy,w,h] in the NATIVE frame (msg.img, 1440x1088).
@@ -927,6 +957,7 @@
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
   openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
+  initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();

@@ -235,6 +235,9 @@ body.replay #cluster,body.replay #eo-exp,body.replay .eo-exp{display:none}   /* 
 body.replay #dev input,body.replay #dev button{pointer-events:none;opacity:.6}
 /* out-specify 'body.replay #dev button' (1,1,2) — add #dev so the id count wins (2,1,1) */
 body.replay #dev #devclose,body.replay #dev #to-control{pointer-events:auto;opacity:1}
+/* the radar→EO overlay knobs are client-side render (no live /ctl) — keep them usable in
+ * replay, where nudging AZ/EL trim against a recording is exactly how you calibrate */
+body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov-el{pointer-events:auto;opacity:1}
 
 /* ── LIBRARY ── */
 #library{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column}
