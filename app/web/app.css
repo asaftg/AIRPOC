@@ -110,7 +110,7 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 
 /* ── target list ── */
 #tgt-list{list-style:none;margin:0;padding:5px;flex:0 0 auto}
-.tgt-row{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:8px;height:34px;
+.tgt-row{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:8px;height:34px;
   padding:0 8px;margin:4px 0;border:1px solid var(--bd);border-left:3px solid var(--dim);
   border-radius:3px;background:var(--sub);cursor:pointer}
 .tgt-row:hover{border-color:var(--amber)}
@@ -119,6 +119,8 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 .tgt-row.empty{background:transparent;border-style:dashed;border-left-color:var(--bd2);cursor:default}
 .tgt-row.empty .tid{color:var(--dim)}
 .tgt-row .tid{font-weight:600;font-size:12px}
+/* colour swatch = the track identity, matched to its ring/mark on the EO + scope */
+.swatch{display:inline-block;width:12px;height:12px;border-radius:2px;border:1px solid rgba(0,0,0,.5);vertical-align:-1px}
 .tgt-row .meta{font-size:11px;color:var(--muted);letter-spacing:.3px}
 .tgt-row .rng{font-size:13px;color:var(--fg);font-weight:600;text-align:right}
 

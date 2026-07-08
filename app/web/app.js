@@ -309,7 +309,7 @@
       if (i < rows.length) {
         var r = rows[i], t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
         out.push('<li class="tgt-row" data-tid="' + t.tid + '" style="border-left-color:' + col + '">'
-          + '<span class="tid" style="color:' + col + '">R#' + t.tid + '</span>'
+          + '<span class="tid"><span class="swatch" style="background:' + col + '"></span></span>'
           + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
           + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>');
       } else {
@@ -412,7 +412,9 @@
         ctx.lineCap = "butt";
         ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.beginPath(); ctx.arc(lx, ly, 3 * dpr, 0, 2 * Math.PI); ctx.fill();
         ctx.fillStyle = col; ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
-        haloText(ctx, "R#" + t.tid + " " + t.rng.toFixed(0) + " m", lx + rr + 5 * dpr, ly - 5 * dpr, col, dpr);
+        /* range only — the ring COLOUR is the track identity (matches the target list);
+         * the tid churns between frames and just added flicker */
+        haloText(ctx, t.rng.toFixed(0) + " m", lx + rr + 5 * dpr, ly - 5 * dpr, col, dpr);
       });
     }
 
@@ -789,7 +791,7 @@
 
   /* ═══════════════════════ RECORDER / REPLAY ═══════════════════════ */
   var TAGVOCAB = ["night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
-  var recState = null, pendingSid = null, libSel = {}, libTagFilter = {}, libSessions = [];
+  var recState = null, pendingSid = null, libSel = {}, libTagFilter = {}, libSessions = [], handledSids = {};
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
   var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
   var replayPlaying = false, replayStillT = -1;    /* EO pane: MJPEG stream while playing, still frame while paused */
@@ -814,7 +816,7 @@
       if (d.state === "recording") { rec.classList.add("rec-on"); rec.textContent = fmtClock(d.rec_elapsed_s * 1000); }
       else {
         rec.classList.remove("rec-on"); rec.textContent = "REC";
-        if (d.pending_sid && !pendingSid && $("recdlg").hidden && !replaying) openSaveDialog(d.pending_sid);
+        if (d.pending_sid && !pendingSid && !handledSids[d.pending_sid] && $("recdlg").hidden && !replaying) openSaveDialog(d.pending_sid);
       }
     }).catch(function () { var rec = $("rec"); rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; });
   }
@@ -849,14 +851,21 @@
   };
   $("dlg-save").onclick = function () {
     if (!pendingSid) return;
+    var sid = pendingSid;
+    handledSids[sid] = 1;    /* mark BEFORE closing so the ~400ms poll can't re-offer this sid */
     var tags = [].slice.call(document.querySelectorAll("#dlg-tags .tagchip.on")).map(function (c) { return encodeURIComponent(c.textContent); }).join(",");
-    fetch("/rec/ctl?save=" + encodeURIComponent(pendingSid) + "&name=" + encodeURIComponent($("dlg-name").value) + "&tags=" + tags + "&note=" + encodeURIComponent($("dlg-note").value)).catch(function () {});
-    closeSaveDialog(); if (!$("library").hidden) loadLibrary();
+    fetch("/rec/ctl?save=" + encodeURIComponent(sid) + "&name=" + encodeURIComponent($("dlg-name").value) + "&tags=" + tags + "&note=" + encodeURIComponent($("dlg-note").value))
+      .then(function (r) { if (!r.ok) throw 0; if (!$("library").hidden) loadLibrary(); })
+      .catch(function () { delete handledSids[sid]; alert("Save failed — the recorder didn't confirm. Try again."); });
+    closeSaveDialog();
   };
   $("dlg-discard").onclick = function () {
     if (!pendingSid) return;
     if (!confirm("Discard this recording? It can't be recovered.")) return;
-    fetch("/rec/ctl?discard=" + encodeURIComponent(pendingSid)).catch(function () {}); closeSaveDialog();
+    var sid = pendingSid;
+    handledSids[sid] = 1;
+    fetch("/rec/ctl?discard=" + encodeURIComponent(sid)).catch(function () { delete handledSids[sid]; });
+    closeSaveDialog();
   };
 
   /* ── LIBRARY ── */
