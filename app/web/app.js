@@ -947,6 +947,22 @@
   });
 
   setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
+  /* MJPEG watchdog — an <img> stream does NOT auto-reconnect (unlike the SSE feeds), so a
+   * WiFi hiccup leaves the video black while radar/detections keep flowing. The browser
+   * fires load per multipart frame: if frames stop >3 s while the EO feed says connected,
+   * silently re-request the stream (what a manual page reload was doing). */
+  var vidLastFrame = Date.now();
+  $("video").addEventListener("load", function () { vidLastFrame = Date.now(); });
+  $("video").addEventListener("error", function () { vidLastFrame = 0; });
+  setInterval(function () {
+    if (replaying) return;
+    var eoc = !!(lastStats && (lastStats.eo_connected || (lastStats.eo && lastStats.eo.connected)));
+    if (eoc && Date.now() - vidLastFrame > 3000) {
+      vidLastFrame = Date.now();                    /* one retry per 3s window */
+      $("video").src = "/stream?t=" + Date.now();
+    }
+  }, 1500);
+
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
   openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
