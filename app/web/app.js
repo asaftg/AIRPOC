@@ -330,6 +330,15 @@
   document.querySelectorAll("#rov-btns [data-rov]").forEach(function (b) {
     b.onclick = function () { radarOv.on = parseInt(b.dataset.rov, 10); setSeg("rov-btns", b); saveRadarOv(); drawEO(); };
   });
+
+  /* detector mark style — BOX (full bounding box) or SEEKER (small centroid cross);
+   * display-only, persisted per browser */
+  var detStyle = "box";
+  try { var dsv = localStorage.getItem("detStyle"); if (dsv === "seeker" || dsv === "box") detStyle = dsv; } catch (x) {}
+  function initDetStyle() { var b = document.querySelector('#dst-btns [data-dst="' + detStyle + '"]'); if (b) setSeg("dst-btns", b); }
+  document.querySelectorAll("#dst-btns [data-dst]").forEach(function (b) {
+    b.onclick = function () { detStyle = b.dataset.dst; setSeg("dst-btns", b); try { localStorage.setItem("detStyle", detStyle); } catch (x) {} drawEO(); };
+  });
   $("rov-az").oninput = function () { radarOv.az = parseFloat(this.value); $("rovv-az").textContent = radarOv.az.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
   $("rov-el").oninput = function () { radarOv.el = parseFloat(this.value); $("rovv-el").textContent = radarOv.el.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
 
@@ -399,18 +408,31 @@
         if (bx + bw2 / 2 < vx || bx - bw2 / 2 > vx + vw || by + bh2 / 2 < vy || by - bh2 / 2 > vy + vh) return;
         ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.6 * dpr;
         ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
-        ctx.strokeRect(bx - bw2 / 2, by - bh2 / 2, bw2, bh2);
-        ctx.setLineDash([]);
-        ctx.fillText(label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr);
+        if (detStyle === "seeker") {
+          /* terminal-seeker mark: a small cross with a gap on the target centroid */
+          var a = 9 * dpr, g = 3 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(bx - a, by); ctx.lineTo(bx - g, by); ctx.moveTo(bx + g, by); ctx.lineTo(bx + a, by);
+          ctx.moveTo(bx, by - a); ctx.lineTo(bx, by - g); ctx.moveTo(bx, by + g); ctx.lineTo(bx, by + a);
+          ctx.stroke(); ctx.setLineDash([]);
+          ctx.fillText(label, bx + a + 3 * dpr, by - 4 * dpr);
+        } else {
+          ctx.strokeRect(bx - bw2 / 2, by - bh2 / 2, bw2, bh2);
+          ctx.setLineDash([]);
+          ctx.fillText(label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr);
+        }
       };
+      var seek = (detStyle === "seeker");
       (lastDet.dets || []).forEach(function (d) {
         var col = d.cls === "human" ? "#40c4ff" : amber;
-        drawDet(d, false, col, (d.cls || "?").toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%");
+        var lab = seek ? (d.cls || "?")[0].toUpperCase() + Math.round((d.conf || 0) * 100)
+                       : (d.cls || "?").toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
+        drawDet(d, false, col, lab);
       });
-      /* motion-head boxes: dashed + an explicit MOT tag so they can't be confused with
-       * the model's solid class boxes (which read e.g. VEHICLE 54%) */
+      /* motion-head marks: dashed + an explicit MOT tag so they can't be confused with
+       * the model's solid class marks (which read class+confidence) */
       (lastDet.movers || []).forEach(function (mv) {
-        drawDet(mv, true, "rgba(150,157,168,0.9)", "MOT ·" + (mv.age || 0));
+        drawDet(mv, true, "rgba(150,157,168,0.9)", (seek ? "M·" : "MOT ·") + (mv.age || 0));
       });
       ctx.restore();
     }
@@ -967,6 +989,7 @@
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
   openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
   initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
+  initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();

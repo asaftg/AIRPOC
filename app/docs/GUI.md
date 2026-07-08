@@ -86,6 +86,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   model-vs-motion overlap.
 - `px` boxes are in the **native** 1440×1088 frame; the console maps them through the
   current zoom crop + the letterboxed video rect, clipped to the video content.
+- **MARK style** (DEV → DETECTOR → MARK): `BOX` = full bounding boxes; `SEEKER` = a small
+  gapped cross on the target centroid with short labels (`V62` / `H55` / `M·7`) —
+  display-only, persisted per browser.
 - Live-only for now (no recorded det channel yet); the stream closes in replay.
 - Heads-up: until the trained mono model lands, the stock COCO placeholder emits false
   "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
