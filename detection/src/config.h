@@ -32,13 +32,19 @@
  * cadence default runs the (future) GPU detector at every 4th frame (~15/s when
  * capture is 60/s); it is meant to be raised toward 1 (every frame) as a target
  * closes — a fast crosser up close needs the higher rate. */
-#define DET_CONF_DEFAULT       0.35
+#define DET_CONF_DEFAULT       0.5     /* safe default: the stock model floods low-conf
+                                          on cluttered/out-of-domain scenes; operator
+                                          tunes per scene via /ctl */
 #define DET_CONF_MIN           0.05
 #define DET_CONF_MAX           0.95
 #define DET_CADENCE_DEFAULT    4       /* run detector every Nth captured frame */
 #define DET_CADENCE_MIN        1
 #define DET_CADENCE_MAX        8
-#define DET_MOTION_DEFAULT     1       /* motion worker on */
+#define DET_MOTION_DEFAULT     0       /* motion worker OFF by default: the frame-diff
+                                          path floods on a MOVING camera until real
+                                          ego-motion (IMU/VIO, or ECC -E) is wired
+                                          behind stabilize(). Enable via /ctl only on a
+                                          static mount or once ego-motion is real. */
 #define DET_MAXDETS_DEFAULT    128
 #define DET_MAXDETS_MIN        1
 #define DET_MAXDETS_MAX        512
