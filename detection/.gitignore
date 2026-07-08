@@ -1,0 +1,10 @@
+# Build artifacts
+*.o
+detectiond
+
+# Model + engine binaries live under /data/detection, never in the repo
+*.onnx
+*.engine
+*.plan
+*.trt
+*.calib
