@@ -20,6 +20,7 @@ typedef struct {
     int    cadence;       /* run detector every Nth captured frame */
     int    motion;        /* motion worker on/off */
     int    max_dets;
+    double nms;           /* box-merge IoU threshold (lower = merge more) */
     double mot_k;         /* motion MAD threshold multiplier */
     int    mot_persist;   /* hits required in the 5-frame window */
 } DetKnobs;

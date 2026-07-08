@@ -63,8 +63,8 @@ static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
     fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d motion=%d max_dets=%d "
-            "mot_k=%.1f mot_persist=%d\n",
-            k->conf, k->cadence, k->motion, k->max_dets, k->mot_k, k->mot_persist);
+            "nms=%.2f mot_k=%.1f mot_persist=%d\n",
+            k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k, k->mot_persist);
 }
 
 static void *motion_thread(void *arg)
@@ -225,7 +225,7 @@ int main(int argc, char **argv)
         /* Appearance model on this tick. */
         int nd = 0;
         if (engine) {
-            int nb = infer_run(engine, f.y10, f.w, f.h, (float)k.conf, 0.65f, k.max_dets,
+            int nb = infer_run(engine, f.y10, f.w, f.h, (float)k.conf, (float)k.nms, k.max_dets,
                                iboxes, MAX_DETS_CAP, &last_infer_ms);
             if (last_infer_ms > infer_ms_max) infer_ms_max = last_infer_ms;
             for (int i = 0; i < nb && nd < MAX_DETS_CAP; i++) {

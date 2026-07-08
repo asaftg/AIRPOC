@@ -81,6 +81,7 @@ replies `ok`.
 | `cadence` | 1–8 | run the detector every Nth captured frame (1 = every frame) |
 | `motion` | 0/1 | motion worker on/off |
 | `max_dets` | 1–512 | cap on detections per frame |
+| `nms` | 0.10–0.90 | box-merge IoU (lower = merge more; also merges a box mostly inside a higher-scoring one — collapses the multiple boxes a big/close object produces) |
 | `mot_k` | 1–30 | motion MAD threshold multiplier |
 | `mot_persist` | 1–5 | hits required within the 5-frame window |
 

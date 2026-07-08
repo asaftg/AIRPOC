@@ -201,14 +201,24 @@ static void copy_output_to_host(IoBuf &b, cudaStream_t s)
  * a human overlapping a vehicle is kept. */
 struct Cand { int cls, grp; float conf, x1, y1, x2, y2; };
 
-static float iou(const Cand &a, const Cand &b)
+/* True if b (lower-scoring) should be suppressed by a (higher-scoring, same target
+ * class): either they overlap enough by IoU, OR b is mostly *contained* in a. A big
+ * / very close object fragments into several boxes (a whole-object box plus partial
+ * boxes); containment (intersection over the smaller area) collapses those to one,
+ * which plain IoU misses when a small box sits inside a large one. */
+static bool nms_suppress(const Cand &a, const Cand &b, float nms_iou)
 {
     float xx1 = std::max(a.x1, b.x1), yy1 = std::max(a.y1, b.y1);
     float xx2 = std::min(a.x2, b.x2), yy2 = std::min(a.y2, b.y2);
     float w = std::max(0.f, xx2 - xx1), h = std::max(0.f, yy2 - yy1);
     float inter = w * h;
-    float ua = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
-    return ua > 0 ? inter / ua : 0.f;
+    if (inter <= 0.f) return false;
+    float aa = (a.x2 - a.x1) * (a.y2 - a.y1);
+    float ab = (b.x2 - b.x1) * (b.y2 - b.y1);
+    float mn = std::min(aa, ab);
+    float iou = inter / (aa + ab - inter);
+    float iomin = mn > 0.f ? inter / mn : 0.f;
+    return iou > nms_iou || iomin > 0.80f;
 }
 
 static int decode_boxes(InferEngine *e, float conf_thresh, float nms_iou,
@@ -245,7 +255,7 @@ static int decode_boxes(InferEngine *e, float conf_thresh, float nms_iou,
         if (dead[i]) continue;
         Cand &a = cands[i];
         for (size_t j = i + 1; j < cands.size(); j++)
-            if (!dead[j] && cands[j].grp == a.grp && iou(a, cands[j]) > nms_iou) dead[j] = 1;
+            if (!dead[j] && cands[j].grp == a.grp && nms_suppress(a, cands[j], nms_iou)) dead[j] = 1;
         out[n].cls = a.cls;
         out[n].conf = a.conf;
         out[n].cx = 0.5f * (a.x1 + a.x2);

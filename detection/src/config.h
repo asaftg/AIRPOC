@@ -40,6 +40,12 @@
 #define DET_CADENCE_DEFAULT    4       /* run detector every Nth captured frame */
 #define DET_CADENCE_MIN        1
 #define DET_CADENCE_MAX        8
+#define DET_NMS_DEFAULT        0.45    /* box-merge IoU: lower = merge more aggressively
+                                          (collapses the multiple boxes a big/close object
+                                          produces). Also merges boxes mostly-contained in
+                                          a higher-scoring one (see infer.cpp). */
+#define DET_NMS_MIN            0.10
+#define DET_NMS_MAX            0.90
 #define DET_MOTION_DEFAULT     0       /* motion worker OFF by default: the frame-diff
                                           path floods on a MOVING camera until real
                                           ego-motion (IMU/VIO, or ECC -E) is wired
