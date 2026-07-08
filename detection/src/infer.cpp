@@ -3,8 +3,10 @@
  * Generic engine plumbing (works for any single-input engine): enumerate I/O
  * tensors, size device+host buffers from their shapes, run preprocess + enqueue,
  * copy outputs back. The DECODE step is model-specific and lives in decode_boxes()
- * — it targets the RTMDet-tiny export: two outputs, boxes [1,N,4] (xyxy, input
- * pixels) and scores [1,N,num_classes] (post-sigmoid) — then greedy NMS.
+ * — it targets the RTMDet-tiny RAW-HEAD export: two outputs, reg [1,N,4] (l,t,r,b
+ * distances in pixels) and cls [1,N,num_classes] (raw logits). We do the sigmoid,
+ * the grid-centre box decode, and NMS here — the model no longer decodes in-graph
+ * (a free latency win, and it keeps INT8 clean). Grid centres from build_anchors().
  */
 #include "infer.h"
 #include "preproc.h"
@@ -57,12 +59,35 @@ struct InferEngine {
     uint16_t *d_y10 = nullptr;
 
     std::vector<IoBuf> outputs;
-    int idx_boxes = -1, idx_scores = -1;
+    int idx_boxes = -1, idx_scores = -1;   /* reg [.,4] and cls [.,80] outputs */
     int num_classes = 0;
+
+    /* Anchor-point grid for the raw-head decode: box = center +/- reg (reg is the
+     * l,t,r,b distances in pixels), score = sigmoid(cls logit). Centers are the
+     * FPN grid cells, strides 8/16/32, concatenated in stride order, row-major. */
+    std::vector<float> anchor_cx, anchor_cy;
+    int num_anchors = 0;
 
     char model_name[64] = "rtmdet-t";
     char precision[16] = "fp16";
 };
+
+static void build_anchors(InferEngine *e)
+{
+    const int strides[3] = {8, 16, 32};
+    e->anchor_cx.clear();
+    e->anchor_cy.clear();
+    for (int l = 0; l < 3; l++) {
+        int s = strides[l];
+        int H = e->in_h / s, W = e->in_w / s;
+        for (int row = 0; row < H; row++)
+            for (int col = 0; col < W; col++) {
+                e->anchor_cx.push_back((float)(col * s));   /* offset=0 grid centre */
+                e->anchor_cy.push_back((float)(row * s));
+            }
+    }
+    e->num_anchors = (int)e->anchor_cx.size();
+}
 
 static size_t dims_vol(const nv::Dims &d)
 {
@@ -127,7 +152,12 @@ InferEngine *infer_open(const char *engine_path, const char *sidecar_path, char 
         if (last == 4) e->idx_boxes = (int)i;
         else if (last > 4) { e->idx_scores = (int)i; e->num_classes = last; }
     }
-    if (e->idx_boxes < 0 || e->idx_scores < 0) { infer_close(e); return fail("expected boxes[.,4]+scores[.,C] outputs"); }
+    if (e->idx_boxes < 0 || e->idx_scores < 0) { infer_close(e); return fail("expected reg[.,4]+cls[.,C] outputs"); }
+
+    /* Precompute the anchor-point grid and check it matches the output length. */
+    build_anchors(e);
+    int Nout = (int)(e->outputs[e->idx_scores].vol / (e->num_classes > 0 ? e->num_classes : 1));
+    if (e->num_anchors != Nout) { infer_close(e); return fail("anchor grid != output length (input-size/stride mismatch)"); }
 
     /* Allocate device buffers + host mirrors; wire tensor addresses. */
     if (cudaMalloc(&e->input.dev, e->input.vol * (e->in_fp16 ? 2 : 4)) != cudaSuccess) { infer_close(e); return fail("cudaMalloc input"); }
@@ -181,19 +211,26 @@ static float iou(const Cand &a, const Cand &b)
 static int decode_boxes(InferEngine *e, float conf_thresh, float nms_iou,
                         InferBox *out, int max_boxes)
 {
-    IoBuf &B = e->outputs[e->idx_boxes];   /* [1,N,4] xyxy input-px */
-    IoBuf &S = e->outputs[e->idx_scores];  /* [1,N,C] post-sigmoid  */
-    int N = (int)(S.vol / e->num_classes);
+    IoBuf &REG = e->outputs[e->idx_boxes];   /* [1,N,4] l,t,r,b distances (px)   */
+    IoBuf &CLS = e->outputs[e->idx_scores];  /* [1,N,C] raw class logits         */
+    int N = e->num_anchors;
     int C = e->num_classes;
+
+    /* sigmoid is monotonic: compare raw logits against logit(conf_thresh) so most
+     * background anchors are rejected without ever computing an exp/sigmoid. */
+    float ct = conf_thresh <= 0 ? 0.001f : conf_thresh >= 1 ? 0.999f : conf_thresh;
+    float logit_thr = logf(ct / (1.f - ct));
 
     std::vector<Cand> cands;
     for (int i = 0; i < N; i++) {
-        int best = -1; float bestc = conf_thresh;
-        const float *sc = &S.host[(size_t)i * C];
-        for (int c = 0; c < C; c++) if (sc[c] > bestc) { bestc = sc[c]; best = c; }
+        const float *cl = &CLS.host[(size_t)i * C];
+        int best = -1; float bestl = logit_thr;
+        for (int c = 0; c < C; c++) if (cl[c] > bestl) { bestl = cl[c]; best = c; }
         if (best < 0) continue;
-        const float *bx = &B.host[(size_t)i * 4];
-        cands.push_back({best, bestc, bx[0], bx[1], bx[2], bx[3]});
+        float score = 1.f / (1.f + expf(-bestl));
+        const float *r = &REG.host[(size_t)i * 4];
+        float cx = e->anchor_cx[i], cy = e->anchor_cy[i];
+        cands.push_back({best, score, cx - r[0], cy - r[1], cx + r[2], cy + r[3]});
     }
     std::sort(cands.begin(), cands.end(), [](const Cand &a, const Cand &b) { return a.conf > b.conf; });
 
