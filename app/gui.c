@@ -327,8 +327,9 @@ static void handle_rec(int cfd, const char *req)
 
 static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "gain=",
                                  "expms=", "gaincap=", "median=", "fps=", "res=" };
-/* the daemon's six live controls; the GUI sends them namespaced as radar_<key>= */
-static const char *RADAR_KEYS[] = { "eps", "minpts", "speed", "snrmin", "fov", "doppler" };
+/* the daemon's nine live controls; the GUI sends them namespaced as radar_<key>= */
+static const char *RADAR_KEYS[] = { "eps", "minpts", "speed", "snrmin", "fov", "doppler",
+                                    "confirm", "coast", "park" };
 
 static void handle_ctl(const char *req)
 {

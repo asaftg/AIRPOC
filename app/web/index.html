@@ -117,11 +117,14 @@
 
       <div class="sec">RADAR</div>
       <div class="srow"><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="60"><span class="val" id="rv-fov">60°</span></div>
-      <div class="srow"><label>MIN SNR</label><input type="range" id="rd-snrmin" min="0" max="60" step="1" value="0"><span class="val" id="rv-snrmin">0 dB</span></div>
-      <div class="srow"><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.4"><span class="val" id="rv-speed">0.4 m/s</span></div>
-      <div class="srow"><label>DOPPLER</label><input type="range" id="rd-doppler" min="0.5" max="20" step="0.5" value="3"><span class="val" id="rv-doppler">3.0 m/s</span></div>
-      <div class="srow"><label>CLUSTER ε</label><input type="range" id="rd-eps" min="0.5" max="50" step="0.5" value="8"><span class="val" id="rv-eps">8.0 m</span></div>
+      <div class="srow"><label>MIN SNR</label><input type="range" id="rd-snrmin" min="0" max="60" step="1" value="16"><span class="val" id="rv-snrmin">16 dB</span></div>
+      <div class="srow"><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.7"><span class="val" id="rv-speed">0.7 m/s</span></div>
+      <div class="srow" title="velocity-coherence gate for merging co-located boxes"><label>MERGE GATE</label><input type="range" id="rd-doppler" min="0.5" max="20" step="0.5" value="1.2"><span class="val" id="rv-doppler">1.2 m/s</span></div>
+      <div class="srow" title="merges co-located boxes into one target"><label>DEDUP</label><input type="range" id="rd-eps" min="0.5" max="50" step="0.5" value="4.5"><span class="val" id="rv-eps">4.5 m</span></div>
       <div class="srow"><label>MIN PTS</label><input type="range" id="rd-minpts" min="1" max="20" step="1" value="2"><span class="val" id="rv-minpts">2</span></div>
+      <div class="srow" title="M-of-N hits before a track appears — lower = faster/looser, higher = stricter"><label>CONFIRM</label><input type="range" id="rd-confirm" min="1" max="6" step="1" value="3"><span class="val" id="rv-confirm">3</span></div>
+      <div class="srow" title="seconds a track survives a dropout"><label>COAST</label><input type="range" id="rd-coast" min="0" max="3" step="0.1" value="0.4"><span class="val" id="rv-coast">0.4 s</span></div>
+      <div class="srow" title="seconds a stopped mover is held"><label>PARK HOLD</label><input type="range" id="rd-park" min="0" max="60" step="1" value="15"><span class="val" id="rv-park">15 s</span></div>
 
       <div class="sec">SYSTEM</div>
       <div class="kv">TEMP <b><span id="v-cpu">—</span>°</b></div>

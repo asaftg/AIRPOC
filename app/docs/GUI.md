@@ -24,8 +24,9 @@ full-screen (see `app.css` media query).
 - **EO (left):** proxied video, amber cross reticle, FOV/zoom + BRG/RNG lines, the engaged
   **LOCK** box, zoom **±** (bottom-left), the control cluster (bottom-centre). Scrim shows
   **EO · NOT CONNECTED** / **NO VIDEO RECORDED** (replay of a radar-only session).
-- **Target list (right, top):** class-less radar targets, rows persist ~2 s so a one-frame
-  drop doesn't flicker; engaged target green; tap a row → MANUAL-select it.
+- **Target list (right, top):** class-less radar targets straight from the frame (the
+  daemon's tracker confirms/coasts, so rows don't flicker); engaged target green; tap a
+  row → MANUAL-select it.
 - **Radar scope (right, bottom):** see *Radar rendering* below. Expand button flips it to
   the big view (EO drops to a PIP).
 - **Control cluster (over EO):** `LIGHT` (fire) · `TRACK` (auto/man) · `REC` (record).
@@ -56,9 +57,10 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   = adaptive stretch (grows to fit the farthest target); the presets pin the range. Grey
   metric range-grid rings + **constant amber reference rings at 100 m and 250 m** on every
   zoom.
-- Doppler colours (red inbound / blue outbound / static), per-point SNR alpha, GUI hold+
-  fade persistence (~300 ms — not coasting), green engaged LOCK, dashed FOV wedge +
-  boresight.
+- Doppler colours (red inbound / blue outbound / static), per-point SNR alpha, green
+  engaged LOCK, dashed FOV wedge + boresight. **No GUI-side persistence** — the daemon is
+  a temporal tracker (stable tids, M-of-N confirm, coast, park-hold), so target boxes and
+  list rows are drawn verbatim from the frame; a GUI hold would double-persist.
 
 ## Tracking — AUTO / MANUAL (cluster `TRACK`)
 - **AUTO** engages the most important target (fused → nearer → confidence; radar-only for
@@ -86,9 +88,13 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native).
 - **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
-- **RADAR** — FOV ± (default **60°**), MIN SNR, MIN SPD, DOPPLER, CLUSTER ε, MIN PTS. These
-  forward to the **daemon** namespaced `radar_<key>=` (the app strips the prefix → daemon
-  `/ctl`); sliders read back the **applied (clamped)** value from the daemon's `/stats`.
+- **RADAR** — the daemon's **nine** tracker knobs: FOV ± (default **60°**), MIN SNR,
+  MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
+  merge radius for co-located boxes), MIN PTS, CONFIRM (M-of-N hits before a track
+  appears, 1–6), COAST (seconds a track survives a dropout, 0–3), PARK HOLD (seconds a
+  stopped mover is held, 0–60). All forward to the **daemon** namespaced `radar_<key>=`
+  (the app strips the prefix → daemon `/ctl`); sliders read back the **applied (clamped)**
+  value from the daemon's `/stats` (`confirm`/`coast_s`/`park_s`).
 - **SYSTEM** — Jetson **TEMP** (junction/`tj` thermal zone), **CPU %** (aggregate, plus
   core-equivalents `x/N`), **GPU %** (Tegra load). RETURN TO CONTROL → the launcher (`:8088`).
 

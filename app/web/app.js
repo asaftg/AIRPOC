@@ -208,7 +208,11 @@
     { key: "speed",   stat: "speed_min_mps",    fmt: function (v) { return v.toFixed(1) + " m/s"; } },
     { key: "doppler", stat: "doppler_gate_mps", fmt: function (v) { return v.toFixed(1) + " m/s"; } },
     { key: "eps",     stat: "cluster_eps_m",    fmt: function (v) { return v.toFixed(1) + " m"; } },
-    { key: "minpts",  stat: "cluster_min_pts",  fmt: function (v) { return String(v | 0); } }
+    { key: "minpts",  stat: "cluster_min_pts",  fmt: function (v) { return String(v | 0); } },
+    /* temporal-tracker knobs (daemon 94af558): M-of-N confirm, dropout coast, park hold */
+    { key: "confirm", stat: "confirm",          fmt: function (v) { return String(v | 0); } },
+    { key: "coast",   stat: "coast_s",          fmt: function (v) { return v.toFixed(1) + " s"; } },
+    { key: "park",    stat: "park_s",           fmt: function (v) { return v.toFixed(0) + " s"; } }
   ];
   var rcTouch = 0;
   RADARC.forEach(function (c) {
@@ -242,15 +246,11 @@
   function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
 
   /* Target list (top 5 by importance): fused > higher confidence > nearer. Fusion isn't
-   * wired yet, so today this is radar-only (conf then range). Its own persistence
-   * (~2 s) keeps rows from flickering when a target drops for a frame or two. */
-  var listHold = {}, LIST_HOLD_MS = 2000;
+   * wired yet, so today this is radar-only (conf then range). No GUI-side row hold —
+   * the daemon's tracker already confirms/coasts, so rows come straight from the frame. */
   function importance(t) { return (t.fused ? 2e6 : 0) + (t.conf || 0) * 1e3 - t.rng; }
   function renderTargetList(radar) {
-    var now = Date.now();
-    targets(radar).forEach(function (t) { listHold[t.tid] = { t: t, ts: now }; });
-    Object.keys(listHold).forEach(function (tid) { if (now - listHold[tid].ts > LIST_HOLD_MS) delete listHold[tid]; });
-    var rows = Object.keys(listHold).map(function (tid) { return { t: listHold[tid].t, held: (now - listHold[tid].ts > 200) }; });
+    var rows = targets(radar).map(function (t) { return { t: t }; });
     rows.sort(function (a, b) { return importance(b.t) - importance(a.t); });
     rows = rows.slice(0, 5);
     $("v-tgtcount").textContent = rows.length;
@@ -259,7 +259,7 @@
     for (var i = 0; i < 5; i++) {
       if (i < rows.length) {
         var r = rows[i], t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
-        var eng = (t.tid === engagedTid), cls = "tgt-row" + (eng ? " eng" : "") + (r.held ? " held" : "");
+        var eng = (t.tid === engagedTid), cls = "tgt-row" + (eng ? " eng" : "");
         out.push('<li class="' + cls + '" data-tid="' + t.tid + '" style="border-left-color:' + (eng ? "var(--on)" : col) + '">'
           + '<span class="tid" style="color:' + (eng ? "var(--on)" : col) + '">R#' + t.tid + '</span>'
           + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
@@ -270,10 +270,9 @@
     }
     $("tgt-list").innerHTML = out.join("");
   }
-  /* Display persistence (GUI-owned): hold a dropped target's box at its last spot and
-   * fade over HOLD_MS so a one-frame miss doesn't blink. Not motion prediction — that
-   * (real coasting) belongs to the tracking module, not the display. */
-  var held = {}, HOLD_MS = 300;
+  /* No GUI-side persistence: the radar daemon is a temporal tracker now (stable tids,
+   * M-of-N confirm, coasting through dropouts, park-hold). "In the frame" already means
+   * "present" — adding a hold+fade here would double-persist. Draw the wire verbatim. */
   function engage(tid) {
     engagedTid = tid;
     $("track-hint").hidden = (trackMode !== "man") || (tid !== null);
@@ -429,17 +428,15 @@
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
     });
 
-    /* target boxes — daemon style, plus hold+fade persistence and the engaged LOCK */
-    var now = Date.now();
+    /* target boxes — the daemon's tracker output drawn verbatim (it confirms/coasts/
+     * dedups server-side; tids are stable) + the engaged LOCK */
     ctx.font = (11 * dpr) + "px ui-monospace, monospace";
-    Object.keys(held).forEach(function (tid) {
-      var hh = held[tid], t = hh.t, fade = Math.max(0, 1 - (now - hh.ts) / HOLD_MS);
-      if (fade <= 0.02) return;
+    targets(radar).forEach(function (t) {
       if (!inFov(t.x, t.y)) return;                 /* hide targets outside the FOV */
       var tc = W2C(t.x, t.y), locked = (t.tid === engagedTid);
       var col = locked ? css("--on") : tcolor(t.tid);
       var wpx = Math.max(6 * dpr, 2 * t.sx * scale), hpx = Math.max(6 * dpr, 2 * t.sy * scale);
-      ctx.globalAlpha = fade; ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2.2 : 1.5) * dpr;
       if (locked) {
         var cc = 8 * dpr, x0 = tc[0] - wpx / 2, y0 = tc[1] - hpx / 2;
         [[x0, y0, 1, 1], [x0 + wpx, y0, -1, 1], [x0, y0 + hpx, 1, -1], [x0 + wpx, y0 + hpx, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
@@ -447,7 +444,6 @@
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
       var spd = Math.hypot(t.vx, t.vy);
       ctx.fillText((locked ? "LOCK #" : "R#") + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] - wpx / 2 + 2 * dpr, tc[1] - hpx / 2 - 3 * dpr);
-      ctx.globalAlpha = 1;
     });
   }
 
@@ -557,10 +553,9 @@
       rLastFid = d.frame_id; rLastTs = d.timestamp;
     }
     $("v-tracks").textContent = d.connected ? (Math.round(rHz) + " Hz · " + (d.num_targets || 0) + " TRK") : "no data";
-    if (!d.connected) { held = {}; updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
-    var cur = targets(d), now = Date.now(), present = {};
-    cur.forEach(function (t) { held[t.tid] = { t: t, ts: now }; present[t.tid] = 1; });
-    Object.keys(held).forEach(function (tid) { if (!present[tid] && now - held[tid].ts > HOLD_MS) delete held[tid]; });
+    if (!d.connected) { updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
+    var cur = targets(d), present = {};
+    cur.forEach(function (t) { present[t.tid] = 1; });
     updateViewRange(d);
     if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
     else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
