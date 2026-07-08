@@ -68,7 +68,7 @@ fi
 # self-heals if EO isn't up yet, so launch order after EO is enough. The engine (built
 # on-device by trtexec, gitignored under /data) is passed with -e; if it's missing the
 # daemon runs model-less (motion + heartbeat) rather than failing. ---
-DET_ENGINE="${DET_ENGINE:-/data/detection/engines/rtmdet-t.fp16.trt10.engine}"
+DET_ENGINE="${DET_ENGINE:-/data/detection/engines/rtmdet-t-raw.fp16.trt10.engine}"
 if healthy 8094 /dev/shm/airpoc.det_wire; then
   echo ":8094 healthy — skip"
 else
