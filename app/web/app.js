@@ -362,26 +362,16 @@
       targets(lastRadar).forEach(function (t) {
         var az = t.az + radarOv.az, el = t.el + radarOv.el;
         var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
-        var locked = (t.tid === engagedTid);
-        var col = locked ? css("--on") : tcolor(t.tid);
-        if (Math.abs(fx) <= 1 && Math.abs(fy) <= 1) {
-          var lx = vx2 + (fx + 1) / 2 * vw2, ly = vy2 + (fy + 1) / 2 * vh2;
-          /* fixed-size ring + centre dot — the tracker's size estimates (sx/sy) jitter
-           * frame-to-frame, so size-coding made the marks pulse; position is stable. */
-          var rr = (locked ? 18 : 14) * dpr;
-          ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2 : 1.4) * dpr;
-          ctx.beginPath(); ctx.arc(lx, ly, rr, 0, 2 * Math.PI); ctx.stroke();
-          if (locked) { ctx.beginPath(); ctx.arc(lx, ly, rr + 4 * dpr, 0, 2 * Math.PI); ctx.stroke(); }
-          ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
-          ctx.fillText((locked ? "LOCK R#" : "R#") + t.tid + " " + t.rng.toFixed(0) + " m", lx + rr + 4 * dpr, ly - 4 * dpr);
-        } else if (locked) {   /* engaged target off-frame → edge arrow pointing at it */
-          var ex = cx + Math.max(-1, Math.min(1, fx)) * (w / 2 - 24 * dpr);
-          var ey = cy + Math.max(-1, Math.min(1, fy)) * (h / 2 - 24 * dpr);
-          ctx.fillStyle = col; ctx.globalAlpha = 0.9;
-          ctx.save(); ctx.translate(ex, ey); ctx.rotate(Math.atan2(fy, fx));
-          ctx.beginPath(); ctx.moveTo(15 * dpr, 0); ctx.lineTo(-11 * dpr, -10 * dpr); ctx.lineTo(-11 * dpr, 10 * dpr); ctx.closePath(); ctx.fill();
-          ctx.restore(); ctx.globalAlpha = 1;
-        }
+        if (Math.abs(fx) > 1 || Math.abs(fy) > 1) return;      /* off-frame → not drawn */
+        var lx = vx2 + (fx + 1) / 2 * vw2, ly = vy2 + (fy + 1) / 2 * vh2;
+        /* fixed-size ring + centre dot — the tracker's size estimates (sx/sy) jitter
+         * frame-to-frame, so size-coding made the marks pulse; position is stable.
+         * No engaged/LOCK styling: tracking isn't a thing yet — all marks are equal. */
+        var col = tcolor(t.tid), rr = 14 * dpr;
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.4 * dpr;
+        ctx.beginPath(); ctx.arc(lx, ly, rr, 0, 2 * Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
+        ctx.fillText("R#" + t.tid + " " + t.rng.toFixed(0) + " m", lx + rr + 4 * dpr, ly - 4 * dpr);
       });
     }
 
