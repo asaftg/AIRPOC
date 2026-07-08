@@ -53,9 +53,9 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
   CLOCK_MONOTONIC so the diff is valid.
 
 - `cls` values from the stock COCO model are `human` (person) and `vehicle`
-  (car/truck/bus/motorcycle/bicycle/train); `drone` arrives with the trained
-  model. With no engine loaded, `model` is `"none"` and `dets` is empty, but
-  `movers` still populates (the motion path runs regardless).
+  (car/bus/truck only — not bicycle/motorcycle, which aren't target vehicles);
+  `drone` arrives with the trained model. With no engine loaded, `model` is
+  `"none"` and `dets` is empty, but `movers` still populates (motion runs regardless).
 
 ## Output — `GET /stats`
 ```json

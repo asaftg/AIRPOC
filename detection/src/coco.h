@@ -21,9 +21,13 @@ static const char *const COCO_CLASSES[COCO_NUM_CLASSES] = {
 /* person -> human; ground vehicles -> vehicle; everything else -> dropped. */
 static inline const char *coco_to_airpoc(int c)
 {
-    if (c == 0) return "human";                                  /* person */
-    if (c == 1 || c == 2 || c == 3 || c == 5 || c == 6 || c == 7) return "vehicle"; /* bicycle,car,motorcycle,bus,train,truck */
+    if (c == 0) return "human";                       /* person */
+    if (c == 2 || c == 5 || c == 7) return "vehicle"; /* car, bus, truck */
     return 0;
+    /* Deliberately NOT bicycle/motorcycle/train: our "vehicle" target is cars,
+     * trucks, and (via the trained model) military ground vehicles — a parked
+     * bicycle is not a target. This mapping is a stock-model placeholder; the
+     * trained model has native classes and this file goes away. */
 }
 
 #endif /* DET_COCO_H */
