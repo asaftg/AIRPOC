@@ -366,14 +366,14 @@
         var col = locked ? css("--on") : tcolor(t.tid);
         if (Math.abs(fx) <= 1 && Math.abs(fy) <= 1) {
           var lx = vx2 + (fx + 1) / 2 * vw2, ly = vy2 + (fy + 1) / 2 * vh2;
-          /* bracket sized to the target's angular extent (min floor so far ones stay visible) */
-          var wdeg = 2 * Math.atan2(t.sx || 1, t.rng) * 180 / Math.PI;
-          var hdeg = 2 * Math.atan2(t.sz || t.sy || 1, t.rng) * 180 / Math.PI;
-          var bw = Math.max(30 * dpr, wdeg / eoHfov * vw2), bh = Math.max(30 * dpr, hdeg / eoVfov * vh2);
+          /* fixed-size ring + centre dot — the tracker's size estimates (sx/sy) jitter
+           * frame-to-frame, so size-coding made the marks pulse; position is stable. */
+          var rr = (locked ? 18 : 14) * dpr;
           ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = (locked ? 2 : 1.4) * dpr;
-          var cc = Math.min(12 * dpr, bw / 3), x0 = lx - bw / 2, y0 = ly - bh / 2;
-          [[x0, y0, 1, 1], [x0 + bw, y0, -1, 1], [x0, y0 + bh, 1, -1], [x0 + bw, y0 + bh, -1, -1]].forEach(function (c) { ctx.beginPath(); ctx.moveTo(c[0], c[1] + c[3] * cc); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + c[2] * cc, c[1]); ctx.stroke(); });
-          ctx.fillText((locked ? "LOCK R#" : "R#") + t.tid + " " + t.rng.toFixed(0) + " m", x0, y0 - 3 * dpr);
+          ctx.beginPath(); ctx.arc(lx, ly, rr, 0, 2 * Math.PI); ctx.stroke();
+          if (locked) { ctx.beginPath(); ctx.arc(lx, ly, rr + 4 * dpr, 0, 2 * Math.PI); ctx.stroke(); }
+          ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
+          ctx.fillText((locked ? "LOCK R#" : "R#") + t.tid + " " + t.rng.toFixed(0) + " m", lx + rr + 4 * dpr, ly - 4 * dpr);
         } else if (locked) {   /* engaged target off-frame → edge arrow pointing at it */
           var ex = cx + Math.max(-1, Math.min(1, fx)) * (w / 2 - 24 * dpr);
           var ey = cy + Math.max(-1, Math.min(1, fy)) * (h / 2 - 24 * dpr);

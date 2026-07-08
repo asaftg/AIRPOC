@@ -65,9 +65,10 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 
 ## Radar → EO overlay (console-owned render; NOT fusion)
 - Every radar target is projected onto the video from its az/el (radar frame) through the
-  camera's current hfov/vfov, drawn as a bracket sized to the target's real angular extent,
-  labelled `R#tid range`. The engaged target is green (`LOCK R#`) and keeps an off-frame
-  edge arrow; others use their track colour and clip at the video edge.
+  camera's current hfov/vfov, drawn as a **fixed-size ring + centre dot** labelled
+  `R#tid range` (size-coding by the tracker's sx/sy was tried and pulsed — those estimates
+  jitter; position is stable). The engaged target is green, double-ringed (`LOCK R#`) and
+  keeps an off-frame edge arrow; others use their track colour and clip at the video edge.
 - **DEV → RADAR ON EO**: OVERLAY on/off + **AZ TRIM / EL TRIM** (±10°, 0.1° steps) — the
   radar↔camera mount alignment, persisted per browser (localStorage). No rig calibration
   is stored anywhere yet (the radar module's README leaves radar↔EO calibration to the
