@@ -9,7 +9,7 @@
 #ifndef DET_CONFIG_H
 #define DET_CONFIG_H
 
-#define DET_VERSION       "0.1.0"          /* phase 1: tap + stats + stream */
+#define DET_VERSION       "0.2.0"          /* model (TRT) + motion + contract */
 
 /* IMX296 native frame delivered on airpoc.eo_y10 (Y10 in 16-bit LE words). */
 #define EO_IMG_W          1440

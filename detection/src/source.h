@@ -2,8 +2,8 @@
  *
  * Every frame the detector processes arrives through this vtable, so the exact
  * same pipeline runs whether frames come from the live EO shared-memory tap, a
- * recorded AIREC session, or a directory of 16-bit test images. Phase 1 ships
- * the tap source; replay sources land in phase 2 behind the same interface.
+ * recorded AIREC session, or a directory of 16-bit test images. The live tap
+ * source ships today; replay sources land behind the same interface.
  *
  * A frame is one native IMX296 image: Y10 brightness packed in 16-bit LE words,
  * EO_IMG_W x EO_IMG_H, plus the tap metadata (timestamps, v4l2 seq, illuminator

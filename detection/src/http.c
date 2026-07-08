@@ -200,7 +200,7 @@ static void *client(void *arg)
         close(fd); return NULL;
     }
 
-    /* Minimal root so a browser hit isn't a 404; no static assets in phase 1. */
+    /* Minimal root so a browser hit isn't a 404; no static assets served here. */
     const char *body = "detectiond — endpoints: /stream (SSE), /stats, /ctl\n";
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n"
                 "Content-Length: %zu\r\nConnection: close\r\n\r\n%s", strlen(body), body);

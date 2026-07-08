@@ -58,7 +58,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
 | Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | — | 🟡 records the full mission (camera, radar, all data) to the NVMe without slowing the live system, and replays it looking like the live screen — full resolution, smooth, pause/step/scrub. Working on-device with the real camera + radar; browse/tag/offload included. Next: the record/replay buttons in the console | [`recorder/`](../recorder/README.md) |
-| Detection | — | ⬜ not started | — |
+| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + CPU motion safety-net, one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Stateless — temporal/tracking is the EO tracker's | [`detection/`](../detection/README.md) |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
 | Gimbal | — | ⬜ not started | — |
@@ -135,10 +135,33 @@ play/pause/0.5–4×/seek/frame-step. Remaining: the EO tees (WI-EO,
 — the `/rec/` pass-through in `app/` is already merged). Detail:
 [`recorder/`](../recorder/README.md).
 
-### Detection / Fusion / Tracking / Gimbal / Guidance (not started)
+### Detection (`detection/`) — EO object detector, running on a placeholder model
+On-device detector (`detectiond`, `:8094`) that reads the EO camera tap
+(`airpoc.eo_y10`) and emits per-frame `human`/`vehicle`/`drone` boxes over
+`/stream` + `/stats` + `/ctl`, plus the `airpoc.det_wire` recorder tap — the same
+contract shape as the radar daemon; the console already consumes it. Two paths: a
+**TensorRT appearance model** at native 1440×1088 (RTMDet-tiny, Apache; raw-head
+export with decode + NMS in our C++) and a **CPU motion worker** (frame-diff safety
+net for movers the model missed). Where they overlap the model wins → one box per
+target. Boxes carry pixels **and** real-world angle (via the lens IFOV) for fusion.
+
+**Deliberately stateless** — one fresh list of boxes per frame; all cross-frame
+work (temporal confirmation, smoothing, coasting, track IDs, detect-slow/track-fast)
+is the **EO tracker's** job, which consumes this feed. Measured on-device (hot GPU,
+native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near its floor for this
+chip, and the biggest live-latency lever is pinning the GPU clocks (a `jetson/`
+boot service). **Current model is a stock COCO placeholder** proving the pipeline;
+the trained mono model (data/training agent) drops in with no code change. Motion
+defaults **off** — the frame-diff path needs real ego-motion (IMU/VIO, or the ECC
+stabilizer) before it is usable on a moving camera. Detail:
+[`detection/README.md`](../detection/README.md) ·
+[`detection/docs/INTEGRATION.md`](../detection/docs/INTEGRATION.md).
+
+### Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
 current state, and a link to its module folder. (Tracking target *selection* lives in
-`app/` today; the *tracker/gimbal pointing* is the future module.)
+`app/` today; the *tracker/gimbal pointing* is the future module — and it owns the
+temporal layer over the detection feed: confirm, smooth, coast, detect-slow/track-fast.)
 
 ## Production readiness
 
