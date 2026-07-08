@@ -49,6 +49,9 @@ static char            g_wifi_if[32] = "";              /* WiFi iface name, or "
 static volatile double g_rssi = 0, g_link_mbps = -1;    /* RSSI dBm + negotiated PHY rate (Mb/s) */
 static volatile double g_cpu_pct = -1;                  /* aggregate CPU busy %, sampled ~1s */
 static volatile double g_gpu_pct = -1;                  /* GPU load %, 1s mean of 100ms samples */
+static volatile double g_tot_usb_mbps = -1, g_tot_wifi_mbps = -1;  /* whole-interface tx Mb/s —
+    catches OTHER traffic on the operator's link (offloads, other agents) that the video
+    counter can't see */
 static pthread_t       g_net_th;
 static int             g_net_ok = 0;
 
@@ -147,16 +150,39 @@ static double read_link_rate(const char *ifn)              /* negotiated tx bitr
     while (fgets(l, sizeof l, p)) { char *b = strstr(l, "tx bitrate:"); if (b) { r = atof(b + 11); break; } }
     pclose(p); return r;
 }
+static unsigned long long read_tx_bytes(const char *ifn)
+{
+    char p[96]; snprintf(p, sizeof p, "/sys/class/net/%s/statistics/tx_bytes", ifn);
+    FILE *f = fopen(p, "r");
+    if (!f) return 0;
+    unsigned long long v = 0;
+    if (fscanf(f, "%llu", &v) != 1) v = 0;
+    fclose(f);
+    return v;
+}
+
 /* refresh RSSI + rate ~1 Hz (popen(iw) is too heavy to run per /stats request) */
 static void *net_poller(void *a)
 {
     (void)a;
+    unsigned long long pu = 0, pw = 0; double pt = 0;
     while (g_run) {
         char ifn[32] = ""; double rssi = 0;
         if (read_wifi(ifn, sizeof ifn, &rssi)) {
             double lr = read_link_rate(ifn);
             snprintf(g_wifi_if, sizeof g_wifi_if, "%s", ifn); g_rssi = rssi; g_link_mbps = lr;
         } else { g_wifi_if[0] = 0; g_link_mbps = -1.0; }
+        /* whole-interface tx rates (USB gadget bridge + WiFi) — sees ALL traffic on the
+         * operator's link, not just this console's video */
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        double now = ts.tv_sec + ts.tv_nsec / 1e9;
+        unsigned long long cu = read_tx_bytes("l4tbr0");
+        unsigned long long cw = g_wifi_if[0] ? read_tx_bytes(g_wifi_if) : 0;
+        if (pt > 0 && now > pt) {
+            g_tot_usb_mbps  = cu >= pu ? (double)(cu - pu) * 8.0 / ((now - pt) * 1e6) : -1.0;
+            g_tot_wifi_mbps = (cw && cw >= pw) ? (double)(cw - pw) * 8.0 / ((now - pt) * 1e6) : -1.0;
+        }
+        pu = cu; pw = cw; pt = now;
         g_cpu_pct = read_cpu_pct();      /* ~1s window per loop */
         /* GPU load is a square wave (the detector fires inference in bursts: raw sysfs
          * flips 0 <-> ~997 permille within 50 ms), so an instantaneous read is noise.
@@ -236,14 +262,23 @@ static void handle_stats(int fd)
     } else if (!strncmp(lip, "192.168.55.", 11) || !strncmp(lif, "usb", 3) || !strncmp(lif, "l4tbr", 5)) {
         ltype = "usb";
     }
+    /* whole-link tx rate on the operator's path — exposes other traffic (offloads, other
+     * agents' pulls) sharing the pipe with the video */
+    double tot = -1.0;
+    if (!strcmp(ltype, "usb"))       tot = g_tot_usb_mbps;
+    else if (!strcmp(ltype, "wifi")) tot = g_tot_wifi_mbps;
+    char tot_s[16];
+    if (tot < 0) snprintf(tot_s, sizeof tot_s, "null"); else snprintf(tot_s, sizeof tot_s, "%.1f", tot);
 
-    char body[1040];
+    char body[1100];
     int bl = snprintf(body, sizeof body,
         "{\"eo_connected\":%d,\"mbps\":%.2f,\"tx_fps\":%.0f,\"track\":\"%s\",\"engage\":%d,"
         "\"tracks\":%s,\"cpu_c\":%s,\"cpu_pct\":%s,\"gpu_pct\":%s,\"ncpu\":%ld,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
+        "\"link_total_mbps\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
         eoc, mbps, stream_fps(), g_track_man ? "man" : "auto", g_engage,
         tracks_s, cpu_s, cpp_s, gpp_s, ncpu, ltype, rssi_s, lrate_s,
+        tot_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);

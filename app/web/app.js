@@ -632,6 +632,10 @@
       $("v-ltype").textContent = d.link_type ? d.link_type.toUpperCase() : "LINK";
       $("v-link").textContent = num(d.mbps, 1) + " Mb/s";
       $("v-txfps").innerHTML = (eoc && d.tx_fps != null) ? "&nbsp;·&nbsp;" + Math.round(d.tx_fps) + " fps" : "";
+      /* total link traffic — shown only when it clearly exceeds the video (something else
+       * is sharing the pipe: an offload, a labeling pull, another viewer) */
+      var totm = d.link_total_mbps;
+      $("v-tot").innerHTML = (typeof totm === "number" && totm > d.mbps * 1.25 + 2) ? "&nbsp;·&nbsp;tot " + Math.round(totm) : "";
       $("v-sig").innerHTML = signalSVG(d.rssi_dbm);
       $("p-link").classList.add("on");   /* steady green while connected — catch() clears it if the poll fails */
       /* SAT = the link delivers less than half the video being produced (live only) —
