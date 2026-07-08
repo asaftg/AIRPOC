@@ -89,7 +89,10 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 - **MARK style** (DEV → DETECTOR → MARK): `BOX` = full bounding boxes; `SEEKER` = a small
   gapped cross on the target centroid with short labels (`V62` / `H55` / `M·7`) —
   display-only, persisted per browser.
-- Live-only for now (no recorded det channel yet); the stream closes in replay.
+- **Replay**: the console polls `/rec/replay/det` (timeline-aligned det message) and draws
+  recorded boxes over the recorded video — mapping uses the recorded zoom for the display
+  channel and no crop for NATIVE (full-frame) playback. Until the recorder ships the det
+  channel + `/replay/det`, the poll 404s quietly (5 s backoff) and replay shows no boxes.
 - Heads-up: until the trained mono model lands, the stock COCO placeholder emits false
   "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
 

@@ -390,10 +390,12 @@
     /* EO detector boxes — px = [cx,cy,w,h] in the NATIVE frame (msg.img, 1440x1088).
      * The display shows a centered 1/zoom crop of native, letterboxed into the panel
      * (object-fit: contain) — map native -> crop -> content rect. dets[] solid with
-     * class+conf; movers[] dashed class-less. Live-only (guarded off in replay). */
-    if (!replaying && lastDet && (lastDet.dets || lastDet.movers)) {
+     * class+conf; movers[] dashed class-less. Works in replay too: lastDet is fed by
+     * the replay det poller there (recorded boxes over recorded video); a NATIVE replay
+     * shows the full uncropped frame, so the zoom crop doesn't apply to it. */
+    if (lastDet && (lastDet.dets || lastDet.movers)) {
       var im = lastDet.img || { w: 1440, h: 1088 };
-      var z = es.zoom || 1;
+      var z = (replaying && replayVideoSrc === "native") ? 1 : (es.zoom || 1);
       var cw = im.w / z, ch = im.h / z, ox = (im.w - cw) / 2, oy = (im.h - ch) / 2;
       var sw = es.dw || cw, sh = es.dh || ch, ar = sw / sh;   /* streamed frame sets the letterbox */
       var vw, vh, vx, vy;
@@ -685,6 +687,16 @@
     if (!replaying) return;
     fetch(API.radar).then(function (r) { return r.json(); }).then(onRadarFrame).catch(function () {});
   }
+  /* replay detector boxes — polls the recorder's timeline-aligned det message. Written
+   * ahead of the recorder shipping /replay/det: a 404 just means no boxes (no errors),
+   * so recorded detections appear here the moment the recorder adds the channel. */
+  var detReplayBackoff = 0;                        /* 404 (channel not shipped yet) → retry every 5s, not 7/s */
+  function pollDetReplay() {
+    if (!replaying || Date.now() < detReplayBackoff) return;
+    fetch("/rec/replay/det").then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (m) { if (replaying) { lastDet = (m && (m.dets || m.movers)) ? m : null; drawEO(); } })
+      .catch(function () { detReplayBackoff = Date.now() + 5000; if (replaying && lastDet) { lastDet = null; drawEO(); } });
+  }
 
   /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
    * model boxes) + movers[] (motion-only); drawn over the video in drawEO. Live-only for
@@ -723,6 +735,7 @@
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
   var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
   var replayPlaying = false, replayStillT = -1;    /* EO pane: MJPEG stream while playing, still frame while paused */
+  var replayVideoSrc = "display";                  /* which recorded video channel replay shows (native = full frame) */
   var BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
   var RATES = [0.5, 1, 2, 4];
 
@@ -886,7 +899,8 @@
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
-      if (detES) { detES.close(); detES = null; } lastDet = null;   /* no live det boxes over a recording */
+      if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
+      detReplayBackoff = 0;                                          /* re-probe /replay/det for this session */
       resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
@@ -935,6 +949,7 @@
       $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
       $("tp-rate").textContent = rs.rate + "×";
       /* NATIVE/DISPLAY toggle — only when a native channel was recorded */
+      replayVideoSrc = (rs.video_src === "native") ? "native" : "display";
       if (rs.has_native) { $("tp-video").hidden = false; $("tp-video").textContent = (rs.video_src === "native") ? "NATIVE" : "DISPLAY"; }
       else $("tp-video").hidden = true;
       if (rs.t_wall_ms) { var d = new Date(rs.t_wall_ms); $("v-zulu").textContent = "REC " + ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2); }
@@ -987,6 +1002,7 @@
 
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
+  setInterval(pollDetReplay, 150);                  /* replay-only det boxes (no-op until the recorder ships /replay/det) */
   openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
   initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
