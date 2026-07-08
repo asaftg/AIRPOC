@@ -1,0 +1,15 @@
+# Core (every non-GPU stage + tests) — pure offline tooling
+numpy
+Pillow
+jsonschema
+pytest
+
+# GPU labeling stages only (ds_label.py / ds_label_crosscheck.py), install on
+# the build machine (WSL Ubuntu on the A4000 box — CUDA works there):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   pip install transformers            # GroundingDINO (IDEA-Research/grounding-dino-base)
+#   pip install -U openmim && mim install mmengine mmcv mmdet   # RTMDet
+#
+# ds_extract.py / ds_probe.py additionally need ffmpeg/ffprobe on PATH.
+# Corporate-proxy note: this network MITMs TLS; if pip fails cert verification,
+# add --trusted-host pypi.org --trusted-host files.pythonhosted.org

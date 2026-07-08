@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "airpoc/datasets/split_manifest.schema.json",
+  "title": "AIRPOC dataset split manifest (layout-1)",
+  "type": "object",
+  "required": ["spec_version", "seed", "ratios", "method", "assignments", "invariant"],
+  "properties": {
+    "spec_version": { "const": "layout-1" },
+    "seed": { "type": "integer" },
+    "ratios": {
+      "type": "object",
+      "required": ["train", "val", "test"],
+      "properties": {
+        "train": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "val": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "test": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "method": { "const": "hash_stratified_v1" },
+    "assignments": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9_-]+_[0-9a-f]{10}$" },
+      "additionalProperties": { "enum": ["train", "val", "test"] }
+    },
+    "invariant": { "const": "split by source_video_id; no video appears in more than one split" }
+  }
+}

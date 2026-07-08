@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIRPOC dataset review</title>
+<style>
+  :root { --bg:#12151a; --panel:#1b2027; --line:#2a313b; --fg:#e6e9ee;
+          --muted:#8a94a3; --veh:#4ea1ff; --hum:#ffd24e; --ok:#3ddc84;
+          --bad:#ff5c5c; --edit:#c08bff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,sans-serif; background:var(--bg);
+         color:var(--fg); }
+  header { padding:10px 16px; border-bottom:1px solid var(--line);
+           display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  #progress { color:var(--muted); }
+  #wrap { display:flex; gap:16px; padding:16px; flex-wrap:wrap; }
+  #stage { position:relative; background:#000; border:1px solid var(--line);
+           flex:1 1 640px; min-width:320px; }
+  #stage canvas { display:block; width:100%; image-rendering:pixelated; }
+  #side { flex:1 1 300px; min-width:280px; }
+  .box-row { border:1px solid var(--line); border-radius:6px; padding:10px;
+             margin-bottom:10px; background:var(--panel); }
+  .box-row.sel { outline:2px solid var(--edit); }
+  .tag { display:inline-block; padding:1px 7px; border-radius:10px;
+         font-size:12px; font-weight:600; }
+  .tag.vehicle { background:rgba(78,161,255,.2); color:var(--veh); }
+  .tag.human { background:rgba(255,210,78,.2); color:var(--hum); }
+  .tag.review { background:rgba(192,139,255,.2); color:var(--edit); }
+  .reasons { color:var(--muted); font-size:12px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--panel);
+           color:var(--fg); padding:6px 12px; border-radius:6px; cursor:pointer; }
+  button:hover { border-color:var(--muted); }
+  button.ok { border-color:var(--ok); color:var(--ok); }
+  button.bad { border-color:var(--bad); color:var(--bad); }
+  button.edit { border-color:var(--edit); color:var(--edit); }
+  .actions { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .navbar { display:flex; gap:8px; align-items:center; margin-top:16px; }
+  select { font:inherit; background:var(--panel); color:var(--fg);
+           border:1px solid var(--line); border-radius:6px; padding:5px; }
+  .hint { color:var(--muted); font-size:12px; margin-top:12px; }
+  kbd { background:#000; border:1px solid var(--line); border-radius:4px;
+        padding:0 5px; font-size:12px; }
+  #done { padding:40px; text-align:center; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AIRPOC dataset review</h1>
+  <span id="progress">loading…</span>
+  <span id="reasons-top" class="reasons"></span>
+</header>
+<div id="wrap">
+  <div id="stage"><canvas id="cv" width="320" height="240"></canvas></div>
+  <div id="side">
+    <div id="boxes"></div>
+    <div class="actions">
+      <button id="add" class="edit">+ Draw missed target</button>
+      <button id="empty">Confirm frame empty</button>
+    </div>
+    <div class="navbar">
+      <button id="prev">‹ Prev</button>
+      <button id="next">Next ›</button>
+      <select id="jump"></select>
+    </div>
+    <div class="hint">
+      Per box: <b>Accept</b> keeps it · <b>Fix</b> then drag on the image to
+      redraw, or use the class buttons to relabel · <b>Reject</b> drops it.
+      Class-less (REVIEW) boxes must get a class before Accept.<br>
+      Keys: <kbd>a</kbd> accept sel · <kbd>r</kbd> reject sel · <kbd>1</kbd> vehicle
+      · <kbd>2</kbd> human · <kbd>←</kbd>/<kbd>→</kbd> navigate.
+    </div>
+  </div>
+</div>
+<script>
+const CLASS = {1:"vehicle", 2:"human"};
+let queue = [], corr = {annotation_decisions:{}, added_annotations:{}, frame_decisions:{}};
+let idx = 0, sel = 0, drawing = null, addMode = false;
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const img = new Image();
+
+async function boot() {
+  queue = (await (await fetch("/api/queue")).json()).items || [];
+  const c = await (await fetch("/api/corrections")).json();
+  corr.annotation_decisions = c.annotation_decisions || {};
+  corr.frame_decisions = c.frame_decisions || {};
+  const jump = document.getElementById("jump");
+  queue.forEach((it, i) => {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = `${i+1}. ${it.file_name}`;
+    jump.appendChild(o);
+  });
+  jump.onchange = e => show(+e.target.value);
+  if (!queue.length) { document.getElementById("wrap").innerHTML =
+    '<div id="done">Review queue is empty — nothing to check.</div>'; return; }
+  show(0);
+}
+
+function decisionOf(annId){ return corr.annotation_decisions[String(annId)]; }
+
+function show(i) {
+  idx = Math.max(0, Math.min(queue.length-1, i)); sel = 0; addMode = false;
+  const it = queue[idx];
+  document.getElementById("progress").textContent =
+    `frame ${idx+1} / ${queue.length}`;
+  document.getElementById("reasons-top").textContent = it.reasons.join(", ");
+  document.getElementById("jump").value = idx;
+  img.onload = () => { cv.width = img.naturalWidth; cv.height = img.naturalHeight; redraw(); };
+  img.src = `/frames/${it.source_video_id}/${it.file_name}`;
+  renderBoxes();
+}
+
+function redraw() {
+  ctx.drawImage(img, 0, 0);
+  const it = queue[idx];
+  it.boxes.forEach((b, j) => {
+    const d = decisionOf(b.annotation_id);
+    let col = b.proposed_category_id === 2 ? "#ffd24e"
+            : b.proposed_category_id === 1 ? "#4ea1ff" : "#c08bff";
+    if (d && d.action === "reject") col = "#ff5c5c";
+    const bb = (d && d.bbox) ? d.bbox : b.bbox;
+    ctx.lineWidth = j === sel ? 3 : 1.5;
+    ctx.strokeStyle = col;
+    ctx.strokeRect(bb[0], bb[1], bb[2], bb[3]);
+  });
+  if (drawing) {
+    ctx.strokeStyle = "#c08bff"; ctx.lineWidth = 2;
+    ctx.strokeRect(drawing.x, drawing.y, drawing.w, drawing.h);
+  }
+}
+
+function renderBoxes() {
+  const it = queue[idx], host = document.getElementById("boxes");
+  host.innerHTML = "";
+  it.boxes.forEach((b, j) => {
+    const d = decisionOf(b.annotation_id);
+    const cls = b.proposed_category_id ? CLASS[b.proposed_category_id] : "review";
+    const row = document.createElement("div");
+    row.className = "box-row" + (j === sel ? " sel" : "");
+    const status = d ? ` — <b>${d.action}${d.category_id?(" "+CLASS[d.category_id]):""}</b>` : "";
+    row.innerHTML =
+      `<span class="tag ${cls}">${cls}</span> `+
+      `<span class="reasons">${b.raw_label} · ${b.score.toFixed(2)} · `+
+      `${Math.round(Math.max(b.bbox[2],b.bbox[3]))}px${status}</span>`+
+      `<div class="actions">`+
+      `<button class="ok" data-a="accept">Accept</button>`+
+      `<button class="edit" data-a="fix">Fix box</button>`+
+      `<button data-a="veh">→vehicle</button>`+
+      `<button data-a="hum">→human</button>`+
+      `<button class="bad" data-a="reject">Reject</button></div>`;
+    row.onclick = () => { sel = j; renderBoxes(); redraw(); };
+    row.querySelectorAll("button").forEach(btn => btn.onclick = ev => {
+      ev.stopPropagation(); sel = j; act(btn.dataset.a);
+    });
+    host.appendChild(row);
+  });
+}
+
+async function post(url, body) {
+  await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify(body)});
+}
+
+async function decide(annId, dec) {
+  corr.annotation_decisions[String(annId)] = dec;
+  await post("/api/decision", Object.assign({annotation_id: annId}, dec));
+  renderBoxes(); redraw();
+}
+
+function act(a) {
+  const b = queue[idx].boxes[sel];
+  if (!b) return;
+  if (a === "accept") {
+    if (!b.proposed_category_id) { alert("Class-less box: pick →vehicle or →human first."); return; }
+    decide(b.annotation_id, {action:"accept"});
+  } else if (a === "reject") {
+    decide(b.annotation_id, {action:"reject"});
+  } else if (a === "veh") {
+    decide(b.annotation_id, {action:"edit", category_id:1, bbox:b.bbox});
+  } else if (a === "hum") {
+    decide(b.annotation_id, {action:"edit", category_id:2, bbox:b.bbox});
+  } else if (a === "fix") {
+    alert("Drag a new box on the image for this annotation.");
+    drawing = {forAnn: b.annotation_id, category_id: b.proposed_category_id || 1};
+  }
+}
+
+// drag to redraw / add
+cv.addEventListener("mousedown", e => {
+  const r = cv.getBoundingClientRect(), sx = cv.width/r.width, sy = cv.height/r.height;
+  drawing = Object.assign(drawing || {}, {
+    x:(e.clientX-r.left)*sx, y:(e.clientY-r.top)*sy, w:0, h:0, dragging:true});
+  if (addMode) drawing.add = true;
+});
+cv.addEventListener("mousemove", e => {
+  if (!drawing || !drawing.dragging) return;
+  const r = cv.getBoundingClientRect(), sx = cv.width/r.width, sy = cv.height/r.height;
+  drawing.w = (e.clientX-r.left)*sx - drawing.x;
+  drawing.h = (e.clientY-r.top)*sy - drawing.y;
+  redraw();
+});
+cv.addEventListener("mouseup", async () => {
+  if (!drawing || !drawing.dragging) return;
+  let {x,y,w,h} = drawing;
+  if (w<0){x+=w;w=-w;} if (h<0){y+=h;h=-h;}
+  const bbox = [Math.round(x),Math.round(y),Math.round(w),Math.round(h)];
+  if (w>2 && h>2) {
+    if (drawing.add) {
+      const cat = confirm("OK = vehicle, Cancel = human") ? 1 : 2;
+      await post("/api/add", {image_id: queue[idx].image_id, bbox, category_id: cat});
+      alert("Added.");
+    } else if (drawing.forAnn) {
+      await decide(drawing.forAnn, {action:"edit", bbox,
+        category_id: drawing.category_id});
+    }
+  }
+  drawing = null; addMode = false; redraw();
+});
+
+document.getElementById("prev").onclick = () => show(idx-1);
+document.getElementById("next").onclick = () => show(idx+1);
+document.getElementById("add").onclick = () => { addMode = true;
+  alert("Now drag on the image to add a missed target."); };
+document.getElementById("empty").onclick = async () => {
+  await post("/api/frame_empty", {image_id: queue[idx].image_id});
+  alert("Frame marked empty."); show(idx+1);
+};
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowLeft") show(idx-1);
+  else if (e.key === "ArrowRight") show(idx+1);
+  else if (e.key === "a") act("accept");
+  else if (e.key === "r") act("reject");
+  else if (e.key === "1") act("veh");
+  else if (e.key === "2") act("hum");
+});
+boot();
+</script>
+</body>
+</html>

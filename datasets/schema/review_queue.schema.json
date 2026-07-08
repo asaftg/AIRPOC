@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "airpoc/datasets/review_queue.schema.json",
+  "title": "AIRPOC dataset review queue (layout-1)",
+  "type": "object",
+  "required": ["spec_version", "budget", "queued", "overflow_dropped", "items"],
+  "properties": {
+    "spec_version": { "const": "layout-1" },
+    "budget": { "type": "integer", "minimum": 0 },
+    "queued": { "type": "integer", "minimum": 0 },
+    "overflow_dropped": { "type": "integer", "minimum": 0 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "image_id", "file_name", "source_video_id", "timestamp_ms",
+          "extraction_mode", "reasons", "boxes", "suggested_action", "toughness"
+        ],
+        "properties": {
+          "image_id": { "type": "integer", "minimum": 1 },
+          "file_name": { "type": "string" },
+          "source_video_id": { "type": "string" },
+          "timestamp_ms": { "type": "integer", "minimum": 0 },
+          "extraction_mode": { "enum": ["baseline", "terminal"] },
+          "reasons": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": ["low_conf", "models_disagree", "small_box_low_conf", "crowded", "terminal_no_labels"]
+            }
+          },
+          "boxes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["annotation_id", "bbox", "proposed_category_id", "score", "raw_label"],
+              "properties": {
+                "annotation_id": { "type": "integer", "minimum": 1 },
+                "bbox": {
+                  "type": "array", "minItems": 4, "maxItems": 4,
+                  "items": { "type": "number", "minimum": 0 }
+                },
+                "proposed_category_id": { "enum": [1, 2, null] },
+                "score": { "type": "number", "minimum": 0, "maximum": 1 },
+                "raw_label": { "type": "string" }
+              }
+            }
+          },
+          "suggested_action": { "type": "string" },
+          "toughness": { "type": "number" }
+        }
+      }
+    }
+  }
+}

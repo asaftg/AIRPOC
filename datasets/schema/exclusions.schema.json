@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "airpoc/datasets/exclusions.schema.json",
+  "title": "AIRPOC dataset exclusions ledger (layout-1)",
+  "type": "object",
+  "required": ["spec_version", "videos", "frames"],
+  "$defs": {
+    "reason": {
+      "enum": [
+        "DOWNLOAD_FAIL", "HASH_MISMATCH", "DUPLICATE_VIDEO", "PROBE_FAIL",
+        "UNREADABLE_DECODE", "NO_LABELS", "LABELS_LOW_CONF_ALL", "EMPTY_GARBAGE",
+        "LICENSE_HOLD", "MANUAL_EXCLUDE", "REVIEW_OVERFLOW_DROP"
+      ]
+    }
+  },
+  "properties": {
+    "spec_version": { "const": "layout-1" },
+    "videos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stem", "reason_code"],
+        "properties": {
+          "stem": { "type": "string" },
+          "video_id": { "type": ["string", "null"] },
+          "reason_code": { "$ref": "#/$defs/reason" },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_video_id", "timestamp_ms", "extraction_mode", "reason_code"],
+        "properties": {
+          "source_video_id": { "type": "string" },
+          "timestamp_ms": { "type": "integer", "minimum": 0 },
+          "extraction_mode": { "enum": ["baseline", "terminal"] },
+          "reason_code": { "$ref": "#/$defs/reason" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+[
+  { "id": 1, "name": "vehicle", "supercategory": "object" },
+  { "id": 2, "name": "human", "supercategory": "object" }
+]

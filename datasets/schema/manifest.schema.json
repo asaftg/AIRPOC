@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "airpoc/datasets/manifest.schema.json",
+  "title": "AIRPOC dataset manifest / dataset card (layout-1)",
+  "type": "object",
+  "required": [
+    "dataset_name", "dataset_version", "spec_version", "built_utc",
+    "pipeline_commit", "tool_versions", "source", "classes",
+    "extraction_params", "counts", "splits", "hashes",
+    "exclusions_count", "use_restriction"
+  ],
+  "properties": {
+    "dataset_name": { "type": "string" },
+    "dataset_version": { "type": "string" },
+    "spec_version": { "const": "layout-1" },
+    "built_utc": { "type": "string" },
+    "pipeline_commit": { "type": "string" },
+    "tool_versions": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "source": {
+      "type": "object",
+      "required": ["catalog_repo", "catalog_commit", "catalog_snapshot_sha256",
+                   "videos_indexed", "videos_mirrored", "videos_used"],
+      "properties": {
+        "catalog_repo": { "type": "string" },
+        "catalog_commit": { "type": "string" },
+        "catalog_snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "videos_indexed": { "type": "integer", "minimum": 0 },
+        "videos_mirrored": { "type": "integer", "minimum": 0 },
+        "videos_used": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "classes": {
+      "type": "object",
+      "required": ["1", "2"],
+      "properties": { "1": { "const": "vehicle" }, "2": { "const": "human" } }
+    },
+    "extraction_params": {
+      "type": "object",
+      "required": ["baseline_fps", "terminal_tail_s", "terminal_fps"],
+      "properties": {
+        "baseline_fps": { "type": "number" },
+        "terminal_tail_s": { "type": "number" },
+        "terminal_fps": { "type": "number" }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["images", "annotations", "by_class", "by_mode", "from_replay",
+                   "small_10_40px", "review"],
+      "properties": {
+        "images": { "type": "integer", "minimum": 0 },
+        "annotations": { "type": "integer", "minimum": 0 },
+        "by_class": {
+          "type": "object",
+          "required": ["vehicle", "human"],
+          "properties": {
+            "vehicle": { "type": "integer", "minimum": 0 },
+            "human": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "by_mode": {
+          "type": "object",
+          "required": ["baseline", "terminal"],
+          "properties": {
+            "baseline": { "type": "integer", "minimum": 0 },
+            "terminal": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "from_replay": { "type": "integer", "minimum": 0 },
+        "small_10_40px": {
+          "type": "object",
+          "required": ["vehicle", "human"],
+          "properties": {
+            "vehicle": { "type": "integer", "minimum": 0 },
+            "human": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "review": {
+          "type": "object",
+          "required": ["auto_accepted", "human_reviewed", "dropped"],
+          "properties": {
+            "auto_accepted": { "type": "integer", "minimum": 0 },
+            "human_reviewed": { "type": "integer", "minimum": 0 },
+            "dropped": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "splits": {
+      "type": "object",
+      "required": ["train", "val", "test"],
+      "properties": {
+        "train": { "type": "integer", "minimum": 0 },
+        "val": { "type": "integer", "minimum": 0 },
+        "test": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "required": ["instances_train_sha256", "instances_val_sha256",
+                   "instances_test_sha256", "split_manifest_sha256", "stats_sha256"],
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "exclusions_count": { "type": "integer", "minimum": 0 },
+    "use_restriction": { "type": "string", "minLength": 1 }
+  }
+}

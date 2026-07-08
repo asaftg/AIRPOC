@@ -1,0 +1,20 @@
+# The dataset lives on DATASET_ROOT (the external drive), never in the repo.
+# These patterns catch data that lands here by accident (a mistyped --root, a
+# stray fixture). The code, SPEC, schemas, and READMEs are committed normally.
+*.mp4
+*.png
+*.jpg
+*.jpeg
+instances_*.json
+catalog_snapshot.json
+manifest.json
+merged_labels.json
+review_queue.json
+corrections.json
+exclusions.json
+split_manifest.json
+inventory.*
+stats.*
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,32 @@
+{
+  "spec_version": "layout-1",
+  "comment": "Frozen raw-label -> class routing. Values: 'vehicle' | 'human' | 'REVIEW' (queue for a person) | anything absent -> IGNORE (dropped). This table is as load-bearing as the layout: drift here silently changes class counts.",
+  "gdino_prompt": "vehicle . car . truck . bus . van . pickup . jeep . motorcycle . tank . bulldozer . person . human .",
+  "map": {
+    "vehicle": "vehicle",
+    "car": "vehicle",
+    "truck": "vehicle",
+    "bus": "vehicle",
+    "van": "vehicle",
+    "pickup": "vehicle",
+    "pickup truck": "vehicle",
+    "jeep": "vehicle",
+    "suv": "vehicle",
+    "motorcycle": "vehicle",
+    "motorbike": "vehicle",
+    "tank": "vehicle",
+    "bulldozer": "vehicle",
+    "excavator": "vehicle",
+    "tractor": "vehicle",
+    "apc": "vehicle",
+    "armored personnel carrier": "vehicle",
+    "person": "human",
+    "human": "human",
+    "soldier": "human",
+    "pedestrian": "human",
+    "technical": "REVIEW",
+    "military vehicle": "REVIEW",
+    "armored vehicle": "REVIEW",
+    "bicycle": "REVIEW"
+  }
+}
