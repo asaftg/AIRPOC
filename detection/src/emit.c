@@ -69,7 +69,12 @@ size_t det_frame_json(char *buf, size_t cap, const DetHdr *h,
         (unsigned long long)h->frame_id,
         (unsigned long long)h->t_src_ns, (unsigned long long)h->t_pub_ns,
         (unsigned long long)h->t_out_ns,
-        h->t_out_ns >= h->t_src_ns ? (h->t_out_ns - h->t_src_ns) / 1e6 : 0.0,
+        /* latency = detector pipeline time (frame published by EO -> we emit).
+         * Measured from t_pub_ns, NOT t_src_ns: the IMX296/V4L2 driver stamps
+         * t_src on a clock that is NOT CLOCK_MONOTONIC-comparable (observed ~30 s
+         * ahead of tap_now_ns), so t_src is only a frame-correlation key here.
+         * t_pub and t_out are both CLOCK_MONOTONIC (systemwide) -> a valid diff. */
+        h->t_out_ns >= h->t_pub_ns ? (h->t_out_ns - h->t_pub_ns) / 1e6 : 0.0,
         h->night ? "true" : "false",
         h->illum_on ? "true" : "false", h->illum_present ? "true" : "false",
         h->illum_power, h->illum_fov10,

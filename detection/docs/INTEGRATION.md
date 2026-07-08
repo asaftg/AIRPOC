@@ -11,8 +11,8 @@ EO pipeline shm tap, protocol v1 (`tap/airpoc_tap.h`). 16 slots, payload
 
 | field | meaning |
 |---|---|
-| `t_src_ns` | exposure-referenced CLOCK_MONOTONIC — the authoritative frame time |
-| `t_pub_ns` | when the EO pipeline published the frame |
+| `t_src_ns` | V4L2/driver exposure timestamp — use as a **frame-correlation key** (same value the recorder stores); on the IMX296 driver it is NOT on the CLOCK_MONOTONIC timebase (observed ~30 s offset), so do not diff it against wall-clock times |
+| `t_pub_ns` | when the EO pipeline published the frame (CLOCK_MONOTONIC, systemwide) |
 | `meta[0]` | v4l2 sequence (frame id; gaps = driver drops) |
 | `meta[4]` | illuminator state: `on | present<<1 | power<<8 | fov10<<16` |
 | `meta[5]` | cumulative driver drops |
@@ -47,7 +47,10 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
   overlap the model box wins and the mover is dropped → **one box per target**.
 - `cls`: `human` / `vehicle` / `drone` for model boxes; omitted for unclassified
   movers. `age` present on movers only (persistence age).
-- `t_src_ns` is authoritative; `latency_ms = (t_out_ns - t_src_ns)/1e6`.
+- `t_src_ns` is the frame-correlation key (see input table — driver clock, not
+  CLOCK_MONOTONIC). `latency_ms = (t_out_ns - t_pub_ns)/1e6` is the detector
+  pipeline time (EO-publish → we emit); `t_pub_ns`/`t_out_ns` are both
+  CLOCK_MONOTONIC so the diff is valid.
 
 *Phase 1:* `model` is `"none"` and `dets`/`movers` are always empty.
 
