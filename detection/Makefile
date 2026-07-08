@@ -18,8 +18,11 @@ CXXFLAGS ?= -O3 -Wall -Wextra -pthread -std=c++17
 CXXFLAGS += $(INC) -I$(CUDA_DIR)/include
 NVCCFLAGS ?= -O3 $(INC) -gencode arch=compute_87,code=sm_87
 
-OPENCV_CFLAGS := $(shell pkg-config --cflags opencv4)
-OPENCV_LIBS   := $(shell pkg-config --libs opencv4)
+# OpenCV (motion path only). The apt install lives at /usr/include/opencv4 with
+# libs on the default linker path; a stray /usr/local pkg-config entry can shadow
+# it with missing headers, so point at it explicitly. Override if yours differs.
+OPENCV_CFLAGS ?= -I/usr/include/opencv4
+OPENCV_LIBS   ?= -lopencv_core -lopencv_imgproc -lopencv_video
 
 LDLIBS = -L$(CUDA_DIR)/lib64 -lnvinfer -lnvinfer_plugin -lcudart \
          -lpthread -lm -lrt $(OPENCV_LIBS)
