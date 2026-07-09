@@ -1000,8 +1000,8 @@
   };
 
   /* ── LIBRARY ── */
-  $("libbtn").onclick = function () { $("library").hidden = false; buildTagFilter(); loadLibrary(); };
-  $("lib-close").onclick = function () { $("library").hidden = true; libSel = {}; };
+  $("libbtn").onclick = function () { $("library").hidden = false; liveSuspend(true); buildTagFilter(); loadLibrary(); };   /* entering library -> freeze live sensors */
+  $("lib-close").onclick = function () { $("library").hidden = true; libSel = {}; liveSuspend(false); };                    /* EXIT to live -> unfreeze */
   $("lib-q").oninput = debounce(loadLibrary, 250);
   function buildTagFilter() {
     var w = $("lib-tagfilter"); if (w.childElementCount) return;
@@ -1093,18 +1093,20 @@
   };
 
   /* ── REPLAY ── */
-  /* While reviewing a recording the live sensors aren't shown, so freeze them (launcher
-   * SIGSTOPs eo_pipeline/radar/detector) to give the native-mp4 transcode + playback the
-   * whole box. Resumed on close; also resumed on page-hide so a closed tab can't leave the
-   * live stack frozen. SIGCONT is idempotent, so calling resume is always safe. */
+  /* While you're in the LIBRARY / replay world the live sensors aren't shown, so freeze them
+   * (launcher SIGSTOPs eo_pipeline/radar/detector) to give the native-mp4 transcode + playback
+   * the whole box. Frozen on LIBRARY open, unfrozen on EXIT back to live (lib-close) — NOT per
+   * recording, so opening/closing individual replays inside the library doesn't churn it. Also
+   * unfrozen on page-hide so a closed tab can't leave the stack frozen. SIGCONT is idempotent. */
+  var liveFrozen = false;
   function liveSuspend(on) {
+    liveFrozen = on;
     fetch(location.protocol + "//" + location.hostname + ":8088/" + (on ? "suspend" : "resume"), { mode: "no-cors" }).catch(function () {});
   }
-  window.addEventListener("pagehide", function () { if (replaying) liveSuspend(false); });
+  window.addEventListener("pagehide", function () { if (liveFrozen) liveSuspend(false); });
   function openReplay(s) {
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
-      liveSuspend(true);                                  /* free the box for the transcode/playback */
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
       detReplayBackoff = 0;                                          /* re-probe /replay/det for this session */
@@ -1130,7 +1132,6 @@
   }
   function closeReplay() {
     fetch("/rec/replay/ctl?close=1").catch(function () {});
-    liveSuspend(false);                                   /* back to live -> unfreeze the sensors */
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
     stopReplayRadarPoll();                               /* drop any replay-radar fallback poll */
