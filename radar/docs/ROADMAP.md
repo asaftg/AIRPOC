@@ -42,6 +42,19 @@ window, jitter gates, occupancy rates, association gates) are documented in
 [`TUNING.md`](TUNING.md) and rarely need live tuning; promote one only if a real
 scene shows it's needed.
 
+### 3b. Clutter robustness — kill "immortal wandering tracks" (known bug)
+In dense multipath clutter (e.g. near buildings/vehicles, or a bench radar inside
+a room) a confirmed track can **never die and wander across the whole FOV**: it
+always finds a scrap of clutter within its miss-grown gate, resets, and drifts.
+Demonstrator: recording `20260709T010421Z` — radar 1–2 m inside a garage, one
+track spanned 45–145 m and ±29° over 23 s on ~0.4 real points/frame. Root cause:
+position-consistency (jitter) is checked only at **confirm** time, never after.
+Fix: a post-confirm guard that de-confirms/kills a track whose jitter stays high
+or whose path is incoherent — **validate against the open-scene recordings** so it
+doesn't kill real sparse tracks. Not urgent (open scenes are clean); needed before
+any clutter-heavy deployment. Garage recordings are worst-case multipath, not a
+representative test.
+
 ### 4. Sensitivity: use SNR to trade false-alarms vs range (medium)
 Now that per-point SNR is live, explore: lower the CFAR floor (toward ~16 dB)
 to detect farther, and lean on a host `min SNR` gate + SNR-weighted cluster
