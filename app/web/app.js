@@ -180,11 +180,15 @@
     b.onclick = function () { setSeg("md-btns", b); ctl("median=" + b.dataset.md); };
   });
   function setSeg(id, on) { document.querySelectorAll("#" + id + " button").forEach(function (x) { x.classList.remove("on"); }); on.classList.add("on"); }
-  /* AUTO exposure freezes EVERY sensor knob (EXP/GAIN/AUTO-CAP/MEDIAN) — nothing is
-   * touchable in AUTO, like the illuminator's AUTO. MANUAL unfreezes them all. */
+  /* Each knob is live only in the mode where it means something:
+   *  - EXP ms / GAIN: MANUAL only — in AUTO the exposure loop owns them.
+   *  - AUTO-CAP: AUTO only — it's the ceiling the loop may raise gain to; in MANUAL gain
+   *    is set directly, so a cap does nothing.
+   *  - MEDIAN: a denoise, independent of exposure — always live. */
   function setExpMode(auto) {
-    $("s-exp").disabled = auto; $("s-gain").disabled = auto; $("s-gcap").disabled = auto;
-    document.querySelectorAll("#md-btns button").forEach(function (x) { x.disabled = auto; });
+    $("s-exp").disabled = auto; $("s-gain").disabled = auto;
+    $("s-gcap").disabled = !auto;
+    document.querySelectorAll("#md-btns button").forEach(function (x) { x.disabled = false; });
   }
   /* moving EXP or GAIN drops the feed to MANUAL — reflect that optimistically */
   $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(2); manualAE(); ctl("expms=" + this.value); };
