@@ -1078,9 +1078,25 @@
   });
 
   setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
-  /* (removed: the MJPEG watchdog — it re-requested /stream, which churned the video
-   * connection and could leave stale server-side streams. The black-on-drop case it
-   * targeted is covered by SAT/LINK-AUTO; a manual refresh still recovers a dead stream.) */
+  /* MJPEG video-stream watchdog. An <img> MJPEG stream CANNOT self-recover from a stall —
+   * once its connection wedges (link jitter, a lost frame boundary), the browser holds the
+   * last frame forever, while the SSE symbol streams auto-reconnect and keep flowing. So a
+   * frozen EO with live symbols == a wedged video connection. Chrome fires `load` per
+   * multipart frame; if loads stop for >2.5 s WHILE the console reports it's still
+   * delivering video (tx_fps>0), the <img> is wedged (not the feed) → reconnect it cleanly.
+   * The tx_fps gate means a healthy stream is never churned and a genuinely-down feed isn't
+   * hammered — the flaw in the earlier version. */
+  var vidTick = Date.now();
+  $("video").addEventListener("load", function () { vidTick = Date.now(); });
+  setInterval(function () {
+    if (replaying) return;
+    var eoc = !!(lastStats && (lastStats.eo_connected || (lastStats.eo && lastStats.eo.connected)));
+    var delivering = !!(lastStats && typeof lastStats.tx_fps === "number" && lastStats.tx_fps > 0);
+    if (eoc && delivering && Date.now() - vidTick > 2500) {
+      vidTick = Date.now();
+      var v = $("video"); v.src = ""; v.src = "/stream?t=" + Date.now();   /* drop the wedged conn, reopen */
+    }
+  }, 1000);
 
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
