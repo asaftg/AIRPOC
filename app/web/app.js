@@ -609,6 +609,23 @@
   function redrawAll() { drawEO(); drawRadar(lastRadar); }
   window.addEventListener("resize", redrawAll);
 
+  /* Coalesce overlay redraws: radar (~27/s) + detector (~15/s) events would otherwise call
+   * drawRadar/drawEO ~40x/s on the main thread and steal paint time from the MJPEG <img> —
+   * the video stutters (worst while moving). Mark dirty + draw at most once per animation
+   * frame, and skip drawing entirely when the tab is hidden. */
+  var _dEO = false, _dRadar = false, _rafOn = false;
+  function draw(eo, radar) {
+    if (eo) _dEO = true; if (radar) _dRadar = true;
+    if (_rafOn) return; _rafOn = true;
+    requestAnimationFrame(function () {
+      _rafOn = false;
+      if (document.hidden) { _dEO = _dRadar = false; return; }
+      var r = _dRadar, e = _dEO; _dRadar = _dEO = false;
+      if (r) drawRadar(lastRadar);
+      if (e) drawEO();
+    });
+  }
+
   /* ── manual selection: tap the EO (project click az) or the radar target ── */
   $("eo").addEventListener("click", function (e) {
     if (roiArm || trackMode !== "man" || e.target.closest("#cluster") || e.target.closest("#zoombar")) return;
@@ -735,13 +752,13 @@
       rLastFid = d.frame_id; rLastTs = d.timestamp;
     }
     $("v-tracks").textContent = d.connected ? (Math.round(rHz) + " Hz · " + (d.num_targets || 0) + " TRK") : "no data";
-    if (!d.connected) { updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); drawRadar(d); drawEO(); return; }
+    if (!d.connected) { updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); draw(true, true); return; }
     var cur = targets(d), present = {};
     cur.forEach(function (t) { present[t.tid] = 1; });
     updateViewRange(d);
     if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
     else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
-    renderTargetList(d); drawRadar(d); drawEO();
+    renderTargetList(d); draw(true, true);
   }
   /* Live radar is PUSHED over SSE (/radar/stream) at the sensor's native rate — no polling,
    * so the display matches the sensor instead of an 8 Hz sample. pollRadar is used ONLY in
@@ -764,8 +781,8 @@
   function pollDetReplay() {
     if (!replaying || Date.now() < detReplayBackoff) return;
     fetch("/rec/replay/det").then(function (r) { if (!r.ok) throw 0; return r.json(); })
-      .then(function (m) { if (replaying) { lastDet = (m && (m.dets || m.movers)) ? m : null; drawEO(); } })
-      .catch(function () { detReplayBackoff = Date.now() + 5000; if (replaying && lastDet) { lastDet = null; drawEO(); } });
+      .then(function (m) { if (replaying) { lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); } })
+      .catch(function () { detReplayBackoff = Date.now() + 5000; if (replaying && lastDet) { lastDet = null; draw(true, false); } });
   }
 
   /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
@@ -778,9 +795,9 @@
     detES.onmessage = function (e) {
       if (replaying) return;
       try { var m = JSON.parse(e.data); lastDet = (m && m.connected === false) ? null : m; } catch (x) {}
-      drawEO();
+      draw(true, false);
     };
-    detES.onerror = function () { if (!replaying) { lastDet = null; drawEO(); } };   /* auto-reconnects */
+    detES.onerror = function () { if (!replaying) { lastDet = null; draw(true, false); } };   /* auto-reconnects */
   }
 
   /* Reflect the EO feed's ISP state into the DEV panel (guarded so a poll never fights a
@@ -1061,21 +1078,9 @@
   });
 
   setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
-  /* MJPEG watchdog — an <img> stream does NOT auto-reconnect (unlike the SSE feeds), so a
-   * WiFi hiccup leaves the video black while radar/detections keep flowing. The browser
-   * fires load per multipart frame: if frames stop >3 s while the EO feed says connected,
-   * silently re-request the stream (what a manual page reload was doing). */
-  var vidLastFrame = Date.now();
-  $("video").addEventListener("load", function () { vidLastFrame = Date.now(); });
-  $("video").addEventListener("error", function () { vidLastFrame = 0; });
-  setInterval(function () {
-    if (replaying) return;
-    var eoc = !!(lastStats && (lastStats.eo_connected || (lastStats.eo && lastStats.eo.connected)));
-    if (eoc && Date.now() - vidLastFrame > 3000) {
-      vidLastFrame = Date.now();                    /* one retry per 3s window */
-      $("video").src = "/stream?t=" + Date.now();
-    }
-  }, 1500);
+  /* (removed: the MJPEG watchdog — it re-requested /stream, which churned the video
+   * connection and could leave stale server-side streams. The black-on-drop case it
+   * targeted is covered by SAT/LINK-AUTO; a manual refresh still recovers a dead stream.) */
 
   setInterval(poll, 160); poll();
   setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
