@@ -66,6 +66,14 @@ body.day{
 #stage{position:relative;flex:1;min-height:0;display:flex;background:#000}
 #eo{position:relative;flex:1 1 auto;min-width:0;background:var(--canvas);overflow:hidden}
 #video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;background:#000}
+/* native replay plays the recorded H.264 mp4 (full 60 fps, small over WiFi) in this <video>;
+ * the MJPEG <img> above is the display/during-build source. Same box so replay zoom scales
+ * both identically. */
+#nvid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;background:#000}
+.natbadge{position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:4;
+  background:rgba(0,0,0,.7);border:1px solid var(--amber);color:var(--ambert);
+  padding:4px 12px;font-size:11px;letter-spacing:1px;border-radius:3px;white-space:nowrap}
+.natbadge[hidden]{display:none}
 #eo-ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
 .otl,.otr{position:absolute;top:8px;z-index:3;background:rgba(0,0,0,.55);
   padding:4px 9px;font-size:11px;letter-spacing:.5px;color:var(--ambert);border-radius:2px;white-space:pre}

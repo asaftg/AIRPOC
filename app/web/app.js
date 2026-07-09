@@ -37,13 +37,16 @@
   function setZoomLabel() { $("v-zval").textContent = (replaying ? replayZoom : zoom).toFixed(1) + "×"; }
   /* replay has no live feed to crop, so zoom is a client-side digital zoom (CSS scale) on
    * the recorded frame — you can magnify even though it was recorded at 1x. */
+  /* The digital zoom must scale the image AND the detection/radar overlay together, or the
+   * boxes stay put while the picture magnifies. Apply the same transform to the MJPEG <img>,
+   * the native <video>, and the overlay canvas (fit() is transform-independent, see above). */
+  function zoomEls() { return [$("video"), $("nvid"), $("eo-ovl")]; }
   function applyReplayZoom() {
-    var v = $("video");
-    v.style.transform = replayZoom > 1 ? "scale(" + replayZoom + ")" : "";
-    if (replayZoom <= 1) v.style.transformOrigin = "center";
+    var t = replayZoom > 1 ? "scale(" + replayZoom + ")" : "";
+    zoomEls().forEach(function (el) { el.style.transform = t; if (replayZoom <= 1) el.style.transformOrigin = "center"; });
     setZoomLabel();
   }
-  function resetReplayZoom() { replayZoom = 1; var v = $("video"); v.style.transform = ""; v.style.transformOrigin = "center"; }
+  function resetReplayZoom() { replayZoom = 1; zoomEls().forEach(function (el) { el.style.transform = ""; el.style.transformOrigin = "center"; }); }
   document.querySelectorAll("[data-zoom]").forEach(function (b) {
     b.onclick = function () {
       if (replaying) {
@@ -56,13 +59,17 @@
       zoom = ZOOMS[i]; zoomTouch = Date.now(); ctl("zoom=" + zoom); setZoomLabel();
     };
   });
-  /* click the zoomed replay image to recenter the zoom on that point */
-  $("video").addEventListener("click", function (e) {
+  /* click the zoomed replay picture to recenter the zoom on that point (whichever display
+   * element is showing — MJPEG img or native video); the origin applies to the overlay too */
+  function recenterZoom(e) {
     if (roiArm || !replaying || replayZoom <= 1) return;
     var r = this.getBoundingClientRect();
-    this.style.transformOrigin = ((e.clientX - r.left) / r.width * 100).toFixed(1) + "% "
-                               + ((e.clientY - r.top) / r.height * 100).toFixed(1) + "%";
-  });
+    var org = ((e.clientX - r.left) / r.width * 100).toFixed(1) + "% "
+            + ((e.clientY - r.top) / r.height * 100).toFixed(1) + "%";
+    zoomEls().forEach(function (el) { el.style.transformOrigin = org; });
+  }
+  $("video").addEventListener("click", recenterZoom);
+  $("nvid").addEventListener("click", recenterZoom);
 
   /* ── ROI zoom — press ROI, drag a box on the EO or radar, it zooms there; press again to
    * reset. EO = CSS scale on the frame; radar = a pan+zoom world window (drawRadar). Works
@@ -362,7 +369,10 @@
   $("rov-el").oninput = function () { radarOv.el = parseFloat(this.value); $("rovv-el").textContent = radarOv.el.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
 
   /* ── canvas ── */
-  function fit(cv) { var r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1; cv.width = Math.max(1, r.width * dpr | 0); cv.height = Math.max(1, r.height * dpr | 0); return { ctx: cv.getContext("2d"), w: cv.width, h: cv.height, dpr: dpr }; }
+  /* Size the backing store from the element's LAYOUT box (offsetWidth), not getBoundingClientRect
+   * — the latter includes CSS transforms, so once we CSS-scale the overlay for replay zoom its
+   * measured size would feed back and double-scale. offsetWidth is transform-independent. */
+  function fit(cv) { var dpr = window.devicePixelRatio || 1, w = cv.offsetWidth || 1, h = cv.offsetHeight || 1; cv.width = Math.max(1, w * dpr | 0); cv.height = Math.max(1, h * dpr | 0); return { ctx: cv.getContext("2d"), w: cv.width, h: cv.height, dpr: dpr }; }
   /* dark halo under on-video labels — thin text survives bright sky and dark bush alike
    * (the standard OSD treatment; the marks get the same via a two-pass stroke) */
   function haloText(ctx, txt, x, y, col, dpr) {
@@ -1096,7 +1106,7 @@
       /* Show the recorded still at the open position — NOT the live stream. The replay
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
-      replayPlaying = false; replayStillT = -1;
+      replayPlaying = false; replayStillT = -1; resetMp4State();   /* start on MJPEG; poll swaps to mp4 when ready */
       $("video").src = replayHasEO ? ("/rec/replay/frame?t=0") : BLANK;
       $("rb-text").innerHTML = "REPLAY — " + esc(s.name || s.sid) + " — " + esc(s.t0)
         + (s.note ? ' <span class="rb-note">“' + esc(s.note) + '”</span>' : "");
@@ -1110,6 +1120,7 @@
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
     stopReplayRadarPoll();                               /* drop any replay-radar fallback poll */
+    resetMp4State();                                     /* stop + release the native mp4 <video> */
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
     openRadarStream();                                   /* resume the live radar push */
@@ -1118,19 +1129,65 @@
     $("library").hidden = false; loadLibrary();
   }
   $("rb-close").onclick = closeReplay;
+  /* Native replay prefers the recorded H.264 mp4 (/rec/replay/native.mp4) — full 60 fps and
+   * small over WiFi — over the MJPEG stream the recorder caps at 20 fps. The mp4 is transcoded
+   * on demand; readiness is probed from the endpoint itself (1-byte range: 200/206 = ready,
+   * 202 = building{pct}) so it works whatever recorder build is running (the deployed one
+   * doesn't report mp4 status in /state). The <video> is SLAVED to the transport clock so the
+   * det/radar overlays — paced by the recorder clock — stay in sync. Display channel, radar-
+   * only, or while-building all fall back to the paced MJPEG <img>. */
+  var mp4State = { sid: null, ready: false, pct: 0, nextProbe: 0, srcSet: false };
+  function resetMp4State() {
+    mp4State = { sid: null, ready: false, pct: 0, nextProbe: 0, srcSet: false };
+    var nv = $("nvid"); nv.pause(); nv.removeAttribute("src"); nv.load();
+    nv.style.display = "none"; $("video").style.display = ""; $("nat-badge").hidden = true;
+  }
+  function probeMp4(sid) {
+    mp4State.nextProbe = Date.now() + 1500;                        /* throttle re-probes */
+    fetch("/rec/replay/native.mp4?sid=" + encodeURIComponent(sid), { headers: { Range: "bytes=0-0" } })
+      .then(function (r) {
+        if (mp4State.sid !== sid) return;
+        if (r.status === 200 || r.status === 206) { mp4State.ready = true; mp4State.pct = 100; }
+        else if (r.status === 202) { r.json().then(function (j) { if (mp4State.sid === sid) mp4State.pct = (j && (j.pct != null ? j.pct : j.percent)) || 0; }).catch(function () {}); }
+        else mp4State.pct = -1;                                    /* unavailable -> stay on MJPEG */
+      }).catch(function () {});
+  }
+  function updateReplayVideo(rs) {
+    var vid = $("video"), nv = $("nvid"), badge = $("nat-badge");
+    var sid = replaySession && replaySession.sid;
+    if (rs.video_src === "native" && sid) {
+      if (mp4State.sid !== sid) { resetMp4State(); mp4State.sid = sid; }
+      if (!mp4State.ready && mp4State.pct !== -1 && Date.now() >= mp4State.nextProbe) probeMp4(sid);
+      if (mp4State.ready) {                                        /* play the mp4, slaved to the clock */
+        if (!mp4State.srcSet) { mp4State.srcSet = true; nv.src = "/rec/replay/native.mp4?sid=" + encodeURIComponent(sid); vid.src = BLANK; }  /* BLANK stops the hidden MJPEG stream */
+        nv.style.display = ""; vid.style.display = "none"; badge.hidden = true;
+        replayPlaying = false; replayStillT = -1;                 /* re-arm MJPEG src if we switch back */
+        var tv = rs.t_ms / 1000;
+        if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.25) nv.currentTime = tv;
+        nv.playbackRate = rs.rate || 1;
+        if (rs.playing && rs.t_ms < rs.dur_ms) { if (nv.paused) nv.play().catch(function () {}); }
+        else if (!nv.paused) nv.pause();
+        return;
+      }
+      badge.hidden = mp4State.pct === -1;                          /* building -> show progress */
+      if (!badge.hidden) badge.textContent = "PREPARING NATIVE 60 fps · " + mp4State.pct + "%";
+    } else {
+      if (mp4State.sid !== null) resetMp4State();                  /* left native -> tear the video down */
+      badge.hidden = true;
+    }
+    /* MJPEG path: stream while playing, recorded still while paused/scrubbed */
+    nv.style.display = "none"; vid.style.display = "";
+    if (rs.playing && rs.t_ms < rs.dur_ms) {
+      if (!replayPlaying) { replayPlaying = true; vid.src = "/rec/replay/stream?t=" + Date.now(); }
+    } else {
+      replayPlaying = false;
+      if (rs.t_ms !== replayStillT) { replayStillT = rs.t_ms; vid.src = "/rec/replay/frame?t=" + rs.t_ms; }
+    }
+  }
   function pollReplayState() {
     fetch("/rec/replay/state").then(function (r) { return r.json(); }).then(function (st) {
       var rs = st.replay_state || st.state || st; if (!rs) return;   /* /state nests as .state, /stats as .replay_state */
-      /* EO pane source: live MJPEG replay stream while playing, recorded still while
-       * paused/stepped/scrubbed — so it never falls back to the live view. */
-      if (replayHasEO) {
-        if (rs.playing && rs.t_ms < rs.dur_ms) {
-          if (!replayPlaying) { replayPlaying = true; $("video").src = "/rec/replay/stream?t=" + Date.now(); }
-        } else {
-          replayPlaying = false;
-          if (rs.t_ms !== replayStillT) { replayStillT = rs.t_ms; $("video").src = "/rec/replay/frame?t=" + rs.t_ms; }
-        }
-      }
+      if (replayHasEO) updateReplayVideo(rs);   /* native mp4 (60 fps) or paced MJPEG, + overlay sync */
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
       $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
       $("tp-rate").textContent = rs.rate + "×";
