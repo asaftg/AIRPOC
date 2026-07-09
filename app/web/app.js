@@ -770,9 +770,31 @@
     radarES.onmessage = function (e) { if (replaying) return; try { onRadarFrame(JSON.parse(e.data)); } catch (x) {} };
     radarES.onerror = function () { if (!replaying) onRadarFrame({ connected: false }); };   /* auto-reconnects */
   }
-  function pollRadar() {   /* replay only */
+  function pollRadar() {   /* replay fallback only — see openReplayRadarStream */
     if (!replaying) return;
     fetch(API.radar).then(function (r) { return r.json(); }).then(onRadarFrame).catch(function () {});
+  }
+  /* Replay radar: prefer the recorder's SSE push (/rec/replay/radar/stream) so replay radar
+   * runs at the recorded sensor rate — matching live — instead of the old 120 ms (~8 Hz)
+   * poll. pollRadar stays as a fallback for a recorder that hasn't shipped the replay SSE
+   * endpoint yet: it starts only if the SSE 404s or never delivers a frame. */
+  var radarReplayPoll = null;
+  function stopReplayRadarPoll() { if (radarReplayPoll) { clearInterval(radarReplayPoll); radarReplayPoll = null; } }
+  function startReplayRadarPoll() { if (replaying && !radarReplayPoll) radarReplayPoll = setInterval(pollRadar, 120); }
+  function openReplayRadarStream() {
+    if (radarES) { radarES.close(); radarES = null; }
+    stopReplayRadarPoll();
+    var got = false;
+    radarES = new EventSource("/rec/replay/radar/stream");
+    radarES.onmessage = function (e) {
+      if (!replaying) return;
+      got = true; stopReplayRadarPoll();                 /* SSE is live — drop the fallback poll */
+      try { onRadarFrame(JSON.parse(e.data)); } catch (x) {}
+    };
+    /* A 404 (endpoint not shipped) fails the EventSource permanently (no retry storm) → poll. */
+    radarES.onerror = function () { if (!got) startReplayRadarPoll(); };
+    /* 200 but silent (endpoint present, no frames yet): poll if nothing arrived shortly. */
+    setTimeout(function () { if (!got) startReplayRadarPoll(); }, 1200);
   }
   /* replay detector boxes — polls the recorder's timeline-aligned det message. Written
    * ahead of the recorder shipping /replay/det: a 404 just means no boxes (no errors),
@@ -1066,6 +1088,7 @@
       replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
       document.body.classList.add("replay"); $("library").hidden = true;
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
+      openReplayRadarStream();                            /* replay radar over SSE (poll fallback) — recorded rate, not 8 Hz */
       /* Show the recorded still at the open position — NOT the live stream. The replay
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
@@ -1082,6 +1105,7 @@
     fetch("/rec/replay/ctl?close=1").catch(function () {});
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
+    stopReplayRadarPoll();                               /* drop any replay-radar fallback poll */
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
     openRadarStream();                                   /* resume the live radar push */
@@ -1150,7 +1174,7 @@
    * (assign the new src straight onto a hidden shadow <img>, swap on its load). */
 
   setInterval(poll, 160); poll();
-  setInterval(pollRadar, 120); openRadarStream();   /* live = SSE push; the 120ms poll only fires in replay */
+  openRadarStream();   /* live = SSE push; replay opens its own radar SSE (poll fallback) in openReplay */
   setInterval(pollDetReplay, 150);                  /* replay-only det boxes (no-op until the recorder ships /replay/det) */
   openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
   initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
