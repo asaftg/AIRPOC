@@ -470,7 +470,8 @@ static void stream_mjpeg(int fd)
     const char *hdr = "HTTP/1.0 200 OK\r\n"
                       "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
     if (write(fd, hdr, strlen(hdr)) < 0) return;
-    int cap = 512 * 1024;
+    int cap = 2 * 1024 * 1024;   /* must hold the largest native frame (eo_get_jpeg drops a
+                                    frame that won't fit) — matches eo_client's RDBUF */
     unsigned char *buf = malloc(cap);
     if (!buf) return;
     uint64_t last = 0;

@@ -17,7 +17,11 @@
 #include <time.h>
 #include <unistd.h>
 
-#define RDBUF (256 * 1024)
+/* Must exceed the LARGEST MJPEG frame or the frame is dropped (see the clen > RDBUF skip
+ * below) and the video goes black. Native 1440x1088 mono runs ~250 KB static and spikes
+ * far higher on high-detail / motion frames, which was blowing the old 256 KB limit — 2 MB
+ * gives generous headroom for any single native frame. */
+#define RDBUF (2 * 1024 * 1024)
 
 static pthread_t       th;
 static pthread_t       stats_th;
