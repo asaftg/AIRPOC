@@ -1093,9 +1093,18 @@
   };
 
   /* ── REPLAY ── */
+  /* While reviewing a recording the live sensors aren't shown, so freeze them (launcher
+   * SIGSTOPs eo_pipeline/radar/detector) to give the native-mp4 transcode + playback the
+   * whole box. Resumed on close; also resumed on page-hide so a closed tab can't leave the
+   * live stack frozen. SIGCONT is idempotent, so calling resume is always safe. */
+  function liveSuspend(on) {
+    fetch(location.protocol + "//" + location.hostname + ":8088/" + (on ? "suspend" : "resume"), { mode: "no-cors" }).catch(function () {});
+  }
+  window.addEventListener("pagehide", function () { if (replaying) liveSuspend(false); });
   function openReplay(s) {
     fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
       replaySession = s; replaying = true;
+      liveSuspend(true);                                  /* free the box for the transcode/playback */
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
       detReplayBackoff = 0;                                          /* re-probe /replay/det for this session */
@@ -1121,6 +1130,7 @@
   }
   function closeReplay() {
     fetch("/rec/replay/ctl?close=1").catch(function () {});
+    liveSuspend(false);                                   /* back to live -> unfreeze the sensors */
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
     stopReplayRadarPoll();                               /* drop any replay-radar fallback poll */
