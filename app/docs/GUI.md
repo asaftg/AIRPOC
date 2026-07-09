@@ -109,6 +109,13 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 - **REC** (cluster) starts/stops recording via the recorder daemon (`/rec/ctl?rec=…`); on
   stop, a **save dialog** (NAME / TAGS from a bank **+ a free-text custom-tag field** /
   NOTE) → `/rec/ctl?save=…&name&tags&note`, or DISCARD.
+- **REC re-attach.** If a feed is live but its recorder tap is DOWN (the shm-tap gremlin —
+  recorder detached after a producer restart), REC would record 0 bytes. The button warns
+  (amber pulse + tooltip) whenever `/rec/stats` `channels[].connected` is 0 for a live feed
+  (eo_y10/eo_jpeg = EO, radar_raw = RADAR). A press then: (1) toasts what's down, (2) calls
+  the launcher `:8088/reattach` — which runs `start.sh`, the ordered producer→recorder heal
+  (a recorder-only restart does NOT re-bind and can orphan a working attach), (3) polls
+  `/rec/stats` until taps re-bind, then starts recording; else toasts "press START".
 - **LIBRARY** — session cards (thumbnails or a radar-only placeholder, size badges, tags,
   the note), tag/text filters, a disk bar. **DELETE (n)** selected, **DELETE ALL** (double
   verify: confirm + type `DELETE`), **FREE — drop raw** per session (`purge_native`), and
