@@ -216,6 +216,20 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 #rec.rec-on{background:#5a1a1a;color:#ffb4b4;border-color:#7a2a2a;animation:pulse 1s infinite}
 #rec.rec-on small{color:#ffb4b4}
 #rec.rec-off{opacity:.45;cursor:not-allowed}
+/* recorder tap DOWN while the feed is live: REC would record 0 bytes. Amber-warn the
+ * button so the operator SEES it before pressing; a press re-attaches then records. */
+#rec.rec-warn{background:#4a3410;color:#ffcf6b;border-color:#7a5410;animation:pulse 1.4s infinite}
+#rec.rec-warn small{color:#ffcf6b}
+
+/* transient toast — heal/attach status, top-center, non-blocking */
+#toast{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:60;
+  max-width:min(560px,92vw);padding:10px 16px;border-radius:8px;font-size:14px;line-height:1.35;
+  font-weight:600;letter-spacing:.02em;box-shadow:0 6px 22px rgba(0,0,0,.5);
+  border:1px solid var(--bd3);background:#1a1e28;color:var(--fg);text-align:center;pointer-events:none}
+#toast[hidden]{display:none}
+#toast.warn{background:#4a3410;color:#ffcf6b;border-color:#7a5410}
+#toast.ok{background:#123020;color:#7fe0a8;border-color:#1e5a38}
+#toast.err{background:#3a1414;color:#ff9b9b;border-color:#7a2a2a}
 
 /* ── replay banner + transport ── */
 #replay-banner{display:none;align-items:center;gap:12px;height:26px;padding:0 14px;color:#1a1305;

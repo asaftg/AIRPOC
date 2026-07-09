@@ -819,6 +819,30 @@
   /* ═══════════════════════ RECORDER / REPLAY ═══════════════════════ */
   var TAGVOCAB = ["night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
   var recState = null, pendingSid = null, libSel = {}, libTagFilter = {}, libSessions = [], handledSids = {};
+  var healing = false, toastTimer = null;
+
+  /* transient status banner (top-center). kind = "" | "warn" | "ok" | "err"; ms auto-hide. */
+  function toast(msg, kind, ms) {
+    var t = $("toast");
+    t.textContent = msg; t.className = kind || ""; t.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, ms || 4000);
+  }
+
+  /* Which feeds are LIVE but whose recorder tap is DOWN — REC on these records 0 bytes.
+   * A tap is "down" when its channel is present in /rec/stats but not connected, AND the
+   * corresponding feed is actually up (so it's a detached tap, not a dead sensor). */
+  function recTapsDown() {
+    if (!recState || !recState.channels) return [];
+    var eoUp = !!lastStats.eo_connected, radarUp = !!(lastRadar && lastRadar.connected), down = [];
+    recState.channels.forEach(function (c) {
+      var conn = c.connected === true || c.connected === 1;
+      if (conn) return;
+      if ((c.name === "eo_y10" || c.name === "eo_jpeg") && eoUp) { if (down.indexOf("EO") < 0) down.push("EO"); }
+      else if (c.name === "radar_raw" && radarUp) { if (down.indexOf("RADAR") < 0) down.push("RADAR"); }
+    });
+    return down;
+  }
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
   var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
   var replayPlaying = false, replayStillT = -1;    /* EO pane: MJPEG stream while playing, still frame while paused */
@@ -835,24 +859,64 @@
 
   /* ── REC button + recorder health ── */
   function pollRec() {
+    if (healing) return;                 /* the heal flow owns recState + the button while re-attaching */
     fetch("/rec/stats").then(function (r) { return r.json(); }).then(function (d) {
       recState = d;
       var rec = $("rec");
-      if (!d || d.connected === false) { rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; return; }
-      rec.classList.remove("rec-off"); rec.title = "";
-      if (d.state === "recording") { rec.classList.add("rec-on"); rec.textContent = fmtClock(d.rec_elapsed_s * 1000); }
+      if (!d || d.connected === false) { rec.classList.remove("rec-warn"); rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; return; }
+      rec.classList.remove("rec-off");
+      if (d.state === "recording") { rec.classList.remove("rec-warn"); rec.title = ""; rec.classList.add("rec-on"); rec.textContent = fmtClock(d.rec_elapsed_s * 1000); }
       else {
         rec.classList.remove("rec-on"); rec.textContent = "REC";
+        var down = recTapsDown();        /* feed live but recorder detached → warn on the button itself */
+        if (down.length) { rec.classList.add("rec-warn"); rec.title = "Recorder tap DOWN (" + down.join("+") + ") — press REC to re-attach, then record"; }
+        else { rec.classList.remove("rec-warn"); rec.title = ""; }
         if (d.pending_sid && !pendingSid && !handledSids[d.pending_sid] && $("recdlg").hidden && !replaying) openSaveDialog(d.pending_sid);
       }
-    }).catch(function () { var rec = $("rec"); rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; });
+    }).catch(function () { var rec = $("rec"); rec.classList.remove("rec-warn"); rec.classList.add("rec-off"); rec.classList.remove("rec-on"); rec.textContent = "REC"; rec.title = "RECORDER NOT CONNECTED"; });
   }
   $("rec").onclick = function () {
-    if (replaying || $("rec").classList.contains("rec-off")) return;
-    if (recState && recState.state === "recording")
+    if (replaying || $("rec").classList.contains("rec-off") || healing) return;
+    if (recState && recState.state === "recording") {
       fetch("/rec/ctl?rec=stop").then(function (r) { return r.json(); }).then(function (d) { if (d && d.sid) openSaveDialog(d.sid); }).catch(function () {});
+      return;
+    }
+    var down = recTapsDown();
+    if (down.length) startRecWithHeal(down);     /* tap detached → re-attach the systems first, THEN record */
     else fetch("/rec/ctl?rec=start").catch(function () {});
   };
+
+  /* The operator hit REC while a recorder tap was DOWN. Don't silently record nothing:
+   * (1) show WHAT is down, (2) ask the launcher (:8088) to bounce the recorder so its shm
+   * taps re-bind to the live feeds, (3) poll until the tap is back, then start recording.
+   * This is the "hit record → it shows me + turns the systems on for recording" behaviour. */
+  function startRecWithHeal(down) {
+    if (healing) return;
+    healing = true;
+    var rec = $("rec");
+    rec.classList.add("rec-warn"); rec.classList.remove("rec-on"); rec.textContent = "ATTACH…";
+    toast("Recorder tap was DOWN (" + down.join("+") + ") — re-attaching before recording…", "warn", 8000);
+    fetch(location.protocol + "//" + location.hostname + ":8088/reattach", { mode: "no-cors" }).catch(function () {});
+    var tries = 0;
+    (function waitAttach() {
+      tries++;
+      fetch("/rec/stats").then(function (r) { return r.json(); }).then(function (d) {
+        recState = d;
+        if (d && d.connected !== false && !recTapsDown().length) {
+          healing = false;                                   /* taps back — record */
+          fetch("/rec/ctl?rec=start").catch(function () {});
+          toast("Recorder re-attached — recording.", "ok", 3500);
+        } else if (tries < 12) { setTimeout(waitAttach, 1000); }   /* recorder is restarting */
+        else {
+          healing = false; rec.textContent = "REC";
+          toast("Recorder still not attached (" + (recTapsDown().join("+") || "?") + "). Press START on the control page to restart the feeds.", "err", 9000);
+        }
+      }).catch(function () {                                  /* /rec/stats blips while the recorder restarts */
+        if (tries < 12) setTimeout(waitAttach, 1000);
+        else { healing = false; rec.textContent = "REC"; toast("Recorder didn't come back. Check the launcher.", "err", 9000); }
+      });
+    })();
+  }
 
   /* ── save dialog ── */
   function openSaveDialog(sid) {
