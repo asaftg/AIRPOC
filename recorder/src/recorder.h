@@ -231,7 +231,8 @@ int  transcode_mp4_path(const char *sid, char *path, size_t plen);  /* 0 if file
 void replay_ctl(const char *qs, char *resp, size_t rlen);
 void replay_state_json(char *buf, size_t len);
 void replay_stats_json(char *buf, size_t len);
-int  replay_radar_json(char *buf, size_t len);   /* frame at <= clock */
+int  replay_radar_json(char *buf, size_t len);   /* frame at <= clock (poll fallback) */
+void replay_radar_stream(int fd);                /* SSE push at sensor rate, paced to clock */
 int  replay_det_json(char *buf, size_t len);     /* EO detections at <= clock */
 int  replay_rstats_json(char *buf, size_t len);
 void replay_stream(int fd);                      /* blocks: MJPEG pusher */

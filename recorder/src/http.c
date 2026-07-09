@@ -365,6 +365,8 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         handle_export(fd, qs);                            /* selected sessions -> .tar download */
     } else if (!strcmp(path, "/replay/stream")) {
         replay_stream(fd);                                /* blocks for connection life */
+    } else if (!strcmp(path, "/replay/radar/stream")) {
+        replay_radar_stream(fd);                          /* SSE, blocks; matches live /radar/stream */
     } else {
         send_json(fd, 404, "{\"err\":\"no route\"}");
     }

@@ -831,3 +831,54 @@ void replay_stream(int fd)
     pthread_mutex_unlock(&g_rp.lk);
     free(natbuf);
 }
+
+/* Radar SSE push — the replay twin of the live `/radar/stream`. The live scope
+ * is SSE-pushed at the sensor's ~26 Hz; a 120 ms replay poll shows only ~8 Hz,
+ * so replay looked choppy next to live even though every frame was recorded.
+ * Emit each recorded radar frame as the playback clock crosses it: the 5 ms
+ * wait loop is well under the ~38 ms frame spacing at 1×, so no frame is dropped
+ * at normal speed (higher rates naturally coalesce). Wire JSON byte-verbatim
+ * with "replay":true, exactly like /replay/radar. Respects pause/seek/rate via
+ * the shared clock + cv, and gen so open/close/source-switch drops the stream. */
+void replay_radar_stream(int fd)
+{
+    static const char *head =
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if (write(fd, head, strlen(head)) < 0) return;
+
+    pthread_mutex_lock(&g_rp.lk);
+    unsigned gen = g_rp.gen;
+    g_rp.pushers++;
+    long last = -2;
+
+    while (g_rp.open && g_rp.gen == gen) {
+        int64_t t = clock_now();
+        long i = rchan_at(&g_rp.radar, t);
+        if (i < 0) i = g_rp.radar.n ? 0 : -1;             /* before first: hold the first */
+        if (i >= 0 && i != last) {
+            last = i;
+            uint32_t plen;
+            const uint8_t *p = rchan_payload(&g_rp.radar, i, &plen, NULL);
+            if (p && plen >= 2 && p[0] == '{') {
+                pthread_mutex_unlock(&g_rp.lk);           /* pushers>0 keeps mmap valid */
+                char pre[32];
+                int pn = snprintf(pre, sizeof pre, "data: {\"replay\":true,");
+                int bad = write(fd, pre, (size_t)pn) != pn ||
+                          write(fd, p + 1, plen - 1) != (ssize_t)(plen - 1) ||
+                          write(fd, "\n\n", 2) != 2;
+                pthread_mutex_lock(&g_rp.lk);
+                if (bad) break;
+            }
+            continue;
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 5000000;
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+        pthread_cond_timedwait(&g_rp.cv, &g_rp.lk, &ts);
+    }
+    g_rp.pushers--;
+    pthread_mutex_unlock(&g_rp.lk);
+}

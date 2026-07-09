@@ -70,6 +70,15 @@ relays the replay MJPEG stream). On connect failure: `502` with
   `#video.src = "/rec/replay/stream"`. `drawRadar`/target list/EO status then
   render the recorded data unchanged. Note: `/rec/replay/stats` nests the eo
   object as `.eo` like the live `/stats`, and adds `.replay_state`.
+- **Radar in replay must be the SSE stream, not the poll.** Live radar is pushed
+  over `EventSource("/radar/stream")` at the sensor's ~26 Hz; a 120 ms poll of
+  `/rec/replay/radar` only samples ~8 Hz, so replay looks choppy next to live
+  even though every frame was recorded. In replay, open
+  `EventSource("/rec/replay/radar/stream")` — same `onRadarFrame(JSON.parse(e.data))`
+  handler as live — instead of `setInterval(pollRadar, …)`. It emits every
+  recorded frame paced to the playback clock and honors pause/seek/rate; close it
+  on replay exit like you close the live `radarES`. Keep `/rec/replay/radar`
+  (single frame at ≤ clock) only as a fallback for a browser without SSE.
 - **Unmistakably replay**: striped amber banner `REPLAY — <name> — <t0>Z`,
   ZULU pill shows recorded wall clock (`replay_state.t_wall_ms`) labeled REC,
   `body.replay` hides/disables ALL live controls (LIGHT/ILLUM/TRACK/REC,
