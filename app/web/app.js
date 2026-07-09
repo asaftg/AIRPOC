@@ -70,6 +70,10 @@
   }
   $("video").addEventListener("click", recenterZoom);
   $("nvid").addEventListener("click", recenterZoom);
+  /* if the mp4 can't decode/load, never sit on a black <video> — mark it failed so
+   * updateReplayVideo falls back to the MJPEG. Guarded so resetMp4State's load() (no src)
+   * doesn't trip it. */
+  $("nvid").addEventListener("error", function () { if (mp4State.srcSet) { mp4State.ready = false; mp4State.pct = -1; } });
 
   /* ── ROI zoom — press ROI, drag a box on the EO or radar, it zooms there; press again to
    * reset. EO = CSS scale on the frame; radar = a pan+zoom world window (drawRadar). Works
@@ -1160,7 +1164,7 @@
       if (!mp4State.ready && mp4State.pct !== -1 && Date.now() >= mp4State.nextProbe) probeMp4(sid);
       if (mp4State.ready) {                                        /* play the mp4, slaved to the clock */
         if (!mp4State.srcSet) { mp4State.srcSet = true; nv.src = "/rec/replay/native.mp4?sid=" + encodeURIComponent(sid); vid.src = BLANK; }  /* BLANK stops the hidden MJPEG stream */
-        nv.style.display = ""; vid.style.display = "none"; badge.hidden = true;
+        nv.style.display = "block"; vid.style.display = "none"; badge.hidden = true;   /* "" would revert to the stylesheet's display:none -> black */
         replayPlaying = false; replayStillT = -1;                 /* re-arm MJPEG src if we switch back */
         var tv = rs.t_ms / 1000;
         if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.25) nv.currentTime = tv;
