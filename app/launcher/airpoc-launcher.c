@@ -176,11 +176,14 @@ static void handle_conn(int fd)
         if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
     } else if (!strncmp(req, "GET /reattach", 13)) {
-        /* Bounce the recorder so its shm taps re-bind to the live feeds. This is the same
-         * heal start.sh does, but on demand: the operator hits REC, the console sees the
-         * recorder tap is DOWN (feed live but recorder detached), and asks us to re-attach
-         * BEFORE recording so it never records 0 bytes. Sudoers whitelists this exact cmd. */
-        if (system("sudo -n systemctl restart airpoc-recorder >/dev/null 2>&1") == -1) {}
+        /* Re-bind the recorder's shm taps to the live feeds, on demand: the operator hits
+         * REC, the console sees a recorder tap is DOWN (feed live but recorder detached),
+         * and asks us to heal BEFORE recording so it never records 0 bytes. This runs the
+         * SAME ordered heal as START (start.sh) — restart the producer whose tap is gone,
+         * THEN bounce the recorder so it attaches to the fresh shm. A recorder-only restart
+         * is NOT enough (and can orphan a working attach): the producers pin the old shm, so
+         * the new recorder ring has no writer and stays connected=0. Verified on-device. */
+        if (system("bash ./start.sh >/tmp/airpoc-reattach.log 2>&1 &") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
     } else if (!strncmp(req, "GET /shutdown", 13)) {
         reply(fd, "application/json", "{\"ok\":1}");   /* answer first — the box is about to go down */
