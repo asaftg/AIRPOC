@@ -55,10 +55,15 @@ Three layers, so a divergence can never pass unnoticed:
 JPEG-per-frame is ~12-24 MB/s, more than WiFi carries. So the recorder transcodes
 the session's native replay into one H.264 MP4 (`transcode.c` → ffmpeg libx264 at
 the true recorded frame rate, the exact tone map, `nice -n 15 ionice -c3` so it
-never touches the live pipeline), cached in the session dir. It is **pre-built at
-save time** (right after thumbnails) so opening a native replay is instant and no
-transcode CPU spike ever lands while an operator is live; a replay open still
-builds it on demand if it is somehow missing. The browser plays it with
+never touches the live pipeline), cached in the session dir. The encoder caps the bitrate (VBV
+`-maxrate`) so the stream stays within its declared H.264 level — an uncapped
+encode ran ~118 Mbit/s past a Level-4.2 stream and stalled browser decoders
+mid-playback. It is **pre-built at save time** (right after thumbnails) so opening
+a native replay is instant and no transcode CPU spike ever lands while an operator
+is live; a replay open still builds it on demand if missing. Each mp4 is stamped
+with an encoder version (`native.mp4.ver`); when the version bumps, already-cached
+mp4s are treated as stale and rebuilt on open, so **older recordings pick up encode
+fixes too** rather than keeping a superseded file. The browser plays it with
 `<video src=/replay/native.mp4?sid=…>` — buffered, smooth, full quality, instant
 seek, and ~400× smaller on the wire than raw frames.
 - `GET /replay/native.mp4?sid=<sid>` — the cached MP4 with HTTP Range (206) for

@@ -25,6 +25,30 @@ typedef struct {
 static Job g_job;               /* one at a time (one replay open at a time) */
 static pthread_mutex_t g_lk = PTHREAD_MUTEX_INITIALIZER;
 
+/* Bump when the encode parameters change so already-cached mp4s auto-rebuild.
+ * v2 = bitrate-capped (VBV) — the uncapped v1 files violated their H.264 level
+ * and stalled browser decoders mid-playback. */
+#define TRANSCODE_VER 2
+
+/* An mp4 is usable only if it exists AND carries the current encoder version
+ * (sidecar native.mp4.ver). Older recordings' mp4s have no marker (or a stale
+ * one), so they are treated as needing a rebuild and regenerate on open — that's
+ * how pre-existing movies get the fix, not just new recordings. */
+static int mp4_current(const char *sid)
+{
+    if (strlen(sid) != SID_LEN || strchr(sid, '/')) return 0;
+    char p[680];
+    snprintf(p, sizeof p, "%s/%s/native.mp4", g_rec.root, sid);
+    if (access(p, F_OK) != 0) return 0;
+    snprintf(p, sizeof p, "%s/%s/native.mp4.ver", g_rec.root, sid);
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    int ver = 0;
+    if (fscanf(f, "%d", &ver) != 1) ver = 0;
+    fclose(f);
+    return ver == TRANSCODE_VER;
+}
+
 int transcode_mp4_path(const char *sid, char *path, size_t plen)
 {
     if (strlen(sid) != SID_LEN || strchr(sid, '/')) return -1;
@@ -34,8 +58,7 @@ int transcode_mp4_path(const char *sid, char *path, size_t plen)
 
 int transcode_status(const char *sid, int *pct)
 {
-    char p[640];
-    if (transcode_mp4_path(sid, p, sizeof p) == 0) { if (pct) *pct = 100; return 2; }
+    if (mp4_current(sid)) { if (pct) *pct = 100; return 2; }   /* stale mp4 → not ready, rebuild */
     pthread_mutex_lock(&g_lk);
     int st = (!strcmp(g_job.sid, sid)) ? g_job.state : 0;
     if (pct) *pct = (!strcmp(g_job.sid, sid)) ? g_job.pct : 0;
@@ -137,7 +160,13 @@ static int build_mp4(const char *sid, volatile int *pct)
 
     char final[680];
     snprintf(final, sizeof final, "%s/native.mp4", dir);
-    if (ok && rc == 0 && rename(tmp, final) == 0) return 0;
+    if (ok && rc == 0 && rename(tmp, final) == 0) {
+        char vp[700];                               /* stamp the encoder version */
+        snprintf(vp, sizeof vp, "%s/native.mp4.ver", dir);
+        FILE *vf = fopen(vp, "w");
+        if (vf) { fprintf(vf, "%d\n", TRANSCODE_VER); fclose(vf); }
+        return 0;
+    }
     unlink(tmp);
     return -1;
 }
@@ -158,16 +187,14 @@ static void *build_thread(void *arg)
 /* Ensure native.mp4 exists (build it synchronously if missing). For export. */
 int transcode_ensure(const char *sid)
 {
-    char p[640];
     if (strlen(sid) != SID_LEN || strchr(sid, '/')) return -1;
-    if (transcode_mp4_path(sid, p, sizeof p) == 0) return 0;    /* already there */
+    if (mp4_current(sid)) return 0;                             /* current build already there */
     return build_mp4(sid, NULL);
 }
 
 void transcode_request(const char *sid)
 {
-    char p[640];
-    if (transcode_mp4_path(sid, p, sizeof p) == 0) return;      /* already cached */
+    if (mp4_current(sid)) return;                              /* current build already cached */
     if (strlen(sid) != SID_LEN || strchr(sid, '/')) return;
 
     pthread_mutex_lock(&g_lk);
