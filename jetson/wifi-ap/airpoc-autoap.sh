@@ -10,6 +10,7 @@
 # Runs as root under systemd.
 IFACE="${AIRPOC_WIFI_IFACE:-wlP1p1s0}"
 AP_CON="AIRPOC-AP"
+COUNTRY="${AIRPOC_WIFI_COUNTRY:-US}"             # regdomain for the AP (override per deploy region)
 POLL="${AIRPOC_AUTOAP_POLL:-3}"                  # seconds between checks (short = snappy mode switches)
 AP_PROBE_EVERY="${AIRPOC_AP_PROBE_EVERY:-120}"   # seconds between home-probes while auto+AP
 MODE_FILE="${AIRPOC_WIFI_MODE_FILE:-/var/lib/airpoc/wifi-mode}"
@@ -40,6 +41,17 @@ home_in_range() {   # rescan (radio must be managed/idle) -> 0 if a saved net is
 }
 join_home() { local first; first=$(known_cons | head -1); [ -n "$first" ] && nmcli connection up "$first" 2>/dev/null; }
 
+# A 5GHz AP can only beacon under a real regulatory domain. The board boots as world
+# (country 00), which forbids 5GHz AP — hostapd then times out ("Hotspot creation took too
+# long", supplicant-timeout) and no SSID appears. Pin the regdomain before every raise so
+# the AP survives reboots and driver resets. (Home WiFi sometimes sets it via a country IE,
+# which is why it "worked mid-day" then broke — don't rely on that.)
+ensure_reg() {
+  local c; c=$(iw reg get 2>/dev/null | awk '/^country/{print $2; exit}'); c="${c%:}"
+  [ "$c" = "$COUNTRY" ] || { log "regdomain '$c' -> $COUNTRY (5GHz AP needs a real country)"; iw reg set "$COUNTRY" 2>/dev/null; sleep 1; }
+}
+raise_ap() { ensure_reg; nmcli connection up "$AP_CON" 2>/dev/null; }
+
 read_mode() { local m; m=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null); case "$m" in ap|home|auto) echo "$m";; *) echo auto;; esac; }
 now() { date +%s; }
 last_probe=0
@@ -64,13 +76,13 @@ auto_tick() {   # $1 = current active connection
       log "auto: AP idle -> briefly probing for home WiFi"
       nmcli connection down "$AP_CON" 2>/dev/null
       if home_in_range; then log "home is back -> rejoining"; join_home
-      else log "still no home -> re-raising AP"; nmcli connection up "$AP_CON" 2>/dev/null; fi
+      else log "still no home -> re-raising AP"; raise_ap; fi
     fi
     return
   fi
   [ -n "$act" ] && return                            # connected as client -> idle
   if home_in_range; then log "auto: home in range -> joining"; join_home
-  else log "auto: no known WiFi -> raising AP"; nmcli connection up "$AP_CON" 2>/dev/null; last_probe=$(now); fi
+  else log "auto: no known WiFi -> raising AP"; raise_ap; last_probe=$(now); fi
 }
 
 tick() {
@@ -80,7 +92,7 @@ tick() {
       [ "$act" = "$AP_CON" ] && { log "mode=home -> leaving AP"; nmcli connection down "$AP_CON" 2>/dev/null; act=""; }
       [ -z "$act" ] && { home_in_range && join_home; } ;;
     ap)     # pinned AP: keep it up, no fail-back, no scan-drops
-      [ "$act" = "$AP_CON" ] || { log "mode=ap -> raising AP"; nmcli connection up "$AP_CON" 2>/dev/null; } ;;
+      [ "$act" = "$AP_CON" ] || { log "mode=ap -> raising AP"; raise_ap; } ;;
     *)      auto_tick "$act" ;;
   esac
   write_status "$mode"
