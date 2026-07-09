@@ -186,18 +186,19 @@ static void handle_conn(int fd)
         if (system("bash ./start.sh >/tmp/airpoc-reattach.log 2>&1 &") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
     } else if (!strncmp(req, "GET /suspend", 12)) {
-        /* Reviewing a recording needs no live sensors. FREEZE the producers (SIGSTOP —
-         * instant, resumable, no camera/board re-init, shm mappings kept) so the native-mp4
-         * transcode + smooth playback get the whole CPU/power budget and the box stops
-         * browning out under the combined load. Recorder + console + launcher keep running.
-         * Paired with /resume on replay close; SIGCONT is idempotent so /resume is safe to
-         * call liberally. A STOP/START also clears a stuck-suspended state (start.sh sees the
-         * frozen producer as unhealthy and relaunches it). */
-        if (system("pkill -STOP -x eo_pipeline; pkill -STOP -x radar_preview; pkill -STOP -x detectiond") == -1) {}
-        reply(fd, "application/json", "{\"ok\":1,\"live\":\"suspended\"}");
+        /* Reviewing a recording needs no live sensors, so STOP the producers to free the box
+         * for the native-mp4 transcode + playback. Recorder + console + launcher stay up;
+         * /resume relaunches via start.sh. NOTE: clean SIGTERM, NOT SIGSTOP — freezing a live
+         * camera/USB process corrupts its device state and it dies on resume; and a frozen
+         * socket still answers connect() so start.sh's health check thinks it's up and never
+         * recovers it. A clean stop leaves them cleanly DOWN, which START/resume always
+         * relaunches. Straggler cleanup happens in start.sh's ensure_gone on the next start. */
+        if (system("pkill -TERM -x eo_pipeline; pkill -TERM -x radar_preview; pkill -TERM -x detectiond") == -1) {}
+        reply(fd, "application/json", "{\"ok\":1,\"live\":\"stopped\"}");
     } else if (!strncmp(req, "GET /resume", 11)) {
-        if (system("pkill -CONT -x eo_pipeline; pkill -CONT -x radar_preview; pkill -CONT -x detectiond") == -1) {}
-        reply(fd, "application/json", "{\"ok\":1,\"live\":\"running\"}");
+        /* Back to live: relaunch the stopped producers and re-attach the recorder (start.sh). */
+        if (system("bash ./start.sh >/tmp/airpoc-resume.log 2>&1 &") == -1) {}
+        reply(fd, "application/json", "{\"ok\":1,\"live\":\"starting\"}");
     } else if (!strncmp(req, "GET /shutdown", 13)) {
         reply(fd, "application/json", "{\"ok\":1}");   /* answer first — the box is about to go down */
         if (system("sudo -n systemctl poweroff >/dev/null 2>&1 &") == -1) {}
