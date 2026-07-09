@@ -99,29 +99,26 @@
     <aside id="dev"><div id="dev-body">
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
-      <details class="sec-g"><summary class="sec">STREAM</summary>
+      <div class="sec">STREAM</div>
       <div class="srow" title="Video size sent to this screen. Smaller = smoother on a weak link. Recording and detection are not affected."><label>QUALITY</label><div class="btns" id="res-btns">
         <button data-res="low">PANIC</button><button data-res="med">FAST</button><button data-res="high" class="on">DEFAULT</button><button data-res="native">NATIVE</button>
       </div></div>
       <div class="srow" title="Most video frames per second sent to this screen. Lower it to ease a weak link."><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
       <div class="srow" title="AUTO: when the link can't carry the video (SAT), step QUALITY down until it flows, and back up when the link recovers — never above the QUALITY you picked. MANUAL: never touch your settings."><label>LINK</label><div class="btns" id="lka-btns"><button data-lka="0" class="on">MANUAL</button><button data-lka="1">AUTO</button></div></div>
-      </details>
 
-      <details class="sec-g"><summary class="sec">EO SENSOR</summary>
+      <div class="sec">EO SENSOR</div>
       <div class="srow" title="AUTO: the camera brightens/darkens itself. MANUAL: you set it with the two sliders below."><label>EXPOSURE</label><div class="btns" id="ae-btns"><button data-ae="1" class="on">AUTO</button><button data-ae="0">MANUAL</button></div></div>
       <div class="srow" title="How long each frame collects light. Longer = brighter, but fast motion smears. The fps setting limits how long it can go."><label>EXP ms</label><input type="range" id="s-exp" min="0.02" max="33" step="0.02" value="16"><span class="val" id="o-exp">—</span></div>
       <div class="srow" title="Electronic brightness boost. More = brighter but grainier. Prefer more exposure over more gain."><label>GAIN</label><input type="range" id="s-gain" min="0" max="480" step="2" value="0"><span class="val" id="o-gain">—</span></div>
       <div class="srow" title="In AUTO, the highest gain the camera is allowed to use. Lower = less grain at night, but the image goes dim sooner."><label>AUTO-CAP</label><input type="range" id="s-gcap" min="0" max="480" step="2" value="120"><span class="val" id="o-gcap">—</span></div>
       <div class="srow" title="Removes single 'salt-and-pepper' noise pixels. Costs a tiny bit of sharpness."><label>MEDIAN</label><div class="btns" id="md-btns"><button data-md="0">OFF</button><button data-md="1" class="on">ON</button></div></div>
-      </details>
 
-      <details class="sec-g"><summary class="sec">ILLUMINATOR</summary>
+      <div class="sec">ILLUMINATOR</div>
       <div class="srow" title="AUTO: the IR beam follows the camera zoom at full power. MANUAL: you set power and beam width below."><label>MODE</label><div class="btns" id="illum-btns"><button data-illum="auto" class="on">AUTO</button><button data-illum="man">MANUAL</button></div></div>
       <div class="srow" title="IR light output strength."><label>PWR</label><input type="range" id="s-pow" min="0" max="100" step="1" value="25"><span class="val" id="o-pow">25%</span></div>
       <div class="srow" title="IR beam width. Narrow = reaches farther but lights a smaller area; wide = covers the whole view up close."><label>BEAM</label><input type="range" id="s-fov" min="2" max="70" step="1" value="70"><span class="val" id="o-fov">70°</span></div>
-      </details>
 
-      <details class="sec-g"><summary class="sec">DETECTOR</summary>
+      <div class="sec">DETECTOR</div>
       <div class="srow" title="How detections are drawn: BOX = full bounding box; SEEKER = a small cross on the target centre (gentler, terminal-seeker style). Display-only, saved on this device."><label>MARK</label><div class="btns" id="dst-btns"><button data-dst="box" class="on">BOX</button><button data-dst="seeker">SEEKER</button></div></div>
       <div class="srow" title="Minimum model confidence to show a box. Lower = more boxes but more false ones; higher = only sure calls."><label>CONF</label><input type="range" id="dt-conf" min="0.05" max="0.95" step="0.05" value="0.5"><span class="val" id="dv-conf">0.50</span></div>
       <div class="srow" title="How much two boxes must overlap before they merge into one. Lower = merges more aggressively (fewer duplicates on one object); higher = keeps more separate boxes."><label>NMS</label><input type="range" id="dt-nms" min="0.10" max="0.90" step="0.05" value="0.45"><span class="val" id="dv-nms">0.45</span></div>
@@ -130,15 +127,13 @@
       <div class="srow" title="Most boxes reported per frame."><label>MAX DETS</label><input type="range" id="dt-max_dets" min="8" max="256" step="8" value="128"><span class="val" id="dv-max_dets">128</span></div>
       <div class="srow" title="Motion sensitivity. LOWER flags weaker motion (more movers, more false ones); higher = only strong motion."><label>MOT SENS</label><input type="range" id="dt-mot_k" min="1" max="20" step="0.5" value="6"><span class="val" id="dv-mot_k">6.0</span></div>
       <div class="srow" title="Frames a mover must keep moving before it's shown. Higher = fewer flickery false movers, slower to appear."><label>MOT HOLD</label><input type="range" id="dt-mot_persist" min="1" max="10" step="1" value="3"><span class="val" id="dv-mot_persist">3</span></div>
-      </details>
 
-      <details class="sec-g"><summary class="sec">RADAR ON EO</summary>
+      <div class="sec">RADAR ON EO</div>
       <div class="srow" title="Project every radar target onto the video (bracket + track id + range). Not fusion — a raw geometric overlay so you can see radar and camera together."><label>OVERLAY</label><div class="btns" id="rov-btns"><button data-rov="0">OFF</button><button data-rov="1" class="on">ON</button></div></div>
       <div class="srow" title="Left/right alignment between radar and camera. Positive moves the radar marks RIGHT. Adjust until a mark sits on its real object. Saved on this device."><label>AZ TRIM</label><input type="range" id="rov-az" min="-10" max="10" step="0.1" value="0"><span class="val" id="rovv-az">0.0°</span></div>
       <div class="srow" title="Up/down alignment between radar and camera. Positive moves the radar marks UP. Saved on this device."><label>EL TRIM</label><input type="range" id="rov-el" min="-10" max="10" step="0.1" value="0"><span class="val" id="rovv-el">0.0°</span></div>
-      </details>
 
-      <details class="sec-g"><summary class="sec">RADAR</summary>
+      <div class="sec">RADAR</div>
       <div class="srow" title="Only show radar hits within this angle left/right of straight ahead."><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="60"><span class="val" id="rv-fov">60°</span></div>
       <div class="srow" title="Hide radar returns weaker than this. The chip itself sends nothing below 16 dB, so 16 = everything; raise it to keep only strong reflectors."><label>MIN SNR</label><input type="range" id="rd-snrmin" min="16" max="60" step="1" value="16"><span class="val" id="rv-snrmin">16 dB</span></div>
       <div class="srow" title="Ignore anything moving slower than this. Cuts swaying trees and ground clutter; too high misses walkers."><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.7"><span class="val" id="rv-speed">0.7 m/s</span></div>
@@ -148,14 +143,12 @@
       <div class="srow" title="How many frames a NEW target must be seen before it appears: 3 means seen in 3 of the last 4 frames. Higher = fewer false pop-ups but slower to show."><label>CONFIRM</label><input type="range" id="rd-confirm" min="1" max="6" step="1" value="3"><span class="val" id="rv-confirm">3</span></div>
       <div class="srow" title="Keep a target alive this many seconds after the radar briefly loses it (e.g. passing behind cover)."><label>COAST</label><input type="range" id="rd-coast" min="0" max="3" step="0.1" value="0.4"><span class="val" id="rv-coast">0.4 s</span></div>
       <div class="srow" title="Keep a mover that STOPPED for this many seconds before dropping it (a car that parks stays boxed)."><label>PARK HOLD</label><input type="range" id="rd-park" min="0" max="60" step="1" value="15"><span class="val" id="rv-park">15 s</span></div>
-      </details>
 
-      <details class="sec-g"><summary class="sec">SYSTEM</summary>
+      <div class="sec">SYSTEM</div>
       <div class="kv" title="Jetson chip temperature (its hottest sensor). Throttling starts far above normal operating temps.">TEMP <b><span id="v-cpu">—</span>°</b></div>
       <div class="kv" title="Total processor load — also shown as cores-worth used out of the 6 cores.">CPU <b><span id="v-cpupct">—</span>% <span class="corefrac" id="v-cores"></span></b></div>
       <div class="kv" title="Graphics/AI processor load. Near zero until detection runs.">GPU <b><span id="v-gpupct">—</span>%</b></div>
       <div class="sysbtns"><button id="to-control">RETURN TO CONTROL</button></div>
-      </details>
     </div></aside>
 
   </main>
