@@ -84,6 +84,7 @@ static RChan *video_chan(void)
 }
 
 static const Ev *ev_at(int type, int64_t t);       /* defined below */
+static int ev_int(const Ev *e, const char *key, int dflt);  /* defined below */
 
 /* ---- loading ---- */
 
