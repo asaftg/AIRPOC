@@ -1112,19 +1112,36 @@
   };
 
   /* ── REPLAY ── */
-  /* While you're in the LIBRARY / replay world the live sensors aren't shown, so freeze them
-   * (launcher SIGSTOPs eo_pipeline/radar/detector) to give the native-mp4 transcode + playback
-   * the whole box. Frozen on LIBRARY open, unfrozen on EXIT back to live (lib-close) — NOT per
-   * recording, so opening/closing individual replays inside the library doesn't churn it. Also
-   * unfrozen on page-hide so a closed tab can't leave the stack frozen. SIGCONT is idempotent. */
+  /* While you're in the LIBRARY / replay world the live sensors aren't shown, so STOP them
+   * (launcher stops eo_pipeline/radar/detector, relaunches on exit) to give the native-mp4
+   * transcode + playback the whole box. Stopped on LIBRARY open, restarted on EXIT to live
+   * (lib-close) — NOT per recording, so opening/closing individual replays doesn't churn it.
+   * Also resumed on page-hide so a closed tab can't leave the stack down. */
   var liveFrozen = false;
   function liveSuspend(on) {
     liveFrozen = on;
     fetch(location.protocol + "//" + location.hostname + ":8088/" + (on ? "suspend" : "resume"), { mode: "no-cors" }).catch(function () {});
   }
   window.addEventListener("pagehide", function () { if (liveFrozen) liveSuspend(false); });
+  var opening = false;
   function openReplay(s) {
-    fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)).then(function () {
+    if (opening) return;                                 /* ignore double-taps while an open is in flight */
+    opening = true;
+    var done = false;
+    var fin = function () { if (done) return false; done = true; clearTimeout(guard); opening = false; return true; };
+    var guard = setTimeout(function () {                 /* recorder hung/slow -> free the button + tell the user */
+      if (fin()) toast("Recorder didn't respond — tap the recording again.", "err", 4500);
+    }, 9000);
+    /* Close any prior/stale replay session FIRST, then open. A leftover open on the recorder
+     * (tab closed mid-replay, or a fast close->reopen) is exactly what makes a tap "do nothing"
+     * until you leave the library/app — serialising close->open clears it. Silent failure
+     * (the old empty .catch) is why it looked like a dead button; now it reports + you retry. */
+    fetch("/rec/replay/ctl?close=1").catch(function () {})
+      .then(function () { return fetch("/rec/replay/ctl?open=" + encodeURIComponent(s.sid)); })
+      .then(function (r) {
+        if (done) return;                                /* already timed out */
+        if (!r || !r.ok) throw 0;
+        fin();
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
@@ -1147,7 +1164,8 @@
       $("tp-dur").textContent = fmtClockT(s.dur_ms); $("tp-scrub").max = s.dur_ms; $("tp-scrub").value = 0;
       if (replayStatePoll) clearInterval(replayStatePoll);
       replayStatePoll = setInterval(pollReplayState, 150); pollReplayState();
-    }).catch(function () {});
+      })
+      .catch(function () { if (fin()) toast("Couldn't open that recording — tap it again.", "err", 4500); });
   }
   function closeReplay() {
     fetch("/rec/replay/ctl?close=1").catch(function () {});
