@@ -1173,29 +1173,6 @@
    * refresh recovers it. If auto-recovery is ever wanted, it must NOT blank the frame
    * (assign the new src straight onto a hidden shadow <img>, swap on its load). */
 
-  /* Make each DEV section a foldable header. Group every element after a .sec header (its
-   * .srow/.kv/.sysbtns rows) into a .secbody wrapper, then toggle that wrapper on click.
-   * Folded by default; per-section open/closed is remembered on this device. Runtime, so
-   * no HTML rewrap and any future section folds automatically. */
-  function foldDevSections() {
-    var body = $("dev-body"); if (!body) return;
-    [].slice.call(body.querySelectorAll(".sec")).forEach(function (sec) {
-      var wrap = document.createElement("div"); wrap.className = "secbody";
-      var n = sec.nextSibling;                                    /* pull following siblings until the next .sec */
-      while (n && !(n.nodeType === 1 && n.classList.contains("sec"))) { var nx = n.nextSibling; wrap.appendChild(n); n = nx; }
-      sec.parentNode.insertBefore(wrap, n);                       /* n is the next .sec (or null) */
-      sec.classList.add("fold");
-      var key = "fold_" + sec.textContent.trim();
-      var open = false; try { open = localStorage.getItem(key) === "1"; } catch (e) {}   /* default folded */
-      sec.classList.toggle("open", open); wrap.hidden = !open;
-      sec.onclick = function () {
-        var nowOpen = wrap.hidden; wrap.hidden = !nowOpen; sec.classList.toggle("open", nowOpen);
-        try { localStorage.setItem(key, nowOpen ? "1" : "0"); } catch (e) {}
-      };
-    });
-  }
-  foldDevSections();
-
   setInterval(poll, 160); poll();
   openRadarStream();   /* live = SSE push; replay opens its own radar SSE (poll fallback) in openReplay */
   setInterval(pollDetReplay, 150);                  /* replay-only det boxes (no-op until the recorder ships /replay/det) */
