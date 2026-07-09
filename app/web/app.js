@@ -34,7 +34,18 @@
    * optimistically. poll() reconciles from eo.zoom but is guarded for ~1.2s after a tap
    * so a slightly-stale /stats can't snap the label back mid-interaction. ── */
   var zoomTouch = 0, replayZoom = 1;
-  function setZoomLabel() { $("v-zval").textContent = (replaying ? replayZoom : zoom).toFixed(1) + "×"; }
+  /* Zoom readout. Live = the feed's zoom. Replay DISPLAY = the zoom baked into the recorded
+   * frame (from the recorded stats) × any client digital zoom on top — so a clip captured at
+   * 2× reads "2.0×", not "1×". Replay NATIVE = full frame (capture zoom 1) × client digital
+   * zoom, i.e. pure digital zoom. */
+  function setZoomLabel() {
+    var v = zoom;
+    if (replaying) {
+      var cap = (replayVideoSrc === "native") ? 1 : ((lastStats.eo && lastStats.eo.zoom) || 1);
+      v = cap * replayZoom;
+    }
+    $("v-zval").textContent = v.toFixed(1) + "×";
+  }
   /* replay has no live feed to crop, so zoom is a client-side digital zoom (CSS scale) on
    * the recorded frame — you can magnify even though it was recorded at 1x. */
   /* The digital zoom must scale the image AND the detection/radar overlay together, or the
@@ -85,8 +96,8 @@
   }
   function clearROI() {
     radarROI = null; eoROI = false; roiArm = false;
-    $("video").style.transform = ""; $("video").style.transformOrigin = "center";
-    if (replaying) applyReplayZoom();               /* restore any replay zoom level */
+    if (replaying) { resetReplayZoom(); setZoomLabel(); }   /* back to the natural view (capture zoom for display, 1x for native) */
+    else { $("video").style.transform = ""; $("video").style.transformOrigin = "center"; }
     setRoiUI(); drawRadar(lastRadar);
   }
   $("roibtn").onclick = function () {
@@ -113,9 +124,16 @@
     if (bw >= 14 && bh >= 14) {
       var bx0 = Math.min(e.clientX, d.x0) - r.left, by0 = Math.min(e.clientY, d.y0) - r.top;
       if (d.which === "eo") {
-        var sc = Math.min(r.width / bw, r.height / bh), v = $("video");
-        v.style.transformOrigin = ((bx0 + bw / 2) / r.width * 100).toFixed(1) + "% " + ((by0 + bh / 2) / r.height * 100).toFixed(1) + "%";
-        v.style.transform = "scale(" + sc.toFixed(3) + ")"; eoROI = true;
+        var sc = Math.min(r.width / bw, r.height / bh);
+        var org = ((bx0 + bw / 2) / r.width * 100).toFixed(1) + "% " + ((by0 + bh / 2) / r.height * 100).toFixed(1) + "%";
+        if (replaying) {                                  /* ROI box -> replay digital zoom; scales the shown video (display or native) AND the overlay together */
+          replayZoom = sc;
+          zoomEls().forEach(function (el) { el.style.transform = "scale(" + sc.toFixed(3) + ")"; el.style.transformOrigin = org; });
+          setZoomLabel();
+        } else {
+          var v = $("video"); v.style.transformOrigin = org; v.style.transform = "scale(" + sc.toFixed(3) + ")";
+        }
+        eoROI = true;
       } else if (radarGeom) {
         var g = radarGeom, toW = function (sx, sy) { return [(sx - g.cx) / g.scale, (g.cy - sy) / g.scale]; };
         var c1 = toW(bx0 * g.dpr, by0 * g.dpr), c2 = toW((bx0 + bw) * g.dpr, (by0 + bh) * g.dpr);
@@ -743,7 +761,8 @@
       $("v-cpu").textContent = num(d.cpu_c, 0); $("v-cpupct").textContent = num(d.cpu_pct, 0); $("v-gpupct").textContent = num(d.gpu_pct, 0);
       var nc = d.ncpu || 6;
       $("v-cores").textContent = (typeof d.cpu_pct === "number") ? (d.cpu_pct / 100 * nc).toFixed(1) + "/" + nc : "";
-      if (typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0 && Date.now() - zoomTouch > 1200) { zoom = eo.zoom; setZoomLabel(); }
+      if (!replaying && typeof eo.zoom === "number" && ZOOMS.indexOf(eo.zoom) >= 0 && Date.now() - zoomTouch > 1200) { zoom = eo.zoom; setZoomLabel(); }
+      if (replaying) setZoomLabel();                 /* track the recorded capture zoom over the timeline */
       updateISP(eo);
       var light = $("light");
       if (Date.now() - lightTouch > 1200) { light.classList.toggle("firing", !!eo.laser); $("light-s").textContent = eo.laser ? "ON" : "OFF"; }
