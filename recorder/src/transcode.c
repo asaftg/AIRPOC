@@ -95,8 +95,14 @@ static int build_mp4(const char *sid, volatile int *pct)
     snprintf(cmd, sizeof cmd,
         "nice -n 15 ionice -c3 ffmpeg -hide_banner -loglevel error -y "
         "-f rawvideo -pix_fmt gray -s %dx%d -r %.3f -i - "
-        "-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p "
-        "-movflags +faststart -f mp4 '%s'", w, h, fps, tmp);
+        /* Cap the bitrate (VBV): grainy night footage at plain -crf hit ~118 Mbit/s,
+         * which BLOWS PAST the H.264 High L4.2 ceiling (~62.5 Mbit/s) the stream
+         * declares — a level/HRD violation that makes browser decoders buffer then
+         * stall mid-playback (looked like "native replay freezes ~38 s in"). 20 Mbit/s
+         * is a smooth motion proxy, well within the level, ~6x smaller; full detail
+         * is always available on pause/step (rendered from the raw frames). */
+        "-c:v libx264 -preset veryfast -crf 20 -maxrate 20M -bufsize 40M "
+        "-pix_fmt yuv420p -movflags +faststart -f mp4 '%s'", w, h, fps, tmp);
     FILE *ff = popen(cmd, "w");
     if (!ff) { free(rows); return -1; }
 
