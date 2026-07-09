@@ -31,7 +31,11 @@ Three layers, so a divergence can never pass unnoticed:
    check first warms its tone-map EMA over ~16 preceding frames so it sits at the
    same steady state the live feed's did when it wrote that JPEG — otherwise a
    brightness transition (e.g. the illuminator) would read as drift even when the
-   math is identical. If they still diverge beyond JPEG/downscale noise
+   math is identical. It also applies the same 3x3 median grain filter the live
+   view had (`median=1` in low light) to the compare frame, since the display
+   JPEG is tone-map *then* median — skipping it mismatched grainy night footage by
+   ~10 counts and false-flagged drift. If they still diverge beyond JPEG/downscale
+   noise
    (threshold mean diff 8), `/replay/state` reports `tonemap_vs_eo:"drift"` (with
    the mean pixel `tonemap_vs_eo_diff`) and `tonemap_match:false`. This is the
    direct check: if EO changes its tone map and this copy wasn't mirrored, the
@@ -48,10 +52,13 @@ Three layers, so a divergence can never pass unnoticed:
    EO/recorder acceptance whenever the tone map is touched.
 
 **Smooth full-quality native play over WiFi — cached H.264.** Native
-JPEG-per-frame is ~12-24 MB/s, more than WiFi carries. So on replay open the
-recorder transcodes the session's native replay into one H.264 MP4 (`transcode.c`
-→ ffmpeg libx264, the exact tone map, `nice -n 15 ionice -c3` so it never touches
-the live pipeline), cached in the session dir. The browser plays it with
+JPEG-per-frame is ~12-24 MB/s, more than WiFi carries. So the recorder transcodes
+the session's native replay into one H.264 MP4 (`transcode.c` → ffmpeg libx264 at
+the true recorded frame rate, the exact tone map, `nice -n 15 ionice -c3` so it
+never touches the live pipeline), cached in the session dir. It is **pre-built at
+save time** (right after thumbnails) so opening a native replay is instant and no
+transcode CPU spike ever lands while an operator is live; a replay open still
+builds it on demand if it is somehow missing. The browser plays it with
 `<video src=/replay/native.mp4?sid=…>` — buffered, smooth, full quality, instant
 seek, and ~400× smaller on the wire than raw frames.
 - `GET /replay/native.mp4?sid=<sid>` — the cached MP4 with HTTP Range (206) for

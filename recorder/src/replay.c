@@ -289,12 +289,18 @@ static void tonemap_verify_vs_display(void)
     uint8_t *nds  = malloc((size_t)dw * dh);
     EoToneState st = { 0, 0, 0 };
     int ddw = 0, ddh = 0;
-    /* Warm my tone-map EMA to the phase the live feed's was in when it wrote this
-     * display JPEG: seed ~16 frames back and advance forward so the stretch
-     * endpoints settle. Comparing a single cold-seeded frame against EO's
-     * continuously-warm EMA reads as drift on any brightness transition (e.g. the
-     * illuminator) even when the math is identical — only true tone-map
-     * divergence should trip the alarm. */
+    /* Match the display JPEG exactly at the compare frame:
+     *  - Warm my tone-map EMA to the phase the live feed's was in when it wrote
+     *    the JPEG: seed ~16 frames back and advance forward so the stretch
+     *    endpoints settle. A cold single-frame seed vs EO's continuously-warm EMA
+     *    reads as drift on any brightness transition (e.g. the illuminator).
+     *  - Apply the same 3x3 median grain filter the live view had (median=1 in
+     *    low light). The display JPEG is tone-map THEN median; rendering the
+     *    compare frame without it mismatches by ~10 counts on grainy night
+     *    footage — a false "drift" even though playback (nat_jpeg) renders median
+     *    correctly. Only the compare frame (wi==ni) needs it; warm-up frames just
+     *    settle the EMA, which is computed pre-median. */
+    int median = ev_int(ev_at(EV_EO, g_rp.jpeg.t_ms[pick]), "median", 0);
     int warm_ok = 0;
     if (disp && nat && nds &&
         render_decode_jpeg_gray(djpg, djlen, disp, (uint32_t)dw * dh, &ddw, &ddh) == 0 &&
@@ -305,7 +311,8 @@ static void tonemap_verify_vs_display(void)
             uint32_t wpl;
             const uint8_t *wraw = rchan_payload(&g_rp.y10, wi, &wpl, NULL);
             if (!wraw) continue;
-            warm_ok = render_native_gray8(wraw, wpl, nw, nh, g_rp.nat_mode, 0,
+            warm_ok = render_native_gray8(wraw, wpl, nw, nh, g_rp.nat_mode,
+                                          wi == ni ? median : 0,
                                           &st, !seeded, nat) == 0;
             seeded = 1;
             if (!warm_ok) break;

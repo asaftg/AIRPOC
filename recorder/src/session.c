@@ -288,6 +288,11 @@ int session_save(const char *sid, const char *name, const char *tags, const char
     if (sid_dir(sid, dir, sizeof dir) != 0) return -1;
     if (manifest_edit_prefix(dir, "saved", name, tags, note) != 0) return -1;
     thumbs_generate(dir);
+    /* Pre-build native.mp4 now (async, nice/ionice-lowered — same as at replay
+     * open, just earlier) so opening a native replay is instant and never fires a
+     * transcode CPU spike while an operator is live. No-op if the session has no
+     * native channel. */
+    transcode_request(sid);
     if (!strcmp(sid, g_rec.pending_sid)) g_rec.pending_sid[0] = 0;
     return 0;
 }
