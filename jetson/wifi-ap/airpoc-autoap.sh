@@ -52,7 +52,8 @@ ensure_reg() {
 }
 raise_ap() { ensure_reg; nmcli connection up "$AP_CON" 2>/dev/null; }
 
-read_mode() { local m; m=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null); case "$m" in ap|home|auto) echo "$m";; *) echo auto;; esac; }
+# default AP (not auto): a missing/garbled mode file must never silently fall into WiFi/failover
+read_mode() { local m; m=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null); case "$m" in ap|home|auto) echo "$m";; *) echo ap;; esac; }
 now() { date +%s; }
 last_probe=0
 
