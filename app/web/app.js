@@ -85,6 +85,16 @@
    * updateReplayVideo falls back to the MJPEG. Guarded so resetMp4State's load() (no src)
    * doesn't trip it. */
   $("nvid").addEventListener("error", function () { if (mp4State.srcSet) { mp4State.ready = false; mp4State.pct = -1; } });
+  /* Recorded still frame not ready yet (recorder just opened the session) -> the <img> errors,
+   * and because the still src only re-sets when the timeline moves it would stay blank ("EO not
+   * there"). Retry the current still a few times so it recovers on its own. */
+  var replayFrameRetries = 0;
+  $("video").addEventListener("load", function () { if (replaying && !replayPlaying) replayFrameRetries = 0; });
+  $("video").addEventListener("error", function () {
+    if (!replaying || replayPlaying || replayStillT < 0 || replayFrameRetries >= 6) return;
+    replayFrameRetries++;
+    setTimeout(function () { if (replaying && !replayPlaying) $("video").src = "/rec/replay/frame?t=" + replayStillT + "&r=" + Date.now(); }, 450);
+  });
 
   /* ── ROI zoom — press ROI, drag a box on the EO or radar, it zooms there; press again to
    * reset. EO = CSS scale on the frame; radar = a pan+zoom world window (drawRadar). Works
@@ -1222,6 +1232,7 @@
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
       replayPlaying = false; replayStillT = -1; resetMp4State();   /* start on MJPEG; poll swaps to mp4 when ready */
+      sawOpen = false; replayBad = 0; replayFrameRetries = 0;      /* fresh open: grace the self-heal + still-frame retry */
       $("video").src = replayHasEO ? ("/rec/replay/frame?t=0") : BLANK;
       $("rb-text").innerHTML = "REPLAY — " + esc(s.name || s.sid) + " — " + esc(s.t0)
         + (s.note ? ' <span class="rb-note">“' + esc(s.note) + '”</span>' : "");
@@ -1300,16 +1311,20 @@
       if (rs.t_ms !== replayStillT) { replayStillT = rs.t_ms; vid.src = "/rec/replay/frame?t=" + rs.t_ms; }
     }
   }
-  var replayBad = 0;
+  var replayBad = 0, sawOpen = false;
   function pollReplayState() {
     fetch("/rec/replay/state").then(function (r) { if (!r.ok) throw 0; return r.json(); }).then(function (st) {
-      /* Self-heal the stuck replay state: if the recorder has NO open session but the GUI still
-       * thinks it's replaying (endpoints swapped to /rec/replay/*), every poll 404-floods and a
-       * library card tap does nothing until you leave the library/app. After a few consecutive
-       * no-session polls, reset to live. The debounce avoids a transient false-negative right
-       * after opening (before the recorder registers the session). */
-      if (st && st.open === false) { if (replaying && ++replayBad >= 3) { replayBad = 0; closeReplay(); } return; }
-      replayBad = 0;
+      /* Self-heal a STUCK replay state, but only once the session was actually seen open and then
+       * lost (recorder restart/reboot) — otherwise every poll 404-floods and card taps do nothing.
+       * On the INITIAL open the recorder can take a moment to register the session; healing then is
+       * what caused "tap a movie -> nothing" (it kicked you back out mid-open). So: not-yet-open ->
+       * long grace (~6 s) before giving up; already-seen-open -> fast heal (~0.5 s) if it vanishes. */
+      if (st && st.open === false) {
+        var lim = sawOpen ? 3 : 40;
+        if (replaying && ++replayBad >= lim) { replayBad = 0; sawOpen = false; closeReplay(); }
+        return;
+      }
+      sawOpen = true; replayBad = 0;
       var rs = st.replay_state || st.state || st; if (!rs) return;   /* /state nests as .state, /stats as .replay_state */
       if (replayHasEO) updateReplayVideo(rs);   /* native mp4 (60 fps) or paced MJPEG, + overlay sync */
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
@@ -1320,7 +1335,7 @@
       if (rs.has_native) { $("tp-video").hidden = false; $("tp-video").textContent = (rs.video_src === "native") ? "NATIVE" : "DISPLAY"; }
       else $("tp-video").hidden = true;
       if (rs.t_wall_ms) { var d = new Date(rs.t_wall_ms); $("v-zulu").textContent = "REC " + ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2); }
-    }).catch(function () { $("eo-scrim").hidden = false; if (replaying && ++replayBad >= 3) { replayBad = 0; closeReplay(); } });
+    }).catch(function () { $("eo-scrim").hidden = false; if (replaying && sawOpen && ++replayBad >= 3) { replayBad = 0; sawOpen = false; closeReplay(); } });
   }
   $("tp-play").onclick = function () { rctl($("tp-play").textContent === "⏸" ? "pause=1" : "play=1"); };
   $("tp-rate").onclick = function () { var i = (RATES.indexOf(parseFloat($("tp-rate").textContent)) + 1) % RATES.length; rctl("rate=" + RATES[i]); };
