@@ -137,6 +137,7 @@
 
       <div class="sec">RADAR</div>
       <div class="srow" title="Only show radar hits within this angle left/right of straight ahead."><label>FOV ±</label><input type="range" id="rd-fov" min="5" max="90" step="1" value="60"><span class="val" id="rv-fov">60°</span></div>
+      <div class="srow" title="Only show radar hits within this angle above/below straight ahead. The antenna's real elevation beam is about ±20°; hits reported far outside it are angle noise or multipath ghosts. 90 = off."><label>ELEV ±</label><input type="range" id="rd-elmax" min="5" max="90" step="1" value="90"><span class="val" id="rv-elmax">90°</span></div>
       <div class="srow" title="Hide radar returns weaker than this. The chip itself sends nothing below 16 dB, so 16 = everything; raise it to keep only strong reflectors."><label>MIN SNR</label><input type="range" id="rd-snrmin" min="16" max="60" step="1" value="16"><span class="val" id="rv-snrmin">16 dB</span></div>
       <div class="srow" title="Ignore anything moving slower than this. Cuts swaying trees and ground clutter; too high misses walkers."><label>MIN SPD</label><input type="range" id="rd-speed" min="0" max="5" step="0.1" value="0.7"><span class="val" id="rv-speed">0.7 m/s</span></div>
       <div class="srow" title="Partner of DEDUP: two nearby boxes only merge if their speeds differ by less than this. Keeps a car passing a parked car as two targets."><label>MERGE GATE</label><input type="range" id="rd-doppler" min="0.5" max="20" step="0.5" value="1.2"><span class="val" id="rv-doppler">1.2 m/s</span></div>

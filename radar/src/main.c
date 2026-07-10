@@ -41,10 +41,10 @@ static void on_sig(int s) { (void)s; g_run = 0; }
 
 /* /ctl handler — pushes live tracker changes to the clusterer. */
 static void on_ctl(double eps_m, int min_pts, double speed_min, double snr_min,
-                   double fov_half, double doppler, int confirm, double coast_s,
-                   double park_s, void *user) {
+                   double fov_half, double el_max, double doppler, int confirm,
+                   double coast_s, double park_s, void *user) {
     cluster_set_dbscan((RadarClusterer *)user, eps_m, min_pts);
-    cluster_set_gates((RadarClusterer *)user, speed_min, snr_min, fov_half, doppler);
+    cluster_set_gates((RadarClusterer *)user, speed_min, snr_min, fov_half, el_max, doppler);
     cluster_set_track((RadarClusterer *)user, confirm, coast_s, park_s);
 }
 

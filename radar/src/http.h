@@ -30,11 +30,11 @@ void http_set_timing(double dsp_proc_us, double dsp_margin_us,
                      double active_cpu_pct, double interframe_cpu_pct);
 
 /* Register the handler for
- * GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=&confirm=&coast=&park=.
+ * GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&elmax=&doppler=&confirm=&coast=&park=.
  * Called with the parsed values on each /ctl hit; `user` passed back verbatim. */
 void http_set_ctl_cb(void (*cb)(double eps_m, int min_pts, double speed_min,
-                                double snr_min, double fov_half, double doppler,
-                                int confirm, double coast_s, double park_s,
-                                void *user), void *user);
+                                double snr_min, double fov_half, double el_max,
+                                double doppler, int confirm, double coast_s,
+                                double park_s, void *user), void *user);
 
 #endif /* AIRPOC_HTTP_H */

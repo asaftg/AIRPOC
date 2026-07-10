@@ -19,19 +19,20 @@ static char           g_webroot[512] = "web";
 /* Live DBSCAN controls, set via /ctl and echoed in /stats so GUI sliders can
  * initialise. The actual clustering values live in the RadarClusterer; the
  * registered callback pushes changes there. */
-static void (*g_ctl_cb)(double, int, double, double, double, double, int, double, double, void *) = NULL;
+static void (*g_ctl_cb)(double, int, double, double, double, double, double, int, double, double, void *) = NULL;
 static void  *g_ctl_user = NULL;
 static double g_eps    = CLUSTER_DEFAULT_EPS_M;
 static int    g_minpts = CLUSTER_DEFAULT_MIN_PTS;
 static double g_speed  = CLUSTER_DEFAULT_SPEED;
 static double g_snrmin = CLUSTER_DEFAULT_SNR;
 static double g_fov    = CLUSTER_DEFAULT_FOV;
+static double g_elmax  = CLUSTER_DEFAULT_ELMAX;
 static double g_dop    = CLUSTER_DEFAULT_DOP;
 static int    g_confirm = CLUSTER_DEFAULT_CONFIRM;
 static double g_coast  = CLUSTER_DEFAULT_COAST_S;
 static double g_park   = CLUSTER_DEFAULT_PARK_S;
 
-void http_set_ctl_cb(void (*cb)(double, int, double, double, double, double, int, double, double, void *), void *user) {
+void http_set_ctl_cb(void (*cb)(double, int, double, double, double, double, double, int, double, double, void *), void *user) {
     g_ctl_cb = cb; g_ctl_user = user;
 }
 
@@ -125,14 +126,14 @@ static void *client(void *arg) {
             "\"connected\":%s,\"profile\":\"%s\",\"max_range_m\":%.1f,"
             "\"cluster_eps_m\":%.2f,\"cluster_min_pts\":%d,"
             "\"speed_min_mps\":%.2f,\"snr_min_db\":%.1f,"
-            "\"fov_half_deg\":%.1f,\"doppler_gate_mps\":%.2f,"
+            "\"fov_half_deg\":%.1f,\"el_max_deg\":%.1f,\"doppler_gate_mps\":%.2f,"
             "\"confirm\":%d,\"coast_s\":%.2f,\"park_s\":%.1f,"
             "\"dsp_valid\":%s,\"dsp_proc_ms\":%.3f,\"dsp_margin_ms\":%.3f,"
             "\"active_cpu_pct\":%.0f,\"interframe_cpu_pct\":%.0f}\n",
             g_stat.fps, g_stat.drops, g_stat.n_points, g_stat.n_targets,
             g_stat.connected ? "true" : "false", g_stat.profile,
             g_stat.max_range_m, g_eps, g_minpts,
-            g_speed, g_snrmin, g_fov, g_dop,
+            g_speed, g_snrmin, g_fov, g_elmax, g_dop,
             g_confirm, g_coast, g_park,
             g_stat.have_timing ? "true" : "false",
             g_stat.dsp_proc_us / 1000.0, g_stat.dsp_margin_us / 1000.0,
@@ -143,19 +144,20 @@ static void *client(void *arg) {
         close(fd); return NULL;
     }
 
-    /* GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=&confirm=&coast=&park=
+    /* GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&elmax=&doppler=&confirm=&coast=&park=
      * — set the live tracker knobs. Absent params keep their current value.
      * Always 200 OK. */
     if (!strncmp(req, "GET /ctl", 8)) {
         char *q;
         double eps = g_eps; int mp = g_minpts;
-        double spd = g_speed, snr = g_snrmin, fov = g_fov, dop = g_dop;
+        double spd = g_speed, snr = g_snrmin, fov = g_fov, elm = g_elmax, dop = g_dop;
         int cfm = g_confirm; double cst = g_coast, prk = g_park;
         if ((q = strstr(req, "eps=")))     eps = atof(q + 4);
         if ((q = strstr(req, "minpts=")))  mp  = atoi(q + 7);
         if ((q = strstr(req, "speed=")))   spd = atof(q + 6);
         if ((q = strstr(req, "snrmin=")))  snr = atof(q + 7);
         if ((q = strstr(req, "fov=")))     fov = atof(q + 4);
+        if ((q = strstr(req, "elmax=")))   elm = atof(q + 6);
         if ((q = strstr(req, "doppler="))) dop = atof(q + 8);
         if ((q = strstr(req, "confirm="))) cfm = atoi(q + 8);
         if ((q = strstr(req, "coast=")))   cst = atof(q + 6);
@@ -172,6 +174,8 @@ static void *client(void *arg) {
         if (snr > CLUSTER_SNR_MAX) snr = CLUSTER_SNR_MAX;
         if (fov < CLUSTER_FOV_MIN) fov = CLUSTER_FOV_MIN;
         if (fov > CLUSTER_FOV_MAX) fov = CLUSTER_FOV_MAX;
+        if (elm < CLUSTER_ELMAX_MIN) elm = CLUSTER_ELMAX_MIN;
+        if (elm > CLUSTER_ELMAX_MAX) elm = CLUSTER_ELMAX_MAX;
         if (dop < CLUSTER_DOP_MIN) dop = CLUSTER_DOP_MIN;
         if (dop > CLUSTER_DOP_MAX) dop = CLUSTER_DOP_MAX;
         if (cfm < CLUSTER_CONFIRM_MIN) cfm = CLUSTER_CONFIRM_MIN;
@@ -181,10 +185,10 @@ static void *client(void *arg) {
         if (prk < CLUSTER_PARK_MIN) prk = CLUSTER_PARK_MIN;
         if (prk > CLUSTER_PARK_MAX) prk = CLUSTER_PARK_MAX;
         pthread_mutex_lock(&g_lock);
-        g_eps = eps; g_minpts = mp; g_speed = spd; g_snrmin = snr; g_fov = fov; g_dop = dop;
+        g_eps = eps; g_minpts = mp; g_speed = spd; g_snrmin = snr; g_fov = fov; g_elmax = elm; g_dop = dop;
         g_confirm = cfm; g_coast = cst; g_park = prk;
         pthread_mutex_unlock(&g_lock);
-        if (g_ctl_cb) g_ctl_cb(eps, mp, spd, snr, fov, dop, cfm, cst, prk, g_ctl_user);
+        if (g_ctl_cb) g_ctl_cb(eps, mp, spd, snr, fov, elm, dop, cfm, cst, prk, g_ctl_user);
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n"
                          "Content-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t w = write(fd, ok, strlen(ok)); (void)w;

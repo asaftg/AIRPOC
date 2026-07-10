@@ -94,6 +94,7 @@ struct RadarClusterer {
     float vmin;          /* speed knob */
     float snr_mv;        /* snr knob (static = +3) */
     float fov_half;      /* fov knob   */
+    float el_max;        /* elmax knob (elevation half-angle, 90 = off) */
     float merge_dv;      /* doppler knob */
     int   conf_m;        /* confirm knob (M-of-N, window = M+1) */
     double coast_s;      /* coast knob (seconds) */
@@ -108,6 +109,7 @@ RadarClusterer *cluster_new(void) {
         c->vmin        = (float)CLUSTER_DEFAULT_SPEED;
         c->snr_mv      = (float)CLUSTER_DEFAULT_SNR;
         c->fov_half    = (float)CLUSTER_DEFAULT_FOV;
+        c->el_max      = (float)CLUSTER_DEFAULT_ELMAX;
         c->merge_dv    = (float)CLUSTER_DEFAULT_DOP;
         c->conf_m      = CLUSTER_DEFAULT_CONFIRM;
         c->coast_s     = CLUSTER_DEFAULT_COAST_S;
@@ -127,7 +129,7 @@ void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts) {
     c->dedup_cross = (float)eps_m; c->min_pts = min_pts;
 }
 void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
-                       double fov_half_deg, double doppler_gate_mps) {
+                       double fov_half_deg, double el_max_deg, double doppler_gate_mps) {
     if (!c) return;
     if (speed_min_mps < CLUSTER_SPEED_MIN) speed_min_mps = CLUSTER_SPEED_MIN;
     if (speed_min_mps > CLUSTER_SPEED_MAX) speed_min_mps = CLUSTER_SPEED_MAX;
@@ -135,10 +137,13 @@ void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_d
     if (snr_min_db > CLUSTER_SNR_MAX) snr_min_db = CLUSTER_SNR_MAX;
     if (fov_half_deg < CLUSTER_FOV_MIN) fov_half_deg = CLUSTER_FOV_MIN;
     if (fov_half_deg > CLUSTER_FOV_MAX) fov_half_deg = CLUSTER_FOV_MAX;
+    if (el_max_deg < CLUSTER_ELMAX_MIN) el_max_deg = CLUSTER_ELMAX_MIN;
+    if (el_max_deg > CLUSTER_ELMAX_MAX) el_max_deg = CLUSTER_ELMAX_MAX;
     if (doppler_gate_mps < CLUSTER_DOP_MIN) doppler_gate_mps = CLUSTER_DOP_MIN;
     if (doppler_gate_mps > CLUSTER_DOP_MAX) doppler_gate_mps = CLUSTER_DOP_MAX;
     c->vmin = (float)speed_min_mps; c->snr_mv = (float)snr_min_db;
-    c->fov_half = (float)fov_half_deg; c->merge_dv = (float)doppler_gate_mps;
+    c->fov_half = (float)fov_half_deg; c->el_max = (float)el_max_deg;
+    c->merge_dv = (float)doppler_gate_mps;
 }
 void cluster_set_track(RadarClusterer *c, int confirm_m, double coast_s, double park_s) {
     if (!c) return;
@@ -235,6 +240,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     int warm = (now_t - R->t0) < WARMUP_S;
     double snr_st = R->snr_mv + 3.0f;
     double fov = R->fov_half; if (fov > AZ_KEEP_CAP) fov = AZ_KEEP_CAP;
+    double el_max = R->el_max;                            /* live elmax knob   */
     int conf_m = R->conf_m, conf_n = conf_m + 1;          /* live confirm knob */
     int coast_frames = (int)lround(R->coast_s * TRK_FPS); /* live coast knob   */
     int park_frames  = (int)lround(R->park_s * TRK_FPS);  /* live park knob    */
@@ -250,7 +256,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     static int st_idx[RADAR_MAX_POINTS]; static double st_r[RADAR_MAX_POINTS], st_a[RADAR_MAX_POINTS], st_e[RADAR_MAX_POINTS]; int nst=0;
     for (int i=0;i<n;i++){
         double r=pts[i].range, az=pts[i].az, el=pts[i].el, v=pts[i].doppler, snr=pts[i].snr;
-        if (r<R_MIN || fabs(az)>fov) continue;
+        if (r<R_MIN || fabs(az)>fov || fabs(el)>el_max) continue;
         if (!(el>=EL_LO && el<=EL_HI)) continue;
         ar[nall]=r; aa_[nall]=az; nall++;
         int snr_known = !isnan(snr);

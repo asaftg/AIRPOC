@@ -17,6 +17,7 @@
  *   MIN SPD      -> Doppler motion threshold (moving channel)
  *   MIN SNR      -> point strength gate (static channel = +3 dB)
  *   FOV          -> azimuth gate (input + emit)
+ *   ELEV         -> elevation gate (input; 90 = off)
  *   DOPPLER      -> velocity-coherence gate for the duplicate-merge
  *   CONFIRM      -> M-of-N hits to confirm a track (latency vs false alarms)
  *   COAST        -> seconds a confirmed track survives a dropout
@@ -37,6 +38,7 @@ typedef struct RadarClusterer RadarClusterer;
 #define CLUSTER_DEFAULT_SPEED    0.7    /* m/s — Doppler motion threshold */
 #define CLUSTER_DEFAULT_SNR      16.0   /* dB  — point strength gate */
 #define CLUSTER_DEFAULT_FOV      90.0   /* deg — azimuth half-angle gate (90 = full) */
+#define CLUSTER_DEFAULT_ELMAX    90.0   /* deg — elevation half-angle gate (90 = off) */
 #define CLUSTER_DEFAULT_DOP      1.2    /* m/s — merge velocity-coherence gate */
 #define CLUSTER_EPS_MIN_M        0.5
 #define CLUSTER_EPS_MAX_M        50.0
@@ -48,6 +50,8 @@ typedef struct RadarClusterer RadarClusterer;
 #define CLUSTER_SNR_MAX          60.0
 #define CLUSTER_FOV_MIN          5.0
 #define CLUSTER_FOV_MAX          90.0
+#define CLUSTER_ELMAX_MIN        5.0
+#define CLUSTER_ELMAX_MAX        90.0
 #define CLUSTER_DOP_MIN          0.5
 #define CLUSTER_DOP_MAX          20.0
 /* Temporal-track knobs. */
@@ -70,10 +74,11 @@ void            cluster_free(RadarClusterer *c);
 void cluster_set_dbscan(RadarClusterer *c, double eps_m, int min_pts);
 
 /* speed -> Doppler motion threshold (m/s); snr -> point strength gate (dB;
- * 0=off, static channel uses +3); fov -> azimuth half-angle (deg); doppler ->
- * merge velocity-coherence gate (m/s). Clamped. Same thread-safety note. */
+ * 0=off, static channel uses +3); fov -> azimuth half-angle (deg); elmax ->
+ * elevation half-angle (deg, 90 = off); doppler -> merge velocity-coherence
+ * gate (m/s). Clamped. Same thread-safety note. */
 void cluster_set_gates(RadarClusterer *c, double speed_min_mps, double snr_min_db,
-                       double fov_half_deg, double doppler_gate_mps);
+                       double fov_half_deg, double el_max_deg, double doppler_gate_mps);
 
 /* confirm_m -> M-of-N fast-confirm hits (window = M+1); coast_s -> seconds a
  * confirmed track coasts through a dropout before it dies; park_s -> seconds a
