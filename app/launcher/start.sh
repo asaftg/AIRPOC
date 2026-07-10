@@ -6,6 +6,13 @@ BASE="${AIRPOC_BASE:-$HOME/AIRPOC}"
 EO_VIDEO="${EO_VIDEO:-/dev/video0}"
 EO_ILLUM="${EO_ILLUM:-/dev/ttyUSB0}"
 
+# Serialize concurrent starts. /start, /resume and /reattach all shell out to this script and
+# can fire close together; two copies racing on ensure_gone/launch (or the recorder bounce)
+# duplicate producers or unlink each other's shm -> empty recordings. First one wins; the rest
+# bail (the running start already does the work).
+exec 9>/tmp/airpoc-start.lock
+flock -n 9 || { echo "start.sh: another start already in progress — skipping"; exit 0; }
+
 up()       { ss -ltn 2>/dev/null | grep -q ":$1 "; }              # is a TCP port bound?
 wait_dev() { local d="$1" n="${2:-15}"; for _ in $(seq 1 "$n"); do [ -e "$d" ] && return 0; sleep 1; done; return 1; }
 
@@ -18,12 +25,14 @@ healthy() { up "$1" && [ -e "$2" ]; }                            # port  tapfile
 # Kill any instance matching $1 and WAIT for it to fully exit, so its shm_unlink() on
 # shutdown finishes BEFORE we launch a fresh producer — otherwise the dying old process
 # unlinks the shm name the new one just created, and the recorder loses the feed.
+# Match by EXACT process name (-x), never -f substring: `pkill -f eo_pipeline` would also hit a
+# log tail, an ssh session, or an in-flight start.sh whose argv merely contains the word.
 ensure_gone() {
-  pgrep -f "$1" >/dev/null 2>&1 || return 0
+  pgrep -x "$1" >/dev/null 2>&1 || return 0
   echo "clearing stale $1 ..."
-  pkill -f "$1" 2>/dev/null
-  for _ in $(seq 1 25); do pgrep -f "$1" >/dev/null 2>&1 || { sleep 0.3; return 0; }; sleep 0.2; done
-  pkill -9 -f "$1" 2>/dev/null; sleep 0.5
+  pkill -x "$1" 2>/dev/null
+  for _ in $(seq 1 25); do pgrep -x "$1" >/dev/null 2>&1 || { sleep 0.3; return 0; }; sleep 0.2; done
+  pkill -9 -x "$1" 2>/dev/null; sleep 0.5
 }
 
 launch() { # port  dir  cmd...

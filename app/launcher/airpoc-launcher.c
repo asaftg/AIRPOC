@@ -53,7 +53,10 @@ static int rec_chan_up(const char *chan)
     char *p = strstr(buf, key);
     if (!p) return 0;
     p = strstr(p, "\"connected\":");
-    return p && p[12] == '1';
+    if (!p) return 0;
+    p += 12;                                  /* past the literal "connected": */
+    while (*p == ' ' || *p == '\t') p++;       /* tolerate a space after the colon */
+    return *p == '1' || *p == 't';             /* accept 1 or true */
 }
 
 static const char *WIFI_MODE_FILE   = "/var/lib/airpoc/wifi-mode";     /* we write: auto|ap|home */
@@ -72,6 +75,16 @@ static int read_file(const char *path, char *buf, size_t n)   /* -> bytes read, 
     fclose(f);
     buf[r] = 0;
     return (int)r;
+}
+/* Match a request path with a DELIMITER check so "GET /start" does not also fire on
+ * "GET /startXYZ" — a stray prefetch or an OS captive-portal probe must not trigger a real
+ * state change (start/stop/suspend/shutdown) just by prefix. */
+static int ep(const char *req, const char *path)
+{
+    size_t n = strlen(path);
+    if (strncmp(req, path, n) != 0) return 0;
+    char c = req[n];
+    return c == ' ' || c == '?' || c == '\r' || c == '\n' || c == '\0';
 }
 
 static const char *PAGE =
@@ -159,7 +172,7 @@ static void handle_conn(int fd)
         reply204(fd);
     } else if (strstr(req, "hotspot-detect") || strstr(req, "ncsi.txt") || strstr(req, "connecttest")) {
         reply(fd, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-    } else if (!strncmp(req, "GET /status", 11)) {
+    } else if (ep(req, "GET /status")) {
         int eo = port_up(8091), rad = port_up(8092);
         char b[320];
         snprintf(b, sizeof b,
@@ -169,13 +182,13 @@ static void handle_conn(int fd)
                  (eo && rec_chan_up("eo_y10")) ? "true" : "false",
                  (rad && rec_chan_up("radar_raw")) ? "true" : "false");
         reply(fd, "application/json", b);
-    } else if (!strncmp(req, "GET /start", 10)) {
+    } else if (ep(req, "GET /start")) {
         if (system("bash ./start.sh >/tmp/airpoc-start.log 2>&1 &") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
-    } else if (!strncmp(req, "GET /stop", 9)) {
+    } else if (ep(req, "GET /stop")) {
         if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
-    } else if (!strncmp(req, "GET /reattach", 13)) {
+    } else if (ep(req, "GET /reattach")) {
         /* Re-bind the recorder's shm taps to the live feeds, on demand: the operator hits
          * REC, the console sees a recorder tap is DOWN (feed live but recorder detached),
          * and asks us to heal BEFORE recording so it never records 0 bytes. This runs the
@@ -185,7 +198,7 @@ static void handle_conn(int fd)
          * the new recorder ring has no writer and stays connected=0. Verified on-device. */
         if (system("bash ./start.sh >/tmp/airpoc-reattach.log 2>&1 &") == -1) {}
         reply(fd, "application/json", "{\"ok\":1}");
-    } else if (!strncmp(req, "GET /suspend", 12)) {
+    } else if (ep(req, "GET /suspend")) {
         /* Reviewing a recording needs no live sensors, so STOP the producers to free the box
          * for the native-mp4 transcode + playback. Recorder + console + launcher stay up;
          * /resume relaunches via start.sh. NOTE: clean SIGTERM, NOT SIGSTOP — freezing a live
@@ -195,20 +208,20 @@ static void handle_conn(int fd)
          * relaunches. Straggler cleanup happens in start.sh's ensure_gone on the next start. */
         if (system("pkill -TERM -x eo_pipeline; pkill -TERM -x radar_preview; pkill -TERM -x detectiond") == -1) {}
         reply(fd, "application/json", "{\"ok\":1,\"live\":\"stopped\"}");
-    } else if (!strncmp(req, "GET /resume", 11)) {
+    } else if (ep(req, "GET /resume")) {
         /* Back to live: relaunch the stopped producers and re-attach the recorder (start.sh). */
         if (system("bash ./start.sh >/tmp/airpoc-resume.log 2>&1 &") == -1) {}
         reply(fd, "application/json", "{\"ok\":1,\"live\":\"starting\"}");
-    } else if (!strncmp(req, "GET /shutdown", 13)) {
+    } else if (ep(req, "GET /shutdown")) {
         reply(fd, "application/json", "{\"ok\":1}");   /* answer first — the box is about to go down */
         if (system("sudo -n systemctl poweroff >/dev/null 2>&1 &") == -1) {}
 
-    } else if (!strncmp(req, "GET /wifi/status", 16)) {
+    } else if (ep(req, "GET /wifi/status")) {
         char b[256];
         if (read_file(WIFI_STATUS_FILE, b, sizeof b) <= 0)
             snprintf(b, sizeof b, "{\"mode\":\"auto\",\"ap\":false,\"net\":\"\",\"ip\":\"\",\"clients\":0}");
         reply(fd, "application/json", b);
-    } else if (!strncmp(req, "GET /wifi", 9)) {
+    } else if (ep(req, "GET /wifi")) {
         const char *m = strstr(req, "mode="), *set = "auto";
         if (m) { m += 5; if (!strncmp(m, "ap", 2)) set = "ap"; else if (!strncmp(m, "home", 4)) set = "home"; }
         set_wifi_mode(set);
