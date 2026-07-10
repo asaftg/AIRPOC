@@ -52,8 +52,10 @@ ensure_reg() {
 }
 raise_ap() { ensure_reg; nmcli connection up "$AP_CON" 2>/dev/null; }
 
-# default AP (not auto): a missing/garbled mode file must never silently fall into WiFi/failover
-read_mode() { local m; m=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null); case "$m" in ap|home|auto) echo "$m";; *) echo ap;; esac; }
+# default AUTO: home WiFi when a known network is in range, else raise the AP. This is the
+# intended field behaviour ("home==wifi, outside==AP") and keeps the Jetson able to reach
+# the cloud (agents push, Jetson pulls). Only an explicit mode file pins home/ap.
+read_mode() { local m; m=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null); case "$m" in ap|home|auto) echo "$m";; *) echo auto;; esac; }
 now() { date +%s; }
 last_probe=0
 

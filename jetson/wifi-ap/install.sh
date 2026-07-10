@@ -18,11 +18,13 @@ SSID="${AIRPOC_AP_SSID:-AIRPOC}"
 if nmcli -t -f NAME connection show | grep -qx "$AP_CON"; then
   sudo nmcli connection delete "$AP_CON" >/dev/null
 fi
-# 5 GHz (band a, ch 36 — non-DFS, universally allowed) for real throughput. 2.4 GHz (bg)
-# was much slower + congested and Realtek AP mode is weak there; 5 GHz gives hundreds of
-# Mbit/s at the cost of range (fine for line-of-sight field use). Override with
-# AIRPOC_AP_BAND / AIRPOC_AP_CHAN if you need the 2.4 GHz range fallback (bg + a low ch).
-AP_BAND="${AIRPOC_AP_BAND:-a}"; AP_CHAN="${AIRPOC_AP_CHAN:-36}"
+# 2.4 GHz (band bg, ch 6) is the DEFAULT — hard lesson 2026-07-09: a 5 GHz ch36 AP is
+# INVISIBLE to most phones (they don't scan/allow that channel) and depends on the regdomain
+# being set, so the AP "didn't work" in the field even though hostapd was up. 2.4 GHz is seen
+# by every device, has better range/penetration, and works regardless of regdomain — the
+# right trade for a control link. Override with AIRPOC_AP_BAND=a / AIRPOC_AP_CHAN=36 for 5 GHz
+# throughput on known-good client hardware in line-of-sight.
+AP_BAND="${AIRPOC_AP_BAND:-bg}"; AP_CHAN="${AIRPOC_AP_CHAN:-6}"
 sudo nmcli connection add type wifi ifname "$IFACE" con-name "$AP_CON" ssid "$SSID" \
      autoconnect no \
      802-11-wireless.mode ap 802-11-wireless.band "$AP_BAND" 802-11-wireless.channel "$AP_CHAN" \
