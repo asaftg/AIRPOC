@@ -1098,8 +1098,25 @@
   };
 
   /* ── LIBRARY ── */
-  $("libbtn").onclick = function () { $("library").hidden = false; liveSuspend(true); buildTagFilter(); loadLibrary(); };   /* entering library -> freeze live sensors */
-  $("lib-close").onclick = function () { $("library").hidden = true; libSel = {}; liveSuspend(false); };                    /* EXIT to live -> unfreeze */
+  $("libbtn").onclick = function () {
+    $("library").hidden = false;
+    /* The library list needs NONE of the live media streams, and a browser only allows ~6
+     * sockets per host. Holding video+radar+det open here leaves too few slots for the
+     * replay-open request, which then queues/times out ("tap a movie, nothing happens").
+     * Drop every long-lived stream so browsing (and opening) always has free sockets. */
+    if (radarES) { radarES.close(); radarES = null; }
+    if (detES)   { detES.close();   detES = null; }
+    $("video").src = BLANK;
+    liveSuspend(true);          /* freeze live sensors while reviewing */
+    buildTagFilter(); loadLibrary();
+  };
+  $("lib-close").onclick = function () {   /* EXIT to live -> restore the live streams + unfreeze */
+    $("library").hidden = true; libSel = {};
+    API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
+    $("video").src = API.stream + "?t=" + Date.now();
+    openRadarStream(); openDetStream();
+    liveSuspend(false);
+  };
   $("lib-q").oninput = debounce(loadLibrary, 250);
   function buildTagFilter() {
     var w = $("lib-tagfilter"); if (w.childElementCount) return;
@@ -1276,9 +1293,9 @@
     stopReplayRadarPoll(); stopReplayDetPoll();          /* drop any replay fallback polls */
     resetMp4State();                                     /* stop + release the native mp4 <video> */
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
-    $("video").src = API.stream + "?t=" + Date.now();
-    openRadarStream();                                   /* resume the live radar push */
-    openDetStream();                                     /* resume the live det boxes */
+    /* Returning to the library LIST — do NOT reopen the live streams here; the list holds no
+     * long-lived sockets so the next replay-open always has room. lib-close reopens live. */
+    $("video").src = BLANK;
     resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
     $("library").hidden = false; loadLibrary();
   }
