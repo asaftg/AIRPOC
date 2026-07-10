@@ -1274,10 +1274,11 @@
       replayHasEO = !!(s.bytes && ((s.bytes.display > 0) || (s.bytes.native > 0)));
       replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
       document.body.classList.add("replay"); $("library").hidden = true;
-      /* Default to the INSTANT display (MJPEG) view. Native 60fps is opt-in via the DISPLAY/NATIVE
-       * toggle: opening native makes the recorder ffmpeg-transcode the WHOLE recording (~2 cores)
-       * and it is NOT killed on close, so browsing recordings in native stacked encodes and pegged
-       * the box. Display needs no transcode, so browsing is now free. */
+      /* Default to the INSTANT display (MJPEG) view so PLAY works immediately; native 60fps is one
+       * tap on the DISPLAY/NATIVE toggle. NOTE: this does NOT avoid the transcode — the recorder
+       * ffmpeg-transcodes the whole recording on OPEN regardless of mode, and does not kill it on
+       * close. Stacking those encodes is what pegs the box; that is a recorder-side bug the console
+       * cannot prevent (it must open the session to replay it). Flagged for the recorder module. */
       rctl("video=display");
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
       openReplayRadarStream();                            /* replay radar — self-chaining poll (one socket max) */
