@@ -118,7 +118,7 @@
   function clearROI() {
     radarROI = null; eoROI = false; roiArm = false;
     if (replaying) { resetReplayZoom(); setZoomLabel(); }   /* back to the natural view (capture zoom for display, 1x for native) */
-    else { $("video").style.transform = ""; $("video").style.transformOrigin = "center"; }
+    else { [$("video"), $("eo-ovl")].forEach(function (el) { el.style.transform = ""; el.style.transformOrigin = "center"; }); }
     setRoiUI(); drawRadar(lastRadar);
   }
   $("roibtn").onclick = function () {
@@ -151,8 +151,8 @@
           replayZoom = sc;
           zoomEls().forEach(function (el) { el.style.transform = "scale(" + sc.toFixed(3) + ")"; el.style.transformOrigin = org; });
           setZoomLabel();
-        } else {
-          var v = $("video"); v.style.transformOrigin = org; v.style.transform = "scale(" + sc.toFixed(3) + ")";
+        } else {   /* live: scale the video AND the overlay canvas together so the detector/radar marks track the zoom (they were left at the un-zoomed position) */
+          [$("video"), $("eo-ovl")].forEach(function (el) { el.style.transformOrigin = org; el.style.transform = "scale(" + sc.toFixed(3) + ")"; });
         }
         eoROI = true;
       } else if (radarGeom) {
@@ -739,11 +739,10 @@
       $("eo-tl").style.display = (replaying && !replayHasEO) ? "none" : "";   /* no video → hide the recorded EO status line */
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
-      /* Live-view self-heal: in the real-time view (not replay, library closed) the producers
-       * must be up. If EO is down for ~2.5 s — camera left suspended after a page refresh in the
-       * library, a missed resume, or a crashed producer — bring the stack back via the launcher
-       * (rate-limited to once / 30 s). When it recovers, force a FRESH /stream connection since a
-       * stalled MJPEG <img> won't reconnect on its own. */
+      /* Live-view crash backstop: in the real-time view (not replay, library closed) the
+       * producers should be up. If EO is genuinely down for ~2.5 s (a crashed producer), ask the
+       * launcher to bring the stack back, rate-limited to once / 30 s so it can't thrash. When it
+       * recovers, force a FRESH /stream connection since a stalled MJPEG <img> won't reconnect. */
       if (!replaying && $("library").hidden) {
         if (!eoc) {
           if (++eoDownN >= 16 && Date.now() > nextLiveHeal) {
@@ -1114,15 +1113,13 @@
     if (radarES) { radarES.close(); radarES = null; }
     if (detES)   { detES.close();   detES = null; }
     $("video").src = BLANK;
-    liveSuspend(true);          /* freeze live sensors while reviewing */
     buildTagFilter(); loadLibrary();
   };
-  $("lib-close").onclick = function () {   /* EXIT to live -> restore the live streams + unfreeze */
+  $("lib-close").onclick = function () {   /* EXIT to live -> reconnect the live streams */
     $("library").hidden = true; libSel = {};
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
     openRadarStream(); openDetStream();
-    liveSuspend(false);
   };
   $("lib-q").oninput = debounce(loadLibrary, 250);
   function buildTagFilter() {
@@ -1230,17 +1227,12 @@
   };
 
   /* ── REPLAY ── */
-  /* While you're in the LIBRARY / replay world the live sensors aren't shown, so STOP them
-   * (launcher stops eo_pipeline/radar/detector, relaunches on exit) to give the native-mp4
-   * transcode + playback the whole box. Stopped on LIBRARY open, restarted on EXIT to live
-   * (lib-close) — NOT per recording, so opening/closing individual replays doesn't churn it.
-   * Also resumed on page-hide so a closed tab can't leave the stack down. */
-  var liveFrozen = false;
-  function liveSuspend(on) {
-    liveFrozen = on;
-    fetch(location.protocol + "//" + location.hostname + ":8088/" + (on ? "suspend" : "resume"), { mode: "no-cors" }).catch(function () {});
-  }
-  window.addEventListener("pagehide", function () { if (liveFrozen) liveSuspend(false); });
+  /* NOTE: the live sensors are NO LONGER stopped while reviewing recordings. Stopping and
+   * restarting eo_pipeline/radar/detector on every library visit thrashed the box — the camera
+   * re-init + detector engine reload pegged the CPU and wedged the camera after a few enter/exit
+   * cycles (black EO, unrecoverable without a reboot). The recorder pre-builds the replay mp4,
+   * so keeping the live stack running during review costs nothing extra. The browser's live
+   * media streams are still closed on library-open (connection budget) and reopened on exit. */
   var opening = false;
   function openReplay(s) {
     if (opening) return;                                 /* ignore double-taps while an open is in flight */
@@ -1363,11 +1355,13 @@
            * tab). Nudging currentTime every poll turned smooth playback into constant seeking
            * — that was the passive-watch stutter. Keyframe-per-second mp4 makes the rare
            * correction cheap. */
-          if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.3) nv.currentTime = tv;
+          if (!scrubbing && nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.3) nv.currentTime = tv;
         } else {
           if (!nv.paused) nv.pause();
-          /* paused / scrubbed: pin the exact frame to the transport position */
-          if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.05) nv.currentTime = tv;
+          /* paused: pin the exact frame to the transport position. While actively SCRUBBING the
+           * scrub handler seeks the video directly (immediate, per-input) — don't fight it here
+           * with the laggier poll-clock value, or the frame appears to freeze during the drag. */
+          if (!scrubbing && nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.05) nv.currentTime = tv;
         }
         return;
       }
@@ -1418,8 +1412,13 @@
   $("tp-step-b").onclick = function () { rctl("step=-1"); };
   $("tp-step-f").onclick = function () { rctl("step=1"); };
   $("tp-scrub").oninput = function () {
-    scrubbing = true; $("tp-cur").textContent = fmtClockT(+this.value);
-    var now = Date.now(); if (now - scrubThrottle >= 80) { scrubThrottle = now; rctl("seek=" + Math.round(this.value)); }
+    scrubbing = true; var v = +this.value; $("tp-cur").textContent = fmtClockT(v);
+    /* Native replay: seek the mp4 DIRECTLY on each scrub input so the picture tracks the drag,
+     * like the DISPLAY still does. Without this the frame only moved on the 150 ms poll and the
+     * mp4's own seeks lagged behind, so it looked frozen while scrubbing. */
+    var nv = $("nvid");
+    if (mp4State.ready && mp4State.srcSet && nv.readyState >= 1) nv.currentTime = v / 1000;
+    var now = Date.now(); if (now - scrubThrottle >= 80) { scrubThrottle = now; rctl("seek=" + Math.round(v)); }
   };
   $("tp-scrub").onchange = function () { rctl("seek=" + Math.round(this.value)); setTimeout(function () { scrubbing = false; }, 150); };
   $("tp-scrub").onmousemove = function (e) {
