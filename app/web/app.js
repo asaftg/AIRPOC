@@ -843,6 +843,26 @@
       .then(function (m) { if (replaying) { lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); } })
       .catch(function () { detReplayBackoff = Date.now() + 5000; if (replaying && lastDet) { lastDet = null; draw(true, false); } });
   }
+  /* Replay detector boxes: prefer the recorder's SSE push (/rec/replay/det/stream) — paced to
+   * the playback clock (pause/seek/rate) so boxes update smoothly instead of lagging on a poll.
+   * pollDetReplay stays as a fallback if the SSE 404s or is silent. Mirrors the replay radar. */
+  var detReplayPoll = null;
+  function stopReplayDetPoll() { if (detReplayPoll) { clearInterval(detReplayPoll); detReplayPoll = null; } }
+  function startReplayDetPoll() { if (replaying && !detReplayPoll) detReplayPoll = setInterval(pollDetReplay, 150); }
+  function openReplayDetStream() {
+    if (detES) { detES.close(); detES = null; }
+    stopReplayDetPoll();
+    var got = false;
+    detES = new EventSource("/rec/replay/det/stream");
+    detES.onmessage = function (e) {
+      if (!replaying) return;
+      got = true; stopReplayDetPoll();
+      try { var m = JSON.parse(e.data); lastDet = (m && (m.dets || m.movers)) ? m : null; } catch (x) {}
+      draw(true, false);
+    };
+    detES.onerror = function () { if (!got) startReplayDetPoll(); };
+    setTimeout(function () { if (!got) startReplayDetPoll(); }, 1200);
+  }
 
   /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
    * model boxes) + movers[] (motion-only); drawn over the video in drawEO. Live-only for
@@ -1197,6 +1217,7 @@
       document.body.classList.add("replay"); $("library").hidden = true;
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
       openReplayRadarStream();                            /* replay radar over SSE (poll fallback) — recorded rate, not 8 Hz */
+      openReplayDetStream();                              /* replay det boxes over SSE (poll fallback) — smooth, clock-paced */
       /* Show the recorded still at the open position — NOT the live stream. The replay
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
@@ -1214,7 +1235,7 @@
     fetch("/rec/replay/ctl?close=1").catch(function () {});
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
-    stopReplayRadarPoll();                               /* drop any replay-radar fallback poll */
+    stopReplayRadarPoll(); stopReplayDetPoll();          /* drop any replay fallback polls */
     resetMp4State();                                     /* stop + release the native mp4 <video> */
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
@@ -1339,8 +1360,7 @@
 
   setInterval(poll, 160); poll();
   openRadarStream();   /* live = SSE push; replay opens its own radar SSE (poll fallback) in openReplay */
-  setInterval(pollDetReplay, 150);                  /* replay-only det boxes (no-op until the recorder ships /replay/det) */
-  openDetStream();                                  /* EO detector boxes (SSE push, live-only) */
+  openDetStream();                                  /* EO detector boxes (SSE push, live); replay opens its own det SSE (poll fallback) in openReplay */
   initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
   initLka();                                        /* link MANUAL/AUTO quality mode (persisted) */
