@@ -1329,15 +1329,25 @@
     if (rs.video_src === "native" && sid) {
       if (mp4State.sid !== sid) { resetMp4State(); mp4State.sid = sid; }
       if (!mp4State.ready && mp4State.pct !== -1 && Date.now() >= mp4State.nextProbe) probeMp4(sid);
-      if (mp4State.ready) {                                        /* play the mp4, slaved to the clock */
+      if (mp4State.ready) {                                        /* play the mp4, loosely following the clock */
         if (!mp4State.srcSet) { mp4State.srcSet = true; nv.src = "/rec/replay/native.mp4?sid=" + encodeURIComponent(sid); vid.src = BLANK; }  /* BLANK stops the hidden MJPEG stream */
         nv.style.display = "block"; vid.style.display = "none"; badge.hidden = true;   /* "" would revert to the stylesheet's display:none -> black */
         replayPlaying = false; replayStillT = -1;                 /* re-arm MJPEG src if we switch back */
         var tv = rs.t_ms / 1000;
-        if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.25) nv.currentTime = tv;
         nv.playbackRate = rs.rate || 1;
-        if (rs.playing && rs.t_ms < rs.dur_ms) { if (nv.paused) nv.play().catch(function () {}); }
-        else if (!nv.paused) nv.pause();
+        if (rs.playing && rs.t_ms < rs.dur_ms) {
+          if (nv.paused) nv.play().catch(function () {});
+          /* Let the <video> FREE-RUN on its own smooth decode clock; only re-sync to the
+           * transport clock on a BIG drift (a scrub, a decode stall, a throttled background
+           * tab). Nudging currentTime every poll turned smooth playback into constant seeking
+           * — that was the passive-watch stutter. Keyframe-per-second mp4 makes the rare
+           * correction cheap. */
+          if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.3) nv.currentTime = tv;
+        } else {
+          if (!nv.paused) nv.pause();
+          /* paused / scrubbed: pin the exact frame to the transport position */
+          if (nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.05) nv.currentTime = tv;
+        }
         return;
       }
       badge.hidden = mp4State.pct === -1;                          /* building -> show progress */
