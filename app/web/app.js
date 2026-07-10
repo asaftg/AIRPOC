@@ -1290,6 +1290,13 @@
     fetch("/rec/replay/ctl?close=1").catch(function () {});
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
+    /* CLOSE the replay SSE EventSources NOW — this was the leak. They were only closed on the
+     * NEXT open, so every exit left radar+det SSE draining; a browser allows ~6 sockets/host and
+     * SSE teardown over WiFi is slow, so 3-4 quick open/exit cycles stacked 6 half-closed sockets
+     * (the 6× FIN-WAIT-1 we saw) and the next open had nowhere to connect. Closing on exit gives
+     * them the whole library-browsing time to drain before the next open. */
+    if (radarES) { radarES.close(); radarES = null; }
+    if (detES)   { detES.close();   detES = null; } lastDet = null;
     stopReplayRadarPoll(); stopReplayDetPoll();          /* drop any replay fallback polls */
     resetMp4State();                                     /* stop + release the native mp4 <video> */
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
