@@ -8,6 +8,15 @@
   var $ = function (id) { return document.getElementById(id); };
   var ctl = function (qs) { if (replaying) return; fetch("/ctl?" + qs).catch(function () {}); };  /* zero live /ctl in replay */
   var ZOOMS = [1, 2, 4, 8];
+  /* Step to the next zoom rung in a direction. Works when the current zoom is NOT a rung — an
+   * ROI/box zoom leaves replayZoom an arbitrary float (e.g. 3.7), for which ZOOMS.indexOf() is
+   * -1 and made "+" jump to 1x and "-" go dead. dir>0 = first rung above, dir<0 = first below. */
+  function stepZoom(cur, dir) {
+    var i;
+    if (dir > 0) { for (i = 0; i < ZOOMS.length; i++) if (ZOOMS[i] > cur + 1e-6) return i; return -1; }
+    for (i = ZOOMS.length - 1; i >= 0; i--) if (ZOOMS[i] < cur - 1e-6) return i;
+    return -1;
+  }
   var css = function (n) { return getComputedStyle(document.body).getPropertyValue(n).trim(); };
 
   var zoom = 1;
@@ -61,13 +70,14 @@
   function resetReplayZoom() { replayZoom = 1; zoomEls().forEach(function (el) { el.style.transform = ""; el.style.transformOrigin = "center"; }); }
   document.querySelectorAll("[data-zoom]").forEach(function (b) {
     b.onclick = function () {
+      var dir = parseInt(b.dataset.zoom, 10);
       if (replaying) {
-        var ri = ZOOMS.indexOf(replayZoom) + parseInt(b.dataset.zoom, 10);
-        if (ri < 0 || ri >= ZOOMS.length) return;
+        var ri = stepZoom(replayZoom, dir);   /* replayZoom may be a float from an ROI box zoom */
+        if (ri < 0) return;
         replayZoom = ZOOMS[ri]; applyReplayZoom(); return;
       }
-      var i = ZOOMS.indexOf(zoom) + parseInt(b.dataset.zoom, 10);
-      if (i < 0 || i >= ZOOMS.length) return;
+      var i = stepZoom(zoom, dir);
+      if (i < 0) return;
       zoom = ZOOMS[i]; zoomTouch = Date.now(); ctl("zoom=" + zoom); setZoomLabel();
     };
   });
@@ -511,8 +521,9 @@
       var seek = (detStyle === "seeker");
       (lastDet.dets || []).forEach(function (d) {
         var col = d.cls === "human" ? "#40c4ff" : amber;
-        var lab = seek ? (d.cls || "?")[0].toUpperCase() + Math.round((d.conf || 0) * 100)
-                       : (d.cls || "?").toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
+        var cl = String(d.cls || "?");                   /* coerce: a non-string cls (e.g. a numeric id) would throw on [0]/.toUpperCase() and blank every overlay */
+        var lab = seek ? cl[0].toUpperCase() + Math.round((d.conf || 0) * 100)
+                       : cl.toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
         drawDet(d, false, col, lab);
       });
       /* motion-head marks: ALWAYS a gentle thin dashed box (never the heavy cross), so a
@@ -890,7 +901,7 @@
     detES = new EventSource("/det/stream");
     detES.onmessage = function (e) {
       if (replaying) return;
-      try { var m = JSON.parse(e.data); lastDet = (m && m.connected === false) ? null : m; } catch (x) {}
+      var m = parseJSONsafe(e.data); if (m) lastDet = (m.connected === false) ? null : m;
       draw(true, false);
     };
     detES.onerror = function () { if (!replaying) { lastDet = null; draw(true, false); } };   /* auto-reconnects */
@@ -1123,7 +1134,10 @@
       .then(function (r) { return r.json(); }).then(renderLibrary)
       .catch(function () { $("lib-grid").innerHTML = ""; $("lib-empty").hidden = false; $("lib-empty").textContent = "RECORDER NOT CONNECTED"; });
   }
+  var libTimers = [];   /* hover-cycler intervals — cleared on every re-render so a card removed
+                         * mid-hover (its onmouseleave never fires) can't leak its interval. */
   function renderLibrary(d) {
+    libTimers.forEach(function (t) { clearInterval(t); }); libTimers = [];
     if (d.disk_total_gb) {
       $("lib-diskbar").style.setProperty("--used", (100 * (1 - d.disk_free_gb / d.disk_total_gb)).toFixed(0) + "%");
       $("lib-disktext").textContent = Math.round(d.disk_free_gb) + " GB free" + (recState && recState.est_min_remaining ? " · ~" + recState.est_min_remaining + " min" : "");
@@ -1151,7 +1165,7 @@
     if (hasThumbs) {
       poster = document.createElement("img"); poster.className = "lib-poster"; poster.src = "/rec/thumbs/" + s.sid + "/2.jpg";
       var timer = null, i = 0;
-      card.onmouseenter = function () { timer = setInterval(function () { i = (i + 1) % 8; poster.src = "/rec/thumbs/" + s.sid + "/" + i + ".jpg"; }, 166); };
+      card.onmouseenter = function () { if (timer) return; timer = setInterval(function () { i = (i + 1) % 8; poster.src = "/rec/thumbs/" + s.sid + "/" + i + ".jpg"; }, 166); libTimers.push(timer); };
       card.onmouseleave = function () { if (timer) clearInterval(timer); timer = null; poster.src = "/rec/thumbs/" + s.sid + "/2.jpg"; };
     } else { poster = document.createElement("div"); poster.className = "lib-poster radaronly"; poster.textContent = "◟ RADAR ONLY ◞"; }
     card.appendChild(poster);
@@ -1227,21 +1241,25 @@
   var opening = false;
   function openReplay(s) {
     if (opening) return;                                 /* ignore double-taps while an open is in flight */
+    if (!s || !s.sid) return;                            /* malformed session -> nothing to open */
     opening = true;
+    var done = false;
+    var fin = function () { if (done) return false; done = true; clearTimeout(guard); opening = false; return true; };
+    /* Arm the timeout FIRST so `opening` is ALWAYS released — even if the synchronous setup below
+     * throws (a null DOM node, a bad session). Otherwise a throw before the fetch left `opening`
+     * stuck true and the open-recording button dead until a page reload. */
+    var guard = setTimeout(function () {                 /* recorder hung/slow -> free the button + tell the user */
+      if (fin()) toast("Recorder didn't respond — tap the recording again.", "err", 4500);
+    }, 9000);
+    try {
     /* Free browser connection slots BEFORE the open fetch. HTTP/1.1 caps ~6 sockets per host and
-     * the console holds long-lived streams (MJPEG + radar/det SSE) — idle in the library, pointing
-     * at the frozen producers — so the open request would queue behind them and hit the 9 s
-     * timeout ("recorder didn't respond"). Drop them now; they're reopened as replay streams on
-     * success (or as live streams by closeReplay on exit). */
+     * the console holds long-lived streams (MJPEG video + radar/det) — so the open request would
+     * otherwise queue behind them and hit the 9 s timeout. Drop them now; replay reopens its own
+     * (poll-based) overlays on success, or closeReplay reopens live streams on exit. */
     if (radarES) { radarES.close(); radarES = null; }
     if (detES) { detES.close(); detES = null; }
     stopReplayRadarPoll(); stopReplayDetPoll();
     $("video").src = BLANK;
-    var done = false;
-    var fin = function () { if (done) return false; done = true; clearTimeout(guard); opening = false; return true; };
-    var guard = setTimeout(function () {                 /* recorder hung/slow -> free the button + tell the user */
-      if (fin()) toast("Recorder didn't respond — tap the recording again.", "err", 4500);
-    }, 9000);
     /* Close any prior/stale replay session FIRST, then open. A leftover open on the recorder
      * (tab closed mid-replay, or a fast close->reopen) is exactly what makes a tap "do nothing"
      * until you leave the library/app — serialising close->open clears it. Silent failure
@@ -1262,8 +1280,8 @@
       replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
       document.body.classList.add("replay"); $("library").hidden = true;
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
-      openReplayRadarStream();                            /* replay radar over SSE (poll fallback) — recorded rate, not 8 Hz */
-      openReplayDetStream();                              /* replay det boxes over SSE (poll fallback) — smooth, clock-paced */
+      openReplayRadarStream();                            /* replay radar — self-chaining poll (one socket max) */
+      openReplayDetStream();                              /* replay det boxes — self-chaining poll (one socket max) */
       /* Show the recorded still at the open position — NOT the live stream. The replay
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
@@ -1277,6 +1295,7 @@
       replayStatePoll = setInterval(pollReplayState, 150); pollReplayState();
       })
       .catch(function () { if (fin()) toast("Couldn't open that recording — tap it again.", "err", 4500); });
+    } catch (e) { if (fin()) toast("Couldn't open that recording — tap it again.", "err", 4500); }
   }
   function closeReplay() {
     fetch("/rec/replay/ctl?close=1").catch(function () {});
