@@ -84,8 +84,17 @@ auto_tick() {   # $1 = current active connection
     return
   fi
   [ -n "$act" ] && return                            # connected as client -> idle
-  if home_in_range; then log "auto: home in range -> joining"; join_home
-  else log "auto: no known WiFi -> raising AP"; raise_ap; last_probe=$(now); fi
+  # No connection yet. At boot the radio + NM autoconnect + the wifi scan are slow to settle,
+  # so a single empty scan here makes it raise the AP even though home WiFi is right there —
+  # that's why it came up on the AP instead of joining WiFi after a reboot. Try a few times
+  # (each home_in_range does a rescan) and bail the moment NM has joined a client network.
+  local tries=0
+  while [ "$tries" -lt 3 ]; do
+    [ -n "$(active_con)" ] && return                 # NM autoconnected home meanwhile
+    home_in_range && { log "auto: home in range -> joining"; join_home; return; }
+    tries=$((tries + 1))
+  done
+  log "auto: no known WiFi after 3 scans -> raising AP"; raise_ap; last_probe=$(now)
 }
 
 tick() {

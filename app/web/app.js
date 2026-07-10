@@ -1236,8 +1236,16 @@
       if (rs.t_ms !== replayStillT) { replayStillT = rs.t_ms; vid.src = "/rec/replay/frame?t=" + rs.t_ms; }
     }
   }
+  var replayBad = 0;
   function pollReplayState() {
-    fetch("/rec/replay/state").then(function (r) { return r.json(); }).then(function (st) {
+    fetch("/rec/replay/state").then(function (r) { if (!r.ok) throw 0; return r.json(); }).then(function (st) {
+      /* Self-heal the stuck replay state: if the recorder has NO open session but the GUI still
+       * thinks it's replaying (endpoints swapped to /rec/replay/*), every poll 404-floods and a
+       * library card tap does nothing until you leave the library/app. After a few consecutive
+       * no-session polls, reset to live. The debounce avoids a transient false-negative right
+       * after opening (before the recorder registers the session). */
+      if (st && st.open === false) { if (replaying && ++replayBad >= 3) { replayBad = 0; closeReplay(); } return; }
+      replayBad = 0;
       var rs = st.replay_state || st.state || st; if (!rs) return;   /* /state nests as .state, /stats as .replay_state */
       if (replayHasEO) updateReplayVideo(rs);   /* native mp4 (60 fps) or paced MJPEG, + overlay sync */
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
@@ -1248,7 +1256,7 @@
       if (rs.has_native) { $("tp-video").hidden = false; $("tp-video").textContent = (rs.video_src === "native") ? "NATIVE" : "DISPLAY"; }
       else $("tp-video").hidden = true;
       if (rs.t_wall_ms) { var d = new Date(rs.t_wall_ms); $("v-zulu").textContent = "REC " + ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2); }
-    }).catch(function () { $("eo-scrim").hidden = false; });
+    }).catch(function () { $("eo-scrim").hidden = false; if (replaying && ++replayBad >= 3) { replayBad = 0; closeReplay(); } });
   }
   $("tp-play").onclick = function () { rctl($("tp-play").textContent === "⏸" ? "pause=1" : "play=1"); };
   $("tp-rate").onclick = function () { var i = (RATES.indexOf(parseFloat($("tp-rate").textContent)) + 1) % RATES.length; rctl("rate=" + RATES[i]); };
