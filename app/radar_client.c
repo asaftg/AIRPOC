@@ -53,10 +53,12 @@ static void store_frame(const char *json, int len)
     if (p) nt = atoi(p + 14);
     pthread_mutex_lock(&lk);
     if (len + 1 > g_cap) { char *nb = realloc(g_json, len + 1 + 4096); if (nb) { g_json = nb; g_cap = len + 1 + 4096; } }
-    if (g_json && len + 1 <= g_cap) { memcpy(g_json, json, len); g_json[len] = 0; g_len = len; }
-    g_connected = conn; g_ntargets = nt;
-    g_seq++;
-    pthread_cond_broadcast(&cv);            /* wake SSE pushers waiting on a new frame */
+    if (g_json && len + 1 <= g_cap) {       /* only publish a frame we actually stored */
+        memcpy(g_json, json, len); g_json[len] = 0; g_len = len;
+        g_connected = conn; g_ntargets = nt;
+        g_seq++;
+        pthread_cond_broadcast(&cv);        /* wake SSE pushers — a NEW frame really landed */
+    }
     pthread_mutex_unlock(&lk);
 }
 

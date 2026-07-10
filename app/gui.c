@@ -214,6 +214,15 @@ static void iface_for_ip(const char *ip, char *name, size_t len)
 }
 
 /* ---------------------------------------------------------------- http -------- */
+/* Bound every blocking socket op so a slow/dead WiFi client (or a hung recorder) can't wedge a
+ * detached thread forever: a write() that stalls past SO_SNDTIMEO, or a read() past SO_RCVTIMEO,
+ * returns an error and the handler tears the connection down instead of leaking the thread. */
+static void sock_timeouts(int fd, int send_s, int recv_s)
+{
+    struct timeval sv = { send_s, 0 }, rv = { recv_s, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sv, sizeof sv);
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rv, sizeof rv);
+}
 static int has(const char *req, const char *path)
 {
     char buf[64];
@@ -288,7 +297,7 @@ static void handle_radar(int fd)
 {
     int cap = 131072;
     char *b = malloc(cap);
-    if (!b) { close(fd); return; }
+    if (!b) return;                     /* client() owns the single close(fd) — don't double-close */
     int n = radar_get_frame_json(b, cap);
     if (n <= 0)
         n = snprintf(b, cap, "{\"connected\":false,\"num_points\":0,\"num_targets\":0,"
@@ -341,7 +350,7 @@ static void handle_det(int fd)
 {
     int cap = 262144;
     char *b = malloc(cap);
-    if (!b) { close(fd); return; }
+    if (!b) return;                     /* client() owns the single close(fd) — don't double-close */
     int n = det_get_frame_json(b, cap);
     if (n <= 0 || !det_connected())
         n = snprintf(b, cap, "{\"connected\":false,\"dets\":[],\"movers\":[]}\n");
@@ -379,6 +388,7 @@ static int rec_connect(void)
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons((uint16_t)g_rec_port) };
     if (inet_pton(AF_INET, g_rec_host, &a.sin_addr) != 1) { close(fd); return -1; }
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
+    sock_timeouts(fd, 15, 30);          /* a hung recorder can't block read(rfd) forever */
     return fd;
 }
 static void handle_rec(int cfd, const char *req)
@@ -433,7 +443,7 @@ static void handle_ctl(const char *req)
     if ((p = strstr(query, "engage="))) { g_engage = atoi(p + 7); return; }
 
     /* radar controls: strip the radar_ namespace and forward to the daemon's /ctl */
-    char dq[256]; int dn = 0;
+    char dq[512]; int dn = 0;
     for (unsigned k = 0; k < sizeof(RADAR_KEYS) / sizeof(RADAR_KEYS[0]); k++) {
         char pref[24]; int pl = snprintf(pref, sizeof pref, "radar_%s=", RADAR_KEYS[k]);
         char *rp = strstr(query, pref);
@@ -442,13 +452,16 @@ static void handle_ctl(const char *req)
         char val[24]; int vi = 0;
         while (rp[vi] && rp[vi] != '&' && vi < (int)sizeof(val) - 1) { val[vi] = rp[vi]; vi++; }
         val[vi] = 0;
-        dn += snprintf(dq + dn, sizeof(dq) - (size_t)dn, "%s%s=%s", dn ? "&" : "", RADAR_KEYS[k], val);
+        if (dn >= (int)sizeof(dq) - 1) break;   /* full — never call snprintf with a wrapped size */
+        int w = snprintf(dq + dn, sizeof(dq) - (size_t)dn, "%s%s=%s", dn ? "&" : "", RADAR_KEYS[k], val);
+        if (w < 0) break;
+        dn += w;
     }
-    if (dn > 0) { radar_ctl(dq); return; }
+    if (dn > 0) { if (dn >= (int)sizeof(dq)) dn = (int)sizeof(dq) - 1; dq[dn] = 0; radar_ctl(dq); return; }
 
     /* detector controls: strip the det_ namespace and forward to the daemon's /ctl */
     static const char *DET_KEYS[] = { "conf", "cadence", "motion", "max_dets", "mot_k", "mot_persist", "nms" };
-    char xq[256]; int xn = 0;
+    char xq[512]; int xn = 0;
     for (unsigned k = 0; k < sizeof(DET_KEYS) / sizeof(DET_KEYS[0]); k++) {
         char pref[24]; int pl = snprintf(pref, sizeof pref, "det_%s=", DET_KEYS[k]);
         char *rp = strstr(query, pref);
@@ -457,9 +470,12 @@ static void handle_ctl(const char *req)
         char val[24]; int vi = 0;
         while (rp[vi] && rp[vi] != '&' && vi < (int)sizeof(val) - 1) { val[vi] = rp[vi]; vi++; }
         val[vi] = 0;
-        xn += snprintf(xq + xn, sizeof(xq) - (size_t)xn, "%s%s=%s", xn ? "&" : "", DET_KEYS[k], val);
+        if (xn >= (int)sizeof(xq) - 1) break;   /* full — never call snprintf with a wrapped size */
+        int w = snprintf(xq + xn, sizeof(xq) - (size_t)xn, "%s%s=%s", xn ? "&" : "", DET_KEYS[k], val);
+        if (w < 0) break;
+        xn += w;
     }
-    if (xn > 0) { det_ctl(xq); return; }
+    if (xn > 0) { if (xn >= (int)sizeof(xq)) xn = (int)sizeof(xq) - 1; xq[xn] = 0; det_ctl(xq); return; }
 
     for (unsigned k = 0; k < sizeof(EO_KEYS) / sizeof(EO_KEYS[0]); k++)
         if (strstr(query, EO_KEYS[k])) { eo_ctl(query); break; }   /* forward EO controls */
@@ -493,10 +509,21 @@ static void stream_mjpeg(int fd)
 static void *client(void *arg)
 {
     int fd = (int)(long)arg;
-    char req[1024];
-    ssize_t n = read(fd, req, sizeof(req) - 1);
-    if (n <= 0) { close(fd); return NULL; }
-    req[n] = 0;
+    sock_timeouts(fd, 15, 10);          /* a slow/dead client can't wedge this thread forever */
+    char req[2048];
+    size_t rn = 0; ssize_t n;
+    /* Read until the request LINE is complete — weak WiFi can fragment the header across TCP
+     * segments, and a single read() could truncate "GET /radar/strea" and misroute it to the
+     * index page. Loop until we have a CRLF (or the buffer fills / the peer stops / RCVTIMEO). */
+    while (rn < sizeof(req) - 1) {
+        n = read(fd, req + rn, sizeof(req) - 1 - rn);
+        if (n <= 0) break;
+        rn += (size_t)n;
+        req[rn] = 0;
+        if (strstr(req, "\r\n")) break;
+    }
+    if (rn == 0) { close(fd); return NULL; }
+    req[rn] = 0;
 
     if (has(req, "/rec/"))           handle_rec(fd, req);
     else if (has(req, "/rstats"))    handle_rstats(fd);
