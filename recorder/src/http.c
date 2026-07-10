@@ -351,14 +351,21 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         query_get(qs, "sid", sid, sizeof sid);
         if (!sid[0]) { send_json(fd, 400, "{\"err\":\"sid=\"}"); return; }
         int pct = 0, st = transcode_status(sid, &pct);
-        if (st == 2 && transcode_mp4_path(sid, p, sizeof p) == 0)
+        if (st == 2 && transcode_mp4_path(sid, p, sizeof p) == 0) {
+            send_file_range(fd, p, "video/mp4", range);   /* current (capped) build */
+        } else if (transcode_mp4_path(sid, p, sizeof p) == 0) {
+            /* A pre-cap (stale) mp4 exists: serve it NOW so native is never hidden
+             * behind a slow re-encode, and rebuild the capped version in the
+             * background for the next open. (Regression fix: the version stamp used
+             * to hide old movies for minutes while they rebuilt.) */
+            transcode_request(sid);
             send_file_range(fd, p, "video/mp4", range);
-        else if (st == 1) {                               /* still encoding */
+        } else if (st == 1) {                             /* nothing on disk yet, still encoding */
             char b[64]; snprintf(b, sizeof b, "{\"building\":true,\"pct\":%d}", pct);
             send_head(fd, 202, "Accepted", "application/json", (long)strlen(b));
             if (write(fd, b, strlen(b)) < 0) {}
         } else {
-            transcode_request(sid);                       /* kick it, tell client to wait */
+            transcode_request(sid);                       /* first-ever build; tell client to wait */
             send_json(fd, 202, "{\"building\":true,\"pct\":0}");
         }
     } else if (!strcmp(path, "/export")) {

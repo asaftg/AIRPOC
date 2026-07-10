@@ -63,7 +63,9 @@ a native replay is instant and no transcode CPU spike ever lands while an operat
 is live; a replay open still builds it on demand if missing. Each mp4 is stamped
 with an encoder version (`native.mp4.ver`); when the version bumps, already-cached
 mp4s are treated as stale and rebuilt on open, so **older recordings pick up encode
-fixes too** rather than keeping a superseded file. The browser plays it with
+fixes too** rather than keeping a superseded file. A stale mp4 is **served
+immediately** while the capped rebuild runs in the background (never hidden behind
+the slow re-encode); the next open gets the upgraded file. The browser plays it with
 `<video src=/replay/native.mp4?sid=…>` — buffered, smooth, full quality, instant
 seek, and ~400× smaller on the wire than raw frames.
 - `GET /replay/native.mp4?sid=<sid>` — the cached MP4 with HTTP Range (206) for
