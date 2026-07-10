@@ -106,13 +106,16 @@ relays the replay MJPEG stream). On connect failure: `502` with
     recorder auto-detected its tone map diverging from the EO feed), show a small
     caveat badge ("tone map differs from live feed") instead of presenting it as
     exact. `unchecked` just means no comparable frame existed — no badge needed.
-- **Detection boxes in replay:** poll `/rec/replay/det` exactly like the live
-  detector feed — it returns the recorded EO-detector frame JSON at ≤ the
-  playback clock (same schema: `dets[]` with `cls`/`conf`/`px`/`ang`, plus
-  `"replay":true`), so point your existing detection overlay at it and the boxes
-  draw with no other change. `px` is native 1440×1088 pixels; apply the same
-  zoom/letterbox mapping you use live. 404 = the session has no detections
-  (hide the overlay). Detections follow the same seek/scrub/pause clock as video.
+- **Detection boxes in replay — use the SSE stream, not the poll.** Live det is
+  `EventSource("/det/stream")` (~15/s); a 150 ms poll of `/rec/replay/det` shows
+  only ~6-7/s so the boxes visibly lag the moving object under 60 fps video. In
+  replay open `EventSource("/rec/replay/det/stream")` with your existing
+  `onDetFrame` handler instead of `setInterval(pollDetReplay, …)`; it pushes every
+  recorded detector frame paced to the playback clock (same schema: `dets[]` with
+  `cls`/`conf`/`px`/`ang`, plus `"replay":true`), honors pause/seek/rate, and
+  closes on replay exit like the live `detES`. `px` is native 1440×1088; apply the
+  same zoom/letterbox mapping you use live. Keep `/rec/replay/det` (one frame at
+  ≤ clock, 404 = no detections) only as an SSE-unsupported fallback.
 - Transport bar under the video: play/pause → `/rec/replay/ctl?play=1|pause=1`;
   rate cycle 0.5/1/2/4× → `rate=`; frame step ⏮⏭ → `step=-1|1`; range-input
   timeline (`max=dur_ms`, `oninput` throttled ≥80 ms → `seek=<ms>`, suppress

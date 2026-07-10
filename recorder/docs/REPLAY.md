@@ -128,7 +128,8 @@ Replay:
 | `GET /replay/stream` | paced MJPEG of the recorded display JPEGs |
 | `GET /replay/radar/stream` | **SSE** push of every recorded radar frame paced to the clock — the replay twin of the live `/radar/stream`; use this so replay matches the live ~26 Hz scope (the poll below only samples ~8 Hz) |
 | `GET /replay/radar` | one recorded radar frame at ≤ clock (schema of radar/docs/INTEGRATION.md + `"replay":true`); poll fallback |
-| `GET /replay/det` | recorded EO-detector frame JSON at ≤ clock (+ `"replay":true`); 404 if the session has no detections |
+| `GET /replay/det/stream` | **SSE** push of every recorded detector frame paced to the clock — the replay twin of the live `/det/stream`; use this so replay boxes track at the recorded ~15 Hz instead of lagging behind a 150 ms poll |
+| `GET /replay/det` | one recorded EO-detector frame at ≤ clock (+ `"replay":true`); 404 if the session has no detections; poll fallback |
 | `GET /replay/rstats` | recorded radar daemon /stats at ≤ clock |
 | `GET /replay/stats` | `{replay:true, replay_state:{sid,name,t_ms,dur_ms,playing,rate,t_wall_ms,frame_i,frames}, eo:<recorded>, app:<recorded>}` |
 | `GET /replay/state` | just `replay_state` — the 150 ms transport-bar poll |

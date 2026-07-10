@@ -890,3 +890,51 @@ void replay_radar_stream(int fd)
     g_rp.pushers--;
     pthread_mutex_unlock(&g_rp.lk);
 }
+
+/* Detection SSE push — the replay twin of the live `/det/stream`. Live detector
+ * boxes are SSE-pushed (~15/s); a 150 ms replay poll shows only ~6-7/s, so the
+ * boxes visibly lag the moving object under 60 fps video. Emit each recorded
+ * detector frame as the playback clock crosses it (same schema + "replay":true
+ * as /replay/det), so replay boxes track at the recorded rate like live. */
+void replay_det_stream(int fd)
+{
+    static const char *head =
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if (write(fd, head, strlen(head)) < 0) return;
+
+    pthread_mutex_lock(&g_rp.lk);
+    unsigned gen = g_rp.gen;
+    g_rp.pushers++;
+    long last = -2;
+
+    while (g_rp.open && g_rp.gen == gen) {
+        int64_t t = clock_now();
+        long i = rchan_at(&g_rp.det, t);
+        if (i < 0) i = g_rp.det.n ? 0 : -1;               /* before first: hold the first */
+        if (i >= 0 && i != last) {
+            last = i;
+            uint32_t plen;
+            const uint8_t *p = rchan_payload(&g_rp.det, i, &plen, NULL);
+            if (p && plen >= 2 && p[0] == '{') {
+                pthread_mutex_unlock(&g_rp.lk);           /* pushers>0 keeps mmap valid */
+                char pre[32];
+                int pn = snprintf(pre, sizeof pre, "data: {\"replay\":true,");
+                int bad = write(fd, pre, (size_t)pn) != pn ||
+                          write(fd, p + 1, plen - 1) != (ssize_t)(plen - 1) ||
+                          write(fd, "\n\n", 2) != 2;
+                pthread_mutex_lock(&g_rp.lk);
+                if (bad) break;
+            }
+            continue;
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 5000000;
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+        pthread_cond_timedwait(&g_rp.cv, &g_rp.lk, &ts);
+    }
+    g_rp.pushers--;
+    pthread_mutex_unlock(&g_rp.lk);
+}
