@@ -1200,6 +1200,15 @@
   function openReplay(s) {
     if (opening) return;                                 /* ignore double-taps while an open is in flight */
     opening = true;
+    /* Free browser connection slots BEFORE the open fetch. HTTP/1.1 caps ~6 sockets per host and
+     * the console holds long-lived streams (MJPEG + radar/det SSE) — idle in the library, pointing
+     * at the frozen producers — so the open request would queue behind them and hit the 9 s
+     * timeout ("recorder didn't respond"). Drop them now; they're reopened as replay streams on
+     * success (or as live streams by closeReplay on exit). */
+    if (radarES) { radarES.close(); radarES = null; }
+    if (detES) { detES.close(); detES = null; }
+    stopReplayRadarPoll(); stopReplayDetPoll();
+    $("video").src = BLANK;
     var done = false;
     var fin = function () { if (done) return false; done = true; clearTimeout(guard); opening = false; return true; };
     var guard = setTimeout(function () {                 /* recorder hung/slow -> free the button + tell the user */
