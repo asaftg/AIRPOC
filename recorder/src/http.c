@@ -352,12 +352,10 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         if (!sid[0]) { send_json(fd, 400, "{\"err\":\"sid=\"}"); return; }
         int pct = 0, st = transcode_status(sid, &pct);
         if (st == 2 && transcode_mp4_path(sid, p, sizeof p) == 0) {
-            send_file_range(fd, p, "video/mp4", range);   /* current (capped) build */
-        } else if (transcode_mp4_path(sid, p, sizeof p) == 0) {
-            /* A pre-cap (stale) mp4 exists: serve it NOW so native is never hidden
-             * behind a slow re-encode, and rebuild the capped version in the
-             * background for the next open. (Regression fix: the version stamp used
-             * to hide old movies for minutes while they rebuilt.) */
+            /* A playable mp4 exists — serve it now. transcode_request is a no-op if
+             * it is the current (capped) build, and kicks a background upgrade if it
+             * is a stale pre-cap file, so the next open gets the fixed one without
+             * ever hiding native behind the slow re-encode. */
             transcode_request(sid);
             send_file_range(fd, p, "video/mp4", range);
         } else if (st == 1) {                             /* nothing on disk yet, still encoding */

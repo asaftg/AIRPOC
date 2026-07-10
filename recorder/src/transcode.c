@@ -58,7 +58,13 @@ int transcode_mp4_path(const char *sid, char *path, size_t plen)
 
 int transcode_status(const char *sid, int *pct)
 {
-    if (mp4_current(sid)) { if (pct) *pct = 100; return 2; }   /* stale mp4 → not ready, rebuild */
+    /* "ready" = a playable mp4 is on disk, current OR a stale pre-cap build. A
+     * stale file is upgraded invisibly in the background (see the serve handler);
+     * it must NOT report "building", or the console hides native the whole time a
+     * perfectly playable file is sitting right there. "building" means truly no
+     * file yet. */
+    char p[640];
+    if (transcode_mp4_path(sid, p, sizeof p) == 0) { if (pct) *pct = 100; return 2; }
     pthread_mutex_lock(&g_lk);
     int st = (!strcmp(g_job.sid, sid)) ? g_job.state : 0;
     if (pct) *pct = (!strcmp(g_job.sid, sid)) ? g_job.pct : 0;
