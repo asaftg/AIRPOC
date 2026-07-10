@@ -25,6 +25,21 @@ typedef struct {
 static Job g_job;               /* one at a time (one replay open at a time) */
 static pthread_mutex_t g_lk = PTHREAD_MUTEX_INITIALIZER;
 
+/* Cancellation: every build captures g_txgen at start and aborts the moment it
+ * changes. Starting a new build or calling transcode_cancel() bumps it, so at
+ * most ONE encode is ever running and closing a replay (or opening another) kills
+ * the in-flight encode instead of leaking a ~2-core ffmpeg per session. */
+static volatile unsigned g_txgen = 0;
+typedef struct { char sid[SID_LEN + 1]; unsigned gen; } BuildArg;
+
+void transcode_cancel(void)
+{
+    pthread_mutex_lock(&g_lk);
+    g_txgen++;                   /* signal any in-flight build_mp4 loop to abort */
+    if (g_job.state == 1) g_job.state = 0;
+    pthread_mutex_unlock(&g_lk);
+}
+
 /* Bump when the encode parameters change so already-cached mp4s auto-rebuild.
  * v1 = uncapped (violated H.264 level, stalled decoders).
  * v2 = capped 20 Mbit/s (fixed stall but too soft).
@@ -91,7 +106,7 @@ static AirecIdxRow *load_idx(const char *dir, const char *chan, long *n)
 /* Build native.mp4 for a session (blocking). pct (optional) tracks progress.
  * Unique tmp per caller so a replay-triggered build and an export build can't
  * clobber each other. Returns 0 on success. */
-static int build_mp4(const char *sid, volatile int *pct)
+static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
 {
     char dir[600];
     snprintf(dir, sizeof dir, "%s/%s", g_rec.root, sid);
@@ -147,6 +162,7 @@ static int build_mp4(const char *sid, volatile int *pct)
     /* frames are stored in segment order, so a single rolling file handle covers
      * ANY number of segments (no fixed cap that would truncate long recordings) */
     for (long i = 0; i < n && ok; i++) {
+        if (g_txgen != gen) { ok = 0; break; }   /* cancelled (replay closed / newer build) */
         AirecIdxRow *r = &rows[i];
         if (r->segment_no != cur_seg) {
             if (cur) fclose(cur);
@@ -182,14 +198,20 @@ static int build_mp4(const char *sid, volatile int *pct)
 
 static void *build_thread(void *arg)
 {
+    BuildArg *ba = arg;
     char sid[SID_LEN + 1];
-    snprintf(sid, sizeof sid, "%s", (char *)arg);
-    free(arg);
-    int rc = build_mp4(sid, &g_job.pct);
+    snprintf(sid, sizeof sid, "%s", ba->sid);
+    unsigned gen = ba->gen;
+    free(ba);
+    int rc = build_mp4(sid, &g_job.pct, gen);
     pthread_mutex_lock(&g_lk);
-    if (!strcmp(g_job.sid, sid)) { g_job.state = rc == 0 ? 2 : -1; if (rc == 0) g_job.pct = 100; }
+    /* only record the result if we're still the current job (not cancelled/superseded) */
+    if (!strcmp(g_job.sid, sid) && g_txgen == gen) {
+        g_job.state = rc == 0 ? 2 : -1;
+        if (rc == 0) g_job.pct = 100;
+    }
     pthread_mutex_unlock(&g_lk);
-    if (rc != 0) fprintf(stderr, "transcode: %s failed\n", sid);
+    if (rc != 0) fprintf(stderr, "transcode: %s failed/cancelled\n", sid);
     return NULL;
 }
 
@@ -198,7 +220,10 @@ int transcode_ensure(const char *sid)
 {
     if (strlen(sid) != SID_LEN || strchr(sid, '/')) return -1;
     if (mp4_current(sid)) return 0;                             /* current build already there */
-    return build_mp4(sid, NULL);
+    pthread_mutex_lock(&g_lk);
+    unsigned gen = ++g_txgen;                                   /* supersede any in-flight build */
+    pthread_mutex_unlock(&g_lk);
+    return build_mp4(sid, NULL, gen);
 }
 
 void transcode_request(const char *sid)
@@ -208,10 +233,12 @@ void transcode_request(const char *sid)
 
     pthread_mutex_lock(&g_lk);
     if (!strcmp(g_job.sid, sid) && g_job.state == 1) { pthread_mutex_unlock(&g_lk); return; }
+    unsigned gen = ++g_txgen;                                  /* cancel any other in-flight build (cap to 1) */
     snprintf(g_job.sid, sizeof g_job.sid, "%s", sid);
     g_job.state = 1; g_job.pct = 0;
-    char *arg = strdup(sid);
-    if (pthread_create(&g_job.tid, NULL, build_thread, arg) == 0) pthread_detach(g_job.tid);
+    BuildArg *arg = malloc(sizeof *arg);
+    if (arg) { snprintf(arg->sid, sizeof arg->sid, "%s", sid); arg->gen = gen; }
+    if (arg && pthread_create(&g_job.tid, NULL, build_thread, arg) == 0) pthread_detach(g_job.tid);
     else { g_job.state = -1; free(arg); }
     pthread_mutex_unlock(&g_lk);
 }

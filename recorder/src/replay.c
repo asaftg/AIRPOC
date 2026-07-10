@@ -514,7 +514,13 @@ static int rp_open(const char *sid)
 
     snprintf(g_rp.sid, sizeof g_rp.sid, "%s", sid);
     snprintf(g_rp.name, sizeof g_rp.name, "%s", name);
-    if (has_y10) transcode_request(sid);        /* start the smooth-play MP4 now */
+    /* Do NOT transcode on open. The console defaults replays to the display view;
+     * a full libx264 encode (~2 cores) per open — that close() never killed —
+     * stacked up and pegged the box, freezing the live camera. The native mp4 is
+     * pre-built at save time and otherwise built on demand only when the client
+     * actually requests native (see the /replay/native.mp4 handler). Cancel any
+     * encode left running from a prior session so at most one ever runs. */
+    transcode_cancel();
     g_rp.open = 1;
     g_rp.rate = 1.0;
     clock_set(0, 0);
@@ -523,6 +529,7 @@ static int rp_open(const char *sid)
 
 void replay_close(void)
 {
+    transcode_cancel();                          /* kill the in-flight native encode, if any */
     pthread_mutex_lock(&g_rp.lk);
     g_rp.gen++;
     pthread_cond_broadcast(&g_rp.cv);
