@@ -825,71 +825,60 @@
     else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
     renderTargetList(d); draw(true, true);
   }
+  /* NaN-safe JSON. The feeds/recorder occasionally emit bare NaN/Infinity (invalid JSON), which
+   * makes JSON.parse throw and silently freezes an overlay on its last frame — the scope then
+   * quietly lies. Parse normally; on failure coerce NaN/Infinity to null and retry so one bad
+   * field can't stall the view. Returns null only if truly unparseable. */
+  function parseJSONsafe(t) {
+    try { return JSON.parse(t); }
+    catch (e) { try { return JSON.parse(String(t).replace(/-?\bInfinity\b/g, "null").replace(/\bNaN\b/g, "null")); } catch (e2) { return null; } }
+  }
   /* Live radar is PUSHED over SSE (/radar/stream) at the sensor's native rate — no polling,
-   * so the display matches the sensor instead of an 8 Hz sample. pollRadar is used ONLY in
-   * replay, where frames come from the recorder over the replay endpoint. */
+   * so the display matches the sensor instead of an 8 Hz sample. Replay radar is POLLED
+   * (self-chaining) — see the replay-overlays block below. */
   var radarES = null;
   function openRadarStream() {
     if (radarES) { radarES.close(); radarES = null; }
     radarES = new EventSource("/radar/stream");
-    radarES.onmessage = function (e) { if (replaying) return; try { onRadarFrame(JSON.parse(e.data)); } catch (x) {} };
+    radarES.onmessage = function (e) { if (replaying) return; var f = parseJSONsafe(e.data); if (f) onRadarFrame(f); };
     radarES.onerror = function () { if (!replaying) onRadarFrame({ connected: false }); };   /* auto-reconnects */
   }
-  function pollRadar() {   /* replay fallback only — see openReplayRadarStream */
-    if (!replaying) return;
-    fetch(API.radar).then(function (r) { return r.json(); }).then(onRadarFrame).catch(function () {});
+  /* ---- Replay overlays are POLLED, never SSE --------------------------------------------------
+   * Rock-solid connection budget: a replay holds exactly ONE long-lived socket — the mp4 <video>.
+   * Radar + det overlays ride SELF-CHAINING polls: each fetch schedules the next only AFTER it
+   * settles (+ a floor gap), so at most one request per stream is ever in flight. That cannot pile
+   * up sockets on a lossy link the way a fixed-interval poll (stacks when a fetch outlives its
+   * period) or a long-lived SSE (slow to tear down -> FIN-WAIT pileup, the "can't enter a movie
+   * after 3-4" bug) does. Fast link -> self-paces to ~14 Hz; bad link -> slows, never leaks. */
+  var REPLAY_GAP = 70;                                    /* ms floor between overlay polls */
+  var radarPollT = null, radarPolling = false;
+  function stopReplayRadarPoll() { radarPolling = false; if (radarPollT) { clearTimeout(radarPollT); radarPollT = null; } }
+  function openReplayRadarStream() {                      /* name kept; now a self-chaining poll */
+    if (radarES) { radarES.close(); radarES = null; }     /* ensure no live radar SSE lingers */
+    stopReplayRadarPoll(); radarPolling = true; pumpReplayRadar();
   }
-  /* Replay radar: prefer the recorder's SSE push (/rec/replay/radar/stream) so replay radar
-   * runs at the recorded sensor rate — matching live — instead of the old 120 ms (~8 Hz)
-   * poll. pollRadar stays as a fallback for a recorder that hasn't shipped the replay SSE
-   * endpoint yet: it starts only if the SSE 404s or never delivers a frame. */
-  var radarReplayPoll = null;
-  function stopReplayRadarPoll() { if (radarReplayPoll) { clearInterval(radarReplayPoll); radarReplayPoll = null; } }
-  function startReplayRadarPoll() { if (replaying && !radarReplayPoll) radarReplayPoll = setInterval(pollRadar, 120); }
-  function openReplayRadarStream() {
-    if (radarES) { radarES.close(); radarES = null; }
-    stopReplayRadarPoll();
-    var got = false;
-    radarES = new EventSource("/rec/replay/radar/stream");
-    radarES.onmessage = function (e) {
-      if (!replaying) return;
-      got = true; stopReplayRadarPoll();                 /* SSE is live — drop the fallback poll */
-      try { onRadarFrame(JSON.parse(e.data)); } catch (x) {}
-    };
-    /* A 404 (endpoint not shipped) fails the EventSource permanently (no retry storm) → poll. */
-    radarES.onerror = function () { if (!got) startReplayRadarPoll(); };
-    /* 200 but silent (endpoint present, no frames yet): poll if nothing arrived shortly. */
-    setTimeout(function () { if (!got) startReplayRadarPoll(); }, 1200);
+  function pumpReplayRadar() {
+    if (!replaying || !radarPolling) return;
+    fetch(API.radar).then(function (r) { if (!r.ok) throw 0; return r.text(); })
+      .then(function (t) { if (replaying) { var f = parseJSONsafe(t); if (f) onRadarFrame(f); } })
+      .catch(function () {})
+      .then(function () { if (replaying && radarPolling) radarPollT = setTimeout(pumpReplayRadar, REPLAY_GAP); });
   }
-  /* replay detector boxes — polls the recorder's timeline-aligned det message. Written
-   * ahead of the recorder shipping /replay/det: a 404 just means no boxes (no errors),
-   * so recorded detections appear here the moment the recorder adds the channel. */
-  var detReplayBackoff = 0;                        /* 404 (channel not shipped yet) → retry every 5s, not 7/s */
-  function pollDetReplay() {
-    if (!replaying || Date.now() < detReplayBackoff) return;
-    fetch("/rec/replay/det").then(function (r) { if (!r.ok) throw 0; return r.json(); })
-      .then(function (m) { if (replaying) { lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); } })
-      .catch(function () { detReplayBackoff = Date.now() + 5000; if (replaying && lastDet) { lastDet = null; draw(true, false); } });
+  var detPollT = null, detPolling = false, detGap = REPLAY_GAP;
+  function stopReplayDetPoll() { detPolling = false; if (detPollT) { clearTimeout(detPollT); detPollT = null; } }
+  function openReplayDetStream() {                         /* name kept; now a self-chaining poll */
+    if (detES) { detES.close(); detES = null; } lastDet = null;
+    stopReplayDetPoll(); detGap = REPLAY_GAP; detPolling = true; pumpReplayDet();
   }
-  /* Replay detector boxes: prefer the recorder's SSE push (/rec/replay/det/stream) — paced to
-   * the playback clock (pause/seek/rate) so boxes update smoothly instead of lagging on a poll.
-   * pollDetReplay stays as a fallback if the SSE 404s or is silent. Mirrors the replay radar. */
-  var detReplayPoll = null;
-  function stopReplayDetPoll() { if (detReplayPoll) { clearInterval(detReplayPoll); detReplayPoll = null; } }
-  function startReplayDetPoll() { if (replaying && !detReplayPoll) detReplayPoll = setInterval(pollDetReplay, 150); }
-  function openReplayDetStream() {
-    if (detES) { detES.close(); detES = null; }
-    stopReplayDetPoll();
-    var got = false;
-    detES = new EventSource("/rec/replay/det/stream");
-    detES.onmessage = function (e) {
-      if (!replaying) return;
-      got = true; stopReplayDetPoll();
-      try { var m = JSON.parse(e.data); lastDet = (m && (m.dets || m.movers)) ? m : null; } catch (x) {}
-      draw(true, false);
-    };
-    detES.onerror = function () { if (!got) startReplayDetPoll(); };
-    setTimeout(function () { if (!got) startReplayDetPoll(); }, 1200);
+  function pumpReplayDet() {
+    if (!replaying || !detPolling) return;
+    fetch("/rec/replay/det").then(function (r) {
+        if (r.status === 404) { detGap = 5000; return null; }   /* channel not shipped -> slow probe, not 14/s */
+        detGap = REPLAY_GAP; if (!r.ok) throw 0; return r.text();
+      })
+      .then(function (t) { if (replaying && t !== null) { var m = parseJSONsafe(t); lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); } })
+      .catch(function () { if (replaying && lastDet) { lastDet = null; draw(true, false); } })
+      .then(function () { if (replaying && detPolling) detPollT = setTimeout(pumpReplayDet, detGap); });
   }
 
   /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
@@ -1099,6 +1088,10 @@
 
   /* ── LIBRARY ── */
   $("libbtn").onclick = function () {
+    /* If we're inside a replay, LIBRARY means EXIT-to-list — run the FULL replay teardown
+     * (closes the state poll + overlay polls + sends close=1 to the recorder), otherwise the
+     * poll and the recorder session leak. closeReplay already returns to the library list. */
+    if (replaying) { closeReplay(); return; }
     $("library").hidden = false;
     /* The library list needs NONE of the live media streams, and a browser only allows ~6
      * sockets per host. Holding video+radar+det open here leaves too few slots for the
@@ -1262,7 +1255,6 @@
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
-      detReplayBackoff = 0;                                          /* re-probe /replay/det for this session */
       resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
