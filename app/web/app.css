@@ -46,12 +46,8 @@ body.day{
 .pill .rssi{color:var(--muted);font-size:10px;letter-spacing:.5px}
 .pill .sig{display:inline-flex;align-items:center;margin-right:6px}
 .pill .sig svg{display:block}
-.pill .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
 .pill.on{background:#1a3d24;color:var(--on);border-color:#2e6b3f}
-.pill.on .dot{background:var(--on);box-shadow:0 0 6px rgba(108,223,138,.6)}
 .pill.on b{color:var(--on)}
-.pill.err{background:#4d1a1a;color:var(--err);border-color:#7a2a2a}
-.pill.err .dot{background:var(--err)}
 /* SAT — the link can't carry the selected video (delivered < half produced): amber wins
  * over the green .on so a starving link is unmistakable */
 .pill.sat{background:#4a3413;color:#e0a94a;border-color:#8a6420}
@@ -163,19 +159,14 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 .big small{font-size:9px;color:var(--dim);letter-spacing:.5px}
 .big:hover{border-color:var(--amber)}
-.big.active{background:var(--amber);color:var(--bg);border-color:var(--amber)}
-.big.active small{color:var(--bg)}
 .big.man{border-color:var(--amber)}.big.man small{color:var(--amber)}
 .big.auto small{color:var(--on)}
 #light.firing{background:#5a1a1a;color:#ffb4b4;border-color:#7a2a2a;animation:pulse 1s infinite}
 #light.firing small{color:#ffb4b4}
-#rec.active{background:#ff3a3a;color:var(--bg);border-color:#ff3a3a}
 .track-hint{position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:4;
   background:rgba(0,0,0,.6);border:1px solid var(--amber);color:var(--amber);
   padding:4px 12px;border-radius:3px;font-size:12px;letter-spacing:1px}
 #stage.manual #eo{cursor:crosshair}
-.tag{font-size:10px;letter-spacing:1px;color:var(--on);border:1px solid var(--bd2);border-radius:2px;padding:1px 6px;margin-left:6px}
-.tag.man{color:var(--amber);border-color:var(--amber)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
 
 #zoombar{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;

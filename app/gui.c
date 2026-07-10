@@ -46,7 +46,7 @@ static volatile int g_engage    = -1;     /* engaged target tid, -1 = none      
 static volatile unsigned long long g_stream_bytes = 0;  /* total video bytes relayed → true Mb/s meter */
 static volatile unsigned long long g_stream_frames = 0; /* total frames written to clients → delivered-fps meter */
 static char            g_wifi_if[32] = "";              /* WiFi iface name, or "" if none associated */
-static volatile double g_rssi = 0, g_link_mbps = -1;    /* RSSI dBm + negotiated PHY rate (Mb/s) */
+static volatile double g_rssi = 0;                      /* RSSI dBm */
 static volatile double g_cpu_pct = -1;                  /* aggregate CPU busy %, sampled ~1s */
 static volatile double g_gpu_pct = -1;                  /* GPU load %, 1s mean of 100ms samples */
 static volatile double g_tot_usb_mbps = -1, g_tot_wifi_mbps = -1;  /* whole-interface tx Mb/s —
@@ -140,16 +140,6 @@ static int read_wifi(char *ifn, size_t n, double *rssi)
     }
     fclose(f); return got;
 }
-static double read_link_rate(const char *ifn)              /* negotiated tx bitrate, Mb/s */
-{
-    if (!ifn || !*ifn) return -1.0;
-    char cmd[96]; snprintf(cmd, sizeof cmd, "iw dev %s link 2>/dev/null", ifn);
-    FILE *p = popen(cmd, "r");
-    if (!p) return -1.0;
-    char l[256]; double r = -1.0;
-    while (fgets(l, sizeof l, p)) { char *b = strstr(l, "tx bitrate:"); if (b) { r = atof(b + 11); break; } }
-    pclose(p); return r;
-}
 static unsigned long long read_tx_bytes(const char *ifn)
 {
     char p[96]; snprintf(p, sizeof p, "/sys/class/net/%s/statistics/tx_bytes", ifn);
@@ -169,9 +159,8 @@ static void *net_poller(void *a)
     while (g_run) {
         char ifn[32] = ""; double rssi = 0;
         if (read_wifi(ifn, sizeof ifn, &rssi)) {
-            double lr = read_link_rate(ifn);
-            snprintf(g_wifi_if, sizeof g_wifi_if, "%s", ifn); g_rssi = rssi; g_link_mbps = lr;
-        } else { g_wifi_if[0] = 0; g_link_mbps = -1.0; }
+            snprintf(g_wifi_if, sizeof g_wifi_if, "%s", ifn); g_rssi = rssi;
+        } else { g_wifi_if[0] = 0; }
         /* whole-interface tx rates (USB gadget bridge + WiFi) — sees ALL traffic on the
          * operator's link, not just this console's video */
         struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -264,10 +253,9 @@ static void handle_stats(int fd)
     struct sockaddr_in sa; socklen_t sl = sizeof sa;
     if (getsockname(fd, (struct sockaddr *)&sa, &sl) == 0) inet_ntop(AF_INET, &sa.sin_addr, lip, sizeof lip);
     iface_for_ip(lip, lif, sizeof lif);
-    const char *ltype = "wired"; char rssi_s[16] = "null", lrate_s[16] = "null";
+    const char *ltype = "wired"; char rssi_s[16] = "null";
     if (g_wifi_if[0] && !strcmp(lif, g_wifi_if)) {
         ltype = "wifi"; snprintf(rssi_s, sizeof rssi_s, "%.0f", g_rssi);
-        if (g_link_mbps > 0) snprintf(lrate_s, sizeof lrate_s, "%.0f", g_link_mbps);
     } else if (!strncmp(lip, "192.168.55.", 11) || !strncmp(lif, "usb", 3) || !strncmp(lif, "l4tbr", 5)) {
         ltype = "usb";
     }
@@ -282,11 +270,11 @@ static void handle_stats(int fd)
     char body[1100];
     int bl = snprintf(body, sizeof body,
         "{\"eo_connected\":%d,\"mbps\":%.2f,\"tx_fps\":%.0f,\"track\":\"%s\",\"engage\":%d,"
-        "\"tracks\":%s,\"cpu_c\":%s,\"cpu_pct\":%s,\"gpu_pct\":%s,\"ncpu\":%ld,\"link_type\":\"%s\",\"rssi_dbm\":%s,\"link_mbps\":%s,"
+        "\"tracks\":%s,\"cpu_c\":%s,\"cpu_pct\":%s,\"gpu_pct\":%s,\"ncpu\":%ld,\"link_type\":\"%s\",\"rssi_dbm\":%s,"
         "\"link_total_mbps\":%s,"
         "\"batt\":null,\"alt\":null,\"brg\":null,\"rng\":null,\"eo\":%s}\n",
         eoc, mbps, stream_fps(), g_track_man ? "man" : "auto", g_engage,
-        tracks_s, cpu_s, cpp_s, gpp_s, ncpu, ltype, rssi_s, lrate_s,
+        tracks_s, cpu_s, cpp_s, gpp_s, ncpu, ltype, rssi_s,
         tot_s,
         (en > 0 ? eostats : "null"));
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"

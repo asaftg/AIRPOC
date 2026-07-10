@@ -36,7 +36,7 @@
   /* DEV squeezes the layout (it's in-flow, not an overlay) — refit the canvases after the
    * width transition so the EO overlay + radar scope match their new sizes. */
   function syncDev() { $("stage").classList.toggle("devopen", $("dev").classList.contains("open")); setTimeout(redrawAll, 180); }
-  $("devbtn").onclick = function () { $("dev").classList.toggle("open"); syncDev(); };
+  $("devbtn").onclick = function () { var open = $("dev").classList.toggle("open"); syncDev(); if (open) { pollRstats(); pollDstats(); } };   /* seed the DEV sliders on open (they aren't polled while closed) */
   $("devclose").onclick = function () { $("dev").classList.remove("open"); syncDev(); };
   document.querySelectorAll("[data-exp]").forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); $("stage").classList.toggle("rbig"); setTimeout(redrawAll, 20); }; });
 
@@ -288,6 +288,7 @@
   });
   setTimeout(function () { if (!replaying) { rcTouch = Date.now(); ctl("radar_fov=60"); } }, 900);   /* default the radar FOV to ±60° on load */
   function pollRstats() {
+    if (!$("dev").classList.contains("open")) return;   /* only the DEV panel shows these — don't poll when it's closed */
     fetch(API.rstats).then(function (r) { return r.json(); }).then(function (d) {
       if (Date.now() - rcTouch < 1500) return;   /* don't fight an active drag */
       RADARC.forEach(function (c) {
@@ -317,6 +318,7 @@
   });
   function pollDstats() {
     if (replaying) return;
+    if (!$("dev").classList.contains("open")) return;   /* only the DEV panel shows these — don't poll when it's closed */
     fetch("/dstats").then(function (r) { return r.json(); }).then(function (d) {
       var k = d.knobs || {};
       /* measured model rate beside CADENCE (not 60/N — shows the truth when the GPU
@@ -332,7 +334,6 @@
     }).catch(function () {});
   }
 
-  /* ── reserved ── */
   $("to-control").onclick = function () { location.href = "http://" + location.hostname + ":8088/"; };  /* back to the START/STOP launcher */
 
   /* ── target model + selection (daemon schema: class-less objects) ── */
@@ -352,6 +353,7 @@
    * wired yet, so today this is radar-only (conf then range). No GUI-side row hold —
    * the daemon's tracker already confirms/coasts, so rows come straight from the frame. */
   function importance(t) { return (t.fused ? 2e6 : 0) + (t.conf || 0) * 1e3 - t.rng; }
+  var lastTgtHtml = "";
   function renderTargetList(radar) {
     var rows = targets(radar).map(function (t) { return { t: t }; });
     rows.sort(function (a, b) { return importance(b.t) - importance(a.t); });
@@ -362,7 +364,7 @@
     for (var i = 0; i < 5; i++) {
       if (i < rows.length) {
         var r = rows[i], t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
-        out.push('<li class="tgt-row" data-tid="' + t.tid + '" style="border-left-color:' + col + '">'
+        out.push('<li class="tgt-row' + (t.tid === engagedTid ? ' eng' : '') + '" data-tid="' + t.tid + '" style="border-left-color:' + col + '">'
           + '<span class="tid"><span class="swatch" style="background:' + col + '"></span></span>'
           + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
           + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>');
@@ -370,7 +372,8 @@
         out.push('<li class="tgt-row empty"><span class="tid">—</span><span class="meta"></span><span class="rng"></span></li>');
       }
     }
-    $("tgt-list").innerHTML = out.join("");
+    var html = out.join("");
+    if (html !== lastTgtHtml) { $("tgt-list").innerHTML = html; lastTgtHtml = html; }   /* skip the HTML re-parse when nothing changed (was rebuilding ~27x/s) */
   }
   /* No GUI-side persistence: the radar daemon is a temporal tracker now (stable tids,
    * M-of-N confirm, coasting through dropouts, park-hold). "In the frame" already means
