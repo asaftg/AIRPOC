@@ -50,7 +50,29 @@ ensure_reg() {
   local c; c=$(iw reg get 2>/dev/null | awk '/^country/{print $2; exit}'); c="${c%:}"
   [ "$c" = "$COUNTRY" ] || { log "regdomain '$c' -> $COUNTRY (5GHz AP needs a real country)"; iw reg set "$COUNTRY" 2>/dev/null; sleep 1; }
 }
-raise_ap() { ensure_reg; nmcli connection up "$AP_CON" 2>/dev/null; }
+# Raise the AP and VERIFY it actually activated (nmcli can return before the PHY settles, or
+# fail silently right after `iw reg set` resets the radio). One retry. Returns success only when
+# the AP is really the active connection, so callers can trust it and the backstop below works.
+raise_ap() {
+  ensure_reg
+  [ "$(active_con)" = "$AP_CON" ] && return 0
+  nmcli connection up "$AP_CON" 2>/dev/null; sleep 1
+  [ "$(active_con)" = "$AP_CON" ] && return 0
+  nmcli connection up "$AP_CON" 2>/dev/null; sleep 1
+  [ "$(active_con)" = "$AP_CON" ]
+}
+# Wait for the radio iface to exist and be managed by NM before the first tick. Otherwise the
+# first scan (radio not ready yet at boot) finds nothing, auto concludes "no home", and raises
+# the AP even though home WiFi is right there — the "booted to AP instead of home" regression.
+wait_iface() {
+  local st
+  for _ in $(seq 1 30); do
+    st=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | awk -F: -v i="$IFACE" '$1==i{print $2}')
+    [ -n "$st" ] && [ "$st" != "unavailable" ] && return 0
+    sleep 1
+  done
+  return 1
+}
 
 # default AUTO: home WiFi when a known network is in range, else raise the AP. This is the
 # intended field behaviour ("home==wifi, outside==AP") and keeps the Jetson able to reach
@@ -107,8 +129,15 @@ tick() {
       [ "$act" = "$AP_CON" ] || { log "mode=ap -> raising AP"; raise_ap; } ;;
     *)      auto_tick "$act" ;;
   esac
+  # BACKSTOP: never end a tick with no link when an AP is allowed. If the branch above hit a
+  # transient nmcli/scan failure and left the radio idle, raise the AP so the box is always
+  # reachable. (In pinned 'home' mode we honour the pin and never raise the AP.)
+  if [ "$mode" != "home" ] && [ -z "$(active_con)" ]; then
+    log "no active connection after tick -> raising AP (backstop)"; raise_ap
+  fi
   write_status "$mode"
 }
 
 log "started (iface=$IFACE ap=$AP_CON poll=${POLL}s probe=${AP_PROBE_EVERY}s mode-file=$MODE_FILE)"
+wait_iface || log "warn: $IFACE not ready after 30s — proceeding anyway"
 while true; do tick; sleep "$POLL"; done
