@@ -984,7 +984,38 @@
     $("dlg-note").value = "";
     var tw = $("dlg-tags"); tw.innerHTML = "";
     TAGVOCAB.forEach(function (t) { var c = document.createElement("span"); c.className = "tagchip"; c.textContent = t; c.onclick = function () { c.classList.toggle("on"); }; tw.appendChild(c); });
+    $("dlg-discard").style.display = "";                 /* fresh recording -> discard allowed */
     $("recdlg").hidden = false; $("dlg-name").focus();
+  }
+  /* Edit an already-saved recording: same dialog, pre-filled, DISCARD hidden (it would delete);
+   * SAVE just updates name/tags/note. Reuses the pendingSid + dlg-save flow. */
+  function openEditDialog(s) {
+    pendingSid = s.sid;
+    $("dlg-name").value = s.name || "";
+    $("dlg-note").value = s.note || "";
+    var tw = $("dlg-tags"); tw.innerHTML = "";
+    var cur = s.tags || [];
+    var mk = function (t, on) { var c = document.createElement("span"); c.className = "tagchip" + (on ? " on" : ""); c.textContent = t; c.onclick = function () { c.classList.toggle("on"); }; tw.appendChild(c); };
+    TAGVOCAB.forEach(function (t) { mk(t, cur.indexOf(t) >= 0); });
+    cur.filter(function (t) { return TAGVOCAB.indexOf(t) < 0; }).forEach(function (t) { mk(t, true); });   /* keep custom tags */
+    $("dlg-discard").style.display = "none";             /* editing a saved clip -> no delete here */
+    $("recdlg").hidden = false; $("dlg-name").focus();
+  }
+  /* copy to clipboard — works over plain http (the async clipboard API needs a secure context,
+   * which we don't have on the LAN/AP, so fall back to a hidden textarea + execCommand). */
+  function copyText(t) {
+    var ok = function () { toast("Copied: " + t, "ok", 1800); };
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+      navigator.clipboard.writeText(t).then(ok).catch(function () { copyFallback(t, ok); });
+    } else copyFallback(t, ok);
+  }
+  function copyFallback(t, ok) {
+    var ta = document.createElement("textarea"); ta.value = t;
+    ta.style.position = "fixed"; ta.style.top = "-1000px"; ta.setAttribute("readonly", "");
+    document.body.appendChild(ta); ta.select(); try { ta.setSelectionRange(0, t.length); } catch (e) {}
+    var done = false; try { done = document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    done ? ok() : toast("Couldn't copy — select the name manually", "err", 3000);
   }
   function closeSaveDialog() { $("recdlg").hidden = true; pendingSid = null; }
   $("dlg-x").onclick = closeSaveDialog;   /* dismiss leaves the session pending */
@@ -1027,8 +1058,10 @@
     TAGVOCAB.forEach(function (t) { var c = document.createElement("span"); c.className = "tagchip"; c.textContent = t; c.onclick = function () { c.classList.toggle("on"); libTagFilter[t] = c.classList.contains("on"); loadLibrary(); }; w.appendChild(c); });
   }
   function loadLibrary() {
-    var tags = Object.keys(libTagFilter).filter(function (t) { return libTagFilter[t]; }).join(",");
-    fetch("/rec/library?q=" + encodeURIComponent($("lib-q").value || "") + (tags ? "&tags=" + encodeURIComponent(tags) : ""))
+    /* Tag filtering is done CLIENT-SIDE in renderLibrary (every session already carries its
+     * tags), so it can't be broken by query-encoding/proxy quirks — which was why filtering
+     * "lost" all annotations. Only the free-text search still goes to the recorder. */
+    fetch("/rec/library?q=" + encodeURIComponent($("lib-q").value || ""))
       .then(function (r) { return r.json(); }).then(renderLibrary)
       .catch(function () { $("lib-grid").innerHTML = ""; $("lib-empty").hidden = false; $("lib-empty").textContent = "RECORDER NOT CONNECTED"; });
   }
@@ -1038,8 +1071,11 @@
       $("lib-disktext").textContent = Math.round(d.disk_free_gb) + " GB free" + (recState && recState.est_min_remaining ? " · ~" + recState.est_min_remaining + " min" : "");
     }
     var g = $("lib-grid"); g.innerHTML = "";
-    var sessions = d.sessions || []; libSessions = sessions;
-    $("lib-empty").hidden = sessions.length > 0; $("lib-empty").textContent = "No sessions match.";
+    var all = d.sessions || [];
+    var active = Object.keys(libTagFilter).filter(function (t) { return libTagFilter[t]; });   /* AND-match the selected tags */
+    var sessions = active.length ? all.filter(function (s) { var st = s.tags || []; return active.every(function (t) { return st.indexOf(t) >= 0; }); }) : all;
+    libSessions = sessions;   /* the shown set — delete/offload-all act on what's filtered */
+    $("lib-empty").hidden = sessions.length > 0; $("lib-empty").textContent = active.length ? "No sessions match those tags." : "No sessions.";
     sessions.forEach(function (s) { g.appendChild(libCard(s)); });
     updateDelBtn();
   }
@@ -1071,12 +1107,19 @@
       card.appendChild(free);
     }
     var body = document.createElement("div"); body.className = "lib-cardbody";
-    body.innerHTML = '<div class="lib-name">' + esc(s.name || s.sid) + "</div>"
-      + '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
+    var nrow = document.createElement("div"); nrow.className = "lib-namerow";
+    var nm = document.createElement("span"); nm.className = "lib-name"; nm.textContent = s.name || s.sid; nm.title = s.name || s.sid;
+    var eb = document.createElement("button"); eb.className = "lib-act"; eb.textContent = "✎"; eb.title = "edit name / tags / note";
+    eb.onclick = function (e) { e.stopPropagation(); openEditDialog(s); };
+    var cpb = document.createElement("button"); cpb.className = "lib-act"; cpb.textContent = "⧉"; cpb.title = "copy name";
+    cpb.onclick = function (e) { e.stopPropagation(); copyText(s.name || s.sid); };
+    nrow.appendChild(nm); nrow.appendChild(eb); nrow.appendChild(cpb); body.appendChild(nrow);
+    var rest = document.createElement("div");
+    rest.innerHTML = '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
       + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
       + '<div class="lib-cardtags">' + (s.tags || []).map(function (t) { return '<span class="tagchip">' + esc(t) + "</span>"; }).join("") + "</div>"
       + (s.note ? '<div class="lib-note">' + esc(s.note) + "</div>" : "");
-    card.appendChild(body);
+    body.appendChild(rest); card.appendChild(body);
     card.onclick = function () { openReplay(s); };
     return card;
   }

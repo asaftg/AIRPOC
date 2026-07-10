@@ -293,7 +293,11 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
 .lib-poster.radaronly{display:flex;align-items:center;justify-content:center;color:var(--cyan);font-size:11px;letter-spacing:1px;
   background:radial-gradient(circle at 50% 100%,rgba(0,212,255,.08),transparent 70%)}
 .lib-cardbody{padding:8px 10px;display:flex;flex-direction:column;gap:5px}
-.lib-name{font-size:13px;color:var(--fg);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-namerow{display:flex;align-items:center;gap:6px}
+.lib-name{font-size:13px;color:var(--fg);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto;min-width:0}
+.lib-act{flex:0 0 auto;background:transparent;border:1px solid var(--bd2);color:var(--muted);border-radius:3px;
+  width:24px;height:24px;line-height:1;font-size:13px;cursor:pointer;padding:0}
+.lib-act:hover{color:var(--fg);border-color:var(--amber)}
 .lib-meta{font-size:11px;color:var(--muted);display:flex;gap:8px}
 .lib-size b{color:var(--fg)}.lib-size .raw{color:var(--dim)}
 .lib-cardtags{display:flex;flex-wrap:wrap;gap:3px}
