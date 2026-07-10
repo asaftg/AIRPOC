@@ -14,6 +14,7 @@
   var trackMode = "auto", engagedTid = null, sentEngage = null;
   var illumMode = "auto";
   var lastStats = {}, lastRadar = null;
+  var eoDownN = 0, nextLiveHeal = 0, lastEoc = true;   /* live-view EO self-heal (see poll) */
   var rHz = 0, rLastFid = null, rLastTs = 0;   /* radar frame-rate (Hz) from frame_id/timestamp deltas */
   /* poll endpoints — swapped to /rec/replay/* in replay so the same renderers show recordings */
   var API = { stream: "/stream", radar: "/radar", stats: "/stats", rstats: "/rstats" };
@@ -724,6 +725,23 @@
       $("eo-tl").style.display = (replaying && !replayHasEO) ? "none" : "";   /* no video → hide the recorded EO status line */
       var hfov = (typeof eo.hfov === "number") ? eo.hfov : null;
       $("eo-scrim").hidden = eoc; $("eo").classList.toggle("hide-video", !eoc);
+      /* Live-view self-heal: in the real-time view (not replay, library closed) the producers
+       * must be up. If EO is down for ~2.5 s — camera left suspended after a page refresh in the
+       * library, a missed resume, or a crashed producer — bring the stack back via the launcher
+       * (rate-limited to once / 30 s). When it recovers, force a FRESH /stream connection since a
+       * stalled MJPEG <img> won't reconnect on its own. */
+      if (!replaying && $("library").hidden) {
+        if (!eoc) {
+          if (++eoDownN >= 16 && Date.now() > nextLiveHeal) {
+            nextLiveHeal = Date.now() + 30000;
+            fetch(location.protocol + "//" + location.hostname + ":8088/resume", { mode: "no-cors" }).catch(function () {});
+          }
+        } else {
+          if (!lastEoc) $("video").src = "/stream?t=" + Date.now();   /* just recovered -> reconnect the live MJPEG */
+          eoDownN = 0;
+        }
+        lastEoc = eoc;
+      }
       /* link chip: signal bars (wifi) · type · live Mb/s · delivered fps */
       $("v-ltype").textContent = d.link_type ? d.link_type.toUpperCase() : "LINK";
       $("v-link").textContent = num(d.mbps, 1) + " Mb/s";
