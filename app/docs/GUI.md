@@ -41,17 +41,44 @@ live controls (but keeps DEV ✕ / RETURN TO CONTROL usable). A striped amber ba
 transport bar (play/pause/step/rate/scrub/hover, NATIVE↔DISPLAY when a native channel was
 recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORDED**.
 
+- **EO video source in replay.** DISPLAY channel = the paced MJPEG `/rec/replay/stream` (the
+  recorder caps it ~20 fps for the link). NATIVE = the recorded full-res **60 fps**: the
+  console plays the recorder's cached **H.264 `/rec/replay/native.mp4`** in a `<video>`
+  element **slaved to the transport clock** (currentTime nudged to `rs.t_ms`, playbackRate =
+  rate, play/pause follow state) so the server-clock-paced overlays stay in sync. The mp4 is
+  transcoded on demand — while it builds, a **"PREPARING NATIVE 60 fps · N%"** badge shows
+  and the paced MJPEG plays meanwhile; readiness is probed from the endpoint (1-byte range:
+  200/206 ready, 202 building{pct}). If the mp4 can't decode it falls back to MJPEG.
+- **Replay radar + detections push over SSE**, not polls — `/rec/replay/radar/stream` and
+  `/rec/replay/det/stream`, each paced to the playback clock (honours pause/seek/rate) so the
+  scope and boxes track smoothly. Each keeps its poll (`/rec/replay/radar`, `/rec/replay/det`)
+  as a fallback that starts only if the SSE 404s or is silent.
+- **Self-heal.** If the recorder has no open session (it restarted, or a reboot) but the
+  console still thinks it's replaying, every `/rec/replay/*` poll 404-floods and library card
+  taps do nothing. `pollReplayState` detects `open:false` (after a few consecutive polls) and
+  resets to live automatically — no need to leave the library/app.
+- **Live sensors are frozen while reviewing.** Entering the LIBRARY calls the launcher
+  `:8088/suspend` (STOPs eo_pipeline/radar/detector) so the native-mp4 transcode + playback
+  get the whole box (avoids overloading/brown-out); EXIT-to-live (lib-close) calls `/resume`
+  (relaunches them). Page-hide also resumes so a closed tab can't leave them down.
+
 ## Zoom + ROI
-- **EO zoom ±** — live: forwards `zoom=` to the EO feed (source crop). Replay: a
-  client-side CSS zoom on the recorded frame (click to recenter).
+- **EO zoom ±** — live: forwards `zoom=` to the EO feed (source crop). Replay: a client-side
+  CSS zoom on the recorded frame, applied to the shown video (MJPEG `<img>` or native
+  `<video>`) **and the overlay canvas together** so the boxes track (click to recenter). The
+  zoom readout in **DISPLAY** replay shows the zoom the frame was **captured** at (from the
+  recorded stats) × any client digital zoom — a clip shot at 2× reads "2.0×". **NATIVE** is
+  the full frame, so its readout is pure client digital zoom.
 - **ROI** (top bar) — press to arm, drag a box on the **EO or radar**, it zooms into that
-  region; press again to reset. EO = CSS scale to the box; radar = a pan+zoom world window.
+  region; press again to reset. Live EO = CSS scale to the box; in **replay** the EO ROI sets
+  the digital-zoom level on all layers (video + overlay); radar = a pan+zoom world window.
   Works live and in replay; resets on replay enter/leave. Purely client-side rendering.
 
 ## Radar rendering (console-owned)
 - **Push, not poll.** Live radar arrives over **SSE `/radar/stream`** at the sensor's
-  native rate (~27 Hz) — no polling. Replay radar comes from the recorder over the replay
-  endpoint (polled). Frames are the daemon's schema, drawn verbatim.
+  native rate (~27 Hz). Replay radar also pushes over **SSE `/rec/replay/radar/stream`**
+  (paced to the playback clock), with a `/rec/replay/radar` poll fallback. Frames are the
+  daemon's schema, drawn verbatim.
 - **FOV clip.** Only points/targets whose azimuth is within **±FOV** (`fov_half_deg`) are
   drawn — tracks the FOV knob live and the recorded value in replay.
 - **Range / zoom.** `AUTO · 50 · 100 · 250 · 500 m` selector (top-left of the scope). AUTO
@@ -89,10 +116,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 - **MARK style** (DEV → DETECTOR → MARK): `BOX` = full bounding boxes; `SEEKER` = a heavy
   gapped cross over a dark halo on the target centroid, short labels (`V62` / `H55` /
   `M·7`). All labels get the dark halo in both modes — display-only, persisted per browser.
-- **Replay**: the console polls `/rec/replay/det` (timeline-aligned det message) and draws
-  recorded boxes over the recorded video — mapping uses the recorded zoom for the display
-  channel and no crop for NATIVE (full-frame) playback. Until the recorder ships the det
-  channel + `/replay/det`, the poll 404s quietly (5 s backoff) and replay shows no boxes.
+- **Replay**: recorded boxes push over **SSE `/rec/replay/det/stream`** (timeline-aligned,
+  paced to the playback clock), with a `/rec/replay/det` poll fallback — same overlay, same
+  mapping (recorded zoom for the display channel, no crop for NATIVE full-frame playback).
 - Heads-up: until the trained mono model lands, the stock COCO placeholder emits false
   "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
 
@@ -117,10 +143,15 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   (a recorder-only restart does NOT re-bind and can orphan a working attach), (3) polls
   `/rec/stats` until taps re-bind, then starts recording; else toasts "press START".
 - **LIBRARY** — session cards (thumbnails or a radar-only placeholder, size badges, tags,
-  the note), tag/text filters, a disk bar. **DELETE (n)** selected, **DELETE ALL** (double
-  verify: confirm + type `DELETE`), **FREE — drop raw** per session (`purge_native`), and
-  **OFFLOAD ALL / OFFLOAD (n)** → download a `.tar` (display video + radar + data) via
-  `/rec/export`. Click a card → replay it.
+  the note), a disk bar. Click a card → replay it. Each card's name row has **✎ EDIT**
+  (reopens the save dialog pre-filled with name/tags/note — incl. custom tags — SAVE updates
+  the metadata via `/rec/ctl?save=`, DISCARD hidden so an edit can't delete) and **⧉ COPY**
+  (copies the name; uses an http-safe clipboard fallback since the LAN/AP isn't a secure
+  context). **Filtering:** the text search hits the recorder (`/rec/library?q=`) but **tag
+  filtering is client-side** (AND-match each card's `tags`) so it can't be broken by query
+  encoding — that was why filtering appeared to "lose" all annotations. **DELETE (n)**
+  selected, **DELETE ALL** (double verify: confirm + type `DELETE`), **FREE — drop raw** per
+  session (`purge_native`), **OFFLOAD ALL / OFFLOAD (n)** → `.tar` via `/rec/export`.
 - Caveat: a plain-HTTP page can't pick a save folder, so an offload `.tar` lands in the
   browser's Downloads. For a named folder use `recorder/tools/airpoc-offload.ps1 -Dest …`.
 

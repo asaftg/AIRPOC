@@ -51,10 +51,21 @@ prefers home whenever it's in range, so your current connection is not dropped.
   join `AIRPOC` and reach the control page (`:8088`) and console (`:8080`), which can fire
   the illuminator. Fine for an isolated field site; add a passphrase later by setting
   `802-11-wireless-security` on the `AIRPOC-AP` profile if you ever want it.
-- 5 GHz (band a, ch 36) for throughput — 2.4 GHz was slow/congested and Realtek AP mode is
-  weak there. Trade-off is shorter range; for 2.4 GHz range fallback set `AIRPOC_AP_BAND=bg
-  AIRPOC_AP_CHAN=6` before install (or `nmcli connection modify AIRPOC-AP 802-11-wireless.band bg`).
-  Fixed host/gateway `10.42.0.1`, DHCP handed to clients.
+- **2.4 GHz (band bg, ch 6) is the default** — hard lesson: a 5 GHz ch36 AP is **invisible to
+  most phones** (they don't scan/allow that channel) and needs the regdomain set to beacon, so
+  the AP "didn't work" in the field even with hostapd up. 2.4 GHz is seen by every device, has
+  better range/penetration, and works regardless of regdomain — the right trade for a control
+  link. For 5 GHz throughput on known-good client hardware: `AIRPOC_AP_BAND=a
+  AIRPOC_AP_CHAN=36 ./install.sh` (or `nmcli connection modify AIRPOC-AP 802-11-wireless.band a
+  802-11-wireless.channel 36`). Fixed host/gateway `10.42.0.1`, DHCP handed to clients.
+- **Regulatory domain.** `airpoc-autoap.sh` runs `iw reg set $COUNTRY` (default `US`, override
+  `AIRPOC_WIFI_COUNTRY`) before every AP raise. The board boots as world regdomain `country
+  00`, under which 5 GHz AP beaconing is forbidden — pinning a real country makes the AP
+  reliable and survives reboots (a bare `iw reg set US` also un-breaks it immediately).
+- **Boot join.** On boot the radio + NM autoconnect + the wifi scan are slow to settle, so
+  autoap retries the home scan a few times (and yields the moment NM joins a client network)
+  before concluding "no home" and raising the AP — otherwise one empty boot scan made it come
+  up on the AP instead of joining home WiFi.
 - Change the SSID: `AIRPOC_AP_SSID=whatever ./install.sh` (before first install), or
   `nmcli connection modify AIRPOC-AP wifi.ssid whatever`.
 - **Captive-portal fix (so phones don't shove traffic to cellular).** An internet-less open

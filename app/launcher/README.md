@@ -13,11 +13,15 @@ up. Reachable from any phone/laptop/tablet on the network — no install, no SSH
   |  NETWORK AUTO/WIFI/AP|            |   /status -> feed ports + recorder|
   |  SHUTDOWN JETSON     |            |              tap health           |
   +----------------------+            |   /wifi[/status] -> mode file     |
+                                      |   /reattach -> start.sh (REC heal)|
+                                      |   /suspend /resume -> stop/start  |
+                                      |               the live producers   |
                                       |   /shutdown -> systemctl poweroff |
                                       +----------------------------------+
                                          | start.sh brings up (self-healing):
                                          |- eo_pipeline   :8091
                                          |- radar_preview :8092
+                                         |- detectiond    :8094
                                          +- app (console) :8080
 ```
 
@@ -28,6 +32,15 @@ up. Reachable from any phone/laptop/tablet on the network — no install, no SSH
   when port **and** tap exist, and bounces the recorder after (re)starting a feed).
 - **NETWORK toggle** (AUTO/WIFI/AP) and the field failover live in
   [`jetson/wifi-ap/`](../../jetson/wifi-ap/README.md) — the launcher just writes the mode.
+- **`/reattach`** re-binds the recorder's shm taps on demand — the console's REC button
+  calls it when a feed is live but its tap is down, running the same ordered `start.sh` heal
+  (a recorder-only restart doesn't re-bind and can orphan a working attach).
+- **`/suspend` / `/resume`** stop / relaunch the live producers (eo_pipeline, radar_preview,
+  detectiond). The console calls these when you **enter / leave the LIBRARY**, so reviewing
+  recordings (and the on-demand native-mp4 transcode) gets the whole box instead of
+  overloading it. Clean SIGTERM + relaunch, **not** SIGSTOP — freezing a live camera/USB
+  process corrupts its device state (it dies on resume) and a frozen socket fools the health
+  check, so a missed resume can never be recovered; clean-down + START always relaunches.
 - **SHUTDOWN JETSON** → `/shutdown` → `sudo -n systemctl poweroff` (a scoped NOPASSWD rule
   installed by `install.sh`). Confirms first.
 
