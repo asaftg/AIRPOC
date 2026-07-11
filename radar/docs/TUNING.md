@@ -37,6 +37,7 @@ core design choice that makes the tracker class-agnostic.
 | Min speed | `speed` | 0.7 m/s | 0–5 | Doppler motion threshold; slower dots ignored as static clutter. |
 | Min SNR | `snrmin` | 16 dB | 0–60 | dot strength gate (static channel uses +3). Chip already floors at ~16. |
 | FOV | `fov` | 90° | 5–90 | azimuth gate, input **and** emit; the radar's real AoA limit is ±30°. |
+| Elev cap | `elmax` | 20° | 5–90 | elevation half-angle gate (radar-frame, symmetric). Default = the antenna's physical elevation beam edge — beyond ~±20° the 2-row array has no real gain, so reports there are angle-noise/multipath. Gimbal-safe (the beam moves with the radar). 90 = off. |
 | Merge gate | `doppler` | 1.2 m/s | 0.5–20 | two co-located tracks merge only if their speeds agree within this. |
 | Confirm | `confirm` | 3 | 1–6 | M-of-N fast-confirm hits (window N = M+1). ↓ = appears faster, more false. |
 | Coast | `coast` | 0.4 s | 0–3 | how long a confirmed track survives a dropout. |
