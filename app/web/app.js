@@ -1178,7 +1178,11 @@
       card.onmouseenter = function () { if (timer) return; timer = setInterval(function () { i = (i + 1) % 8; poster.src = "/rec/thumbs/" + s.sid + "/" + i + ".jpg"; }, 166); libTimers.push(timer); };
       card.onmouseleave = function () { if (timer) clearInterval(timer); timer = null; poster.src = "/rec/thumbs/" + s.sid + "/2.jpg"; };
     } else { poster = document.createElement("div"); poster.className = "lib-poster radaronly"; poster.textContent = "◟ RADAR ONLY ◞"; }
-    card.appendChild(poster);
+    /* Wrap the poster in an aspect-ratio box. Putting aspect-ratio on the <img> itself made the
+     * CSS grid size the row to just the image and clip the card body (name/edit/copy) under
+     * overflow:hidden until a reflow. A div wrapper resolves its height cleanly from its width. */
+    var pwrap = document.createElement("div"); pwrap.className = "lib-postwrap"; pwrap.appendChild(poster);
+    card.appendChild(pwrap);
     if (s.state !== "saved") { var rib = document.createElement("div"); rib.className = "lib-pending"; rib.textContent = "PENDING"; card.appendChild(rib); }
     var cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "lib-cb"; cb.checked = !!libSel[s.sid];
     cb.onclick = function (e) { e.stopPropagation(); libSel[s.sid] = cb.checked; card.classList.toggle("sel", cb.checked); updateDelBtn(); };

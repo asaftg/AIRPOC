@@ -280,7 +280,8 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
 .lib-card{background:var(--panel);border:1px solid var(--bd);border-radius:6px;overflow:hidden;cursor:pointer;position:relative;display:flex;flex-direction:column}
 .lib-card:hover{border-color:var(--amber)}
 .lib-card.sel{border-color:var(--on);box-shadow:0 0 0 1px var(--on) inset}
-.lib-poster{aspect-ratio:4/3;background:var(--canvas);position:relative;display:block;width:100%;object-fit:cover}
+.lib-postwrap{aspect-ratio:4/3;width:100%;overflow:hidden;position:relative;background:var(--canvas)}
+.lib-poster{display:block;width:100%;height:100%;object-fit:cover}
 .lib-poster.radaronly{display:flex;align-items:center;justify-content:center;color:var(--cyan);font-size:11px;letter-spacing:1px;
   background:radial-gradient(circle at 50% 100%,rgba(0,212,255,.08),transparent 70%)}
 .lib-cardbody{padding:8px 10px;display:flex;flex-direction:column;gap:5px}
