@@ -1,56 +1,108 @@
-# V2 RADAR SHIP RUNBOOK (fw review PASSED — SHIP-WITH-FIXES, fixes folded)
+# V2 RADAR SHIP RUNBOOK (rev 3 — all three ship-gates passed, defects folded)
 
-FW image: agv2 sha256 173f622a...7245 (seeker repo firmware/flash_agv2.cfg;
-review fix = ISR landmine removed + rebuilt). FW REVIEW MANDATES:
-- FLASH WITH THE COMB GATE OFF (no emptyBandGateCfg line) = stock dataflow
-  + crash fix only. Run all regression gates before touching the gate.
-- The gate's 12 dB margin is a PLACEHOLDER: before production enablement,
-  dump the Z-array for a corner reflector to fit the true LSB/dB slope,
-  then margin-sweep (3/6/12/24 dB) against the 500 m corpus. The gate is a
-  range-vs-ghost knob; guard the far-target detect rate while sweeping.
-- Under real overload a deferred frame may carry mixed points (counted in
-  queryDemoStatus "UART deferred frames") - host treats such frames as
-  suspect. The 450-pt clamp makes this rare.
-- emptyBandGateCfg must appear AFTER the doppler cfarCfg line (cfarCfg
-  memsets the struct; out-of-order = silently off, fail-safe).
+FW image: agv2 sha256 173f622a...7245 (seeker repo firmware/flash_agv2.cfg).
+Contents: overload crash fix (unconditional) + DDMA empty-band comb gate
+(DEFAULT OFF — ships dark; enablement is step 7, after calibration).
+Reviews: FW = SHIP-WITH-FIXES (fix folded, image rebuilt; the reviewed-vs-
+shipped delta is one ISR-landmine removal — binary-unverifiable, accepted,
+re-validated by this ladder). SW = see guard verdict. PLAN = GO-WITH-CHANGES
+(defects D1-D10 folded into this revision).
 
-Gate: Build B firmware + guard SW + this plan each pass their dedicated
-adversarial review agent. Only then is Asaf asked for the flash.
+## STEP 0 — BEFORE ANYTHING: push the firmware sources (D1)
+On this PC with YOUR GitHub auth:
+  cd C:\seeker-ground-station
+  git push origin main --tags
+This carries: Build A sources (1b71785, the fw ON the chip), Build B complete
+package (4034864 + 6540c65 + f7e1f9c), and tag AIRPOC-RADAR-V1.0-FW. Until
+this push, this PC holds the ONLY copy of the running + pending firmware.
 
-## Package contents
-- FW "agv2": Build B image = comb-killer (empty-band leakage gate, DDM-only,
-  default margin 12 dB) + crash-proofing (ISR assert -> deferral + counter;
-  450-pt frame cap at the transport budget; ISR-safe fault record).
-  Rollbacks kept: flash_agv1.cfg (current), flash_demoDDM.cfg (V1.0).
-- SW: tracker consistency guard in radar/src/cluster.c (golden-validated,
-  parity-proven vs Python reference), already-shipped cfg-push hardening
-  (a7f9521, deployed with the same rebuild).
-- CFG: unchanged at ship (16.0 + 0.75 + C0). Knob reopen AFTER acceptance.
+## STEP 1 — pre-flash reference (D4)
+Jetson ON, 12V-cycle radar, START stack.
+  a. Read the boot identity: daemon log shows cfg push; CLI scrape or
+     radar_hello equivalent -> record banner (proves agv1 before USB moves).
+  b. Capture ~10 min of the bench scene (SSE tap or recorder) ->
+     preflash_ref.bin via radar/tools/regression/sse2bin.py or conv_airec.py.
+     This is the ONLY valid comparison reference for post-flash numbers
+     (baseline.json is 17dB-era; the live cfg is 16.0 — apples-oranges).
 
-## Ship sequence
-1. Review verdicts green (3 agents) -> present numbers to Asaf.
-2. [Asaf] radar USB to PC, J17+J20, 12V cycle. Flash agv2 (COM check first).
-   [Asaf] J20 only, 12V cycle, USB back, 12V cycle again, START stack.
-3. Acceptance ladder (each gates the next):
-   a. Fingerprints at current cfg: >=26 Hz, 0 drops, RUN_CALIB err=0xffe-all-pass,
-      no MON_TIMING_FAIL; ppf/static_snr vs same-scene pre-flash reference.
-   b. COMB CHECK: junk-movers/frame ~250 -> expect near-zero (the headline).
-      Real-mover retention on a quick walk.
-   c. CRASH-PROOF STUNT: cfg 15.5 dB push -> garage + close strong mover
-      (metal sheet / car). Chip MUST survive; uartDeferredFrames increments;
-      recovery to full rate when stimulus stops. Then back to 16.0.
-   d. 30-min soak in background.
-4. Guard deploy: Jetson pull + daemon rebuild + STOP/START (no flash).
-   Verify: gates-open knobs (snr 16, el +-20) -> display clean (panel-#3
-   quality); garage ghosts zero; T7-style walk stitches long tracks.
-5. Freeze new fingerprints as the V2.0 baseline (baseline.py freeze on fresh
-   captures) + tag AIRPOC-RADAR-V2.0 (fw sha + cfg + sw commit) with revert
-   recipe, same pattern as V1.0.
-6. Schedule the bar-ladder walk night (16 -> 15 -> 14 -> 13) = the max-range
-   answer, scored with walkout_score.py + trajectory plots.
+## STEP 2 — deploy the SW package FIRST (D6 reorder)
+Jetson: git reset --hard origin/main; rebuild radar daemon (make in
+radar/src); STOP/START. This deploys: the consistency guard (65cb276) +
+cfg-push hardening (a7f9521, every cfg line must ack "Done").
+  Verify: /stats shows el_max/snr knobs; garage display CLEAN (guard active);
+  a 2-min capture -> tracks: expect ZERO emitted ghosts in static garage.
+  KNOB POSTURE: see the DECISION box below — set it now via /ctl if needed.
 
-## Rollback tree
-- FW: flash_agv1.cfg (5 min) or flash_demoDDM.cfg (V1.0).
-- SW: git checkout AIRPOC-RADAR-V1.0 radar/src + rebuild, or revert commit.
-- CFG: per-step activation commits are single-line reverts.
-- Tracker knobs: /ctl one-liners (snr/elmax) at any moment, no restart.
+## STEP 3 — flash agv2
+  [Operator] radar USB to PC, J17+J20, 12V cycle.
+  python C:\ti\mcu_plus_sdk_awr2x44p_10_02_00_04\tools\boot\uart_uniflash.py
+    --serial-port COM<N> --cfg C:\seeker-ground-station\firmware\flash_agv2.cfg
+  (COM<N>: python -m serial.tools.list_ports -v -> XDS110 Application/User UART)
+  [Operator] J20 only, 12V cycle, USB back to Jetson, 12V cycle, START stack.
+
+## STEP 4 — post-flash acceptance (gate is OFF — stock dataflow + crash fix)
+  a. Boot banner + cfg push all-Done (hardened push now enforces this).
+  b. Rate >= 26.0 Hz, 0 drops. RUN_CALIB prints: err field = 0x0-equivalent
+     all-pass semantics -> gate on the DONE-MASK bits 1-11 set (0xffe) and
+     mask stability, NOT on cadence (D10a: the printed "err=0x80000ffe" IS
+     the all-pass value per TI docs - field name is misleading).
+  c. COMB CHECK (D2 corrected): junk-movers/frame must be UNCHANGED vs
+     preflash_ref (gate is OFF - this proves bit-identical dataflow).
+     Near-zero comb is step 7's success metric, NOT this step's.
+  d. ppf / static SNR / real movers vs preflash_ref (same scene, same cfg).
+  e. 30-min soak in background; mod-50 bucket check; no MON_TIMING_FAIL.
+
+## STEP 5 — crash-proof stunt (the reason this flash exists)
+Cfg with doppler CFAR 15.5 exists as radar/cfg/awr2944P_ag_v2_c0_c1a.cfg
+BUT at 15.5 not 16 — activation = commit copying it over awr2944P_ag.cfg
+with the threshold edited to 15.5, push, Jetson pull, 12V-cycle, START (D7).
+  Stimulus: walk close + wave metal / drive the car by.
+  PASS: chip SURVIVES (agv1 died in seconds here); rate degrades gracefully;
+  "UART deferred frames" counter increments — read it via the CLI scrape
+  (daemon frees the config UART after push; stty 115200 + printf
+  "queryDemoStatus\n" — procedure proven 2026-07-10).
+  Display may still show junk at 15.5 — judge by counter + rate, guard keeps
+  the emitted tracks clean.
+  Then revert cfg to 16.0 (single-line revert commit), cycle, verify.
+  NOTE (D8): "host flags deferred-coinciding frames" is NOT implemented —
+  follow-up item; the 450-pt clamp makes deferrals rare; risk accepted.
+
+## STEP 6 — re-freeze baselines (D9 scoped)
+Fresh bench captures only: garage/static + a T7-class walk if convenient.
+baseline.py freeze for those classes; highway/junction/370m re-freezes wait
+for the next field session. Tag AIRPOC-RADAR-V2.0 (fw sha + sw commit + cfg)
+with the revert recipe, pattern of V1.0.
+
+## STEP 7 — comb-gate enablement (scheduled, NOT tomorrow unless time allows)
+  a. Corner reflector at surveyed range: dump the Z-array (L3) once, fit the
+     true LSB/dB slope (the 5.31 LSB/dB is derived-but-unpinned; a 2^k error
+     shifts the knob by 6k dB - soft failure, instantly visible).
+  b. Margin sweep 3/6/12/24 dB on a comb-heavy scene: junk-movers 65-250/frame
+     should collapse near the calibrated ~12 dB while real movers survive.
+  c. A/B vs gate-off on the regression corpus + far-target retention
+     (the margin is a range-vs-ghost knob - sweep with the 500m corpus).
+  d. Enable in the shipping cfg (emptyBandGateCfg AFTER the doppler cfarCfg
+     line - out-of-order = silently off) + re-freeze baselines.
+
+## STEP 8 — bar-ladder walk night (the max-range answer)
+16 -> 15 -> 14 -> 13 dB with the SAME walk each time, gate ON (step 7 first
+if at all possible - at 14/13 the junk flood + 450-pt clamp can evict weak
+far targets and make results clamp-limited, D3). Watch ppf vs 450 +
+deferred-frames each step. Scored with walkout_score.py + trajectory plots.
+
+## DECISION BOX — tracker knob posture (D5: yours, not a default)
+The guard was validated GATES-OPEN (snr 16 / el +-20): walk restored to 94%
+of narrow coverage, far hold intact, ghosts zero, T2 IMPROVED. Costs: T1
+detect -3.1pts (confined to a ghost-identical 1.9s flicker per the builder;
+SW review verifying), and T4/T5 tangential queue-traffic track-frames drop
+(recoverable only by Phase 3, not by a looser guard).
+  (a) OPEN posture (snr 16, el +-20 = compiled defaults): airborne-capable,
+      cleaner tracks, accepts the tangential cost until P3.
+  (b) NARROW posture (el +-5 via /ctl): maximal ground-target continuity,
+      blind above +5 deg. LANDMINE: compiled defaults are OPEN - every
+      daemon restart reverts to (a) unless the default is changed in code.
+Pick one; if (b), say so and the default gets changed in cluster.h first.
+
+## Rollback tree (unchanged)
+FW: flash_agv1.cfg (Build A) / flash_demoDDM.cfg (V1.0). SW: revert commit /
+checkout AIRPOC-RADAR-V1.0. CFG: single-line activation reverts. Knobs: /ctl.
