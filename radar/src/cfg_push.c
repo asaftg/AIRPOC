@@ -86,7 +86,7 @@ int cfg_push(int cli_fd, const char *cfg_path) {
 
     drain(cli_fd);
     char line[512];
-    int rc = 0, n_sent = 0;
+    int rc = 0, n_sent = 0, n_rejected = 0, n_noack = 0;
     while (fgets(line, sizeof(line), f)) {
         /* strip trailing whitespace/newline */
         size_t L = strlen(line);
@@ -104,13 +104,23 @@ int cfg_push(int cli_fd, const char *cfg_path) {
         read_until_ack(cli_fd, resp, sizeof(resp));
         if (strstr(resp, "Error") || strstr(resp, "error")) {
             fprintf(stderr, "radar cfg REJECTED: %s -> %.120s\n", s, resp);
-            rc = -1;
+            rc = -1; n_rejected++;
+        } else if (!strstr(resp, "Done")) {
+            /* No explicit "Done": the ack timed out or only a prompt came back.
+             * Without this check a dropped line counts as success and the chip
+             * silently runs a different config than the file says. */
+            fprintf(stderr, "radar cfg NO-ACK (no \"Done\" within timeout): %s -> %.120s\n",
+                    s, resp);
+            rc = -1; n_noack++;
         }
         n_sent++;
         usleep(INTER_LINE_US);
     }
     fclose(f);
-    fprintf(stderr, "radar: pushed %d cfg lines from %s (%s)\n",
-            n_sent, cfg_path, rc == 0 ? "ok" : "with errors");
+    fprintf(stderr, "radar: pushed %d cfg lines from %s (%s%s%s)\n",
+            n_sent, cfg_path,
+            rc == 0 ? "ok, all Done" : "FAILED:",
+            n_rejected ? " rejected" : "",
+            n_noack ? " unacked" : "");
     return rc;
 }
