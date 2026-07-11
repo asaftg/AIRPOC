@@ -1271,7 +1271,7 @@
    * cycles (black EO, unrecoverable without a reboot). The recorder pre-builds the replay mp4,
    * so keeping the live stack running during review costs nothing extra. The browser's live
    * media streams are still closed on library-open (connection budget) and reopened on exit. */
-  var opening = false, replayGen = 0;
+  var opening = false, replayGen = 0, autoNatived = false;
   function openReplay(s) {
     if (opening) return;                                 /* ignore double-taps while an open is in flight */
     if (!s || !s.sid) return;                            /* malformed session -> nothing to open */
@@ -1330,7 +1330,7 @@
       /* Show the recorded still at the open position — NOT the live stream. The replay
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
-      replayPlaying = false; replayStillT = -1; resetMp4State();   /* start on MJPEG; poll swaps to mp4 when ready */
+      replayPlaying = false; replayStillT = -1; resetMp4State(); autoNatived = false;   /* start on MJPEG; poll swaps to native mp4 if it's already built */
       sawOpen = false; replayBad = 0; replayFrameRetries = 0;      /* fresh open: grace the self-heal + still-frame retry */
       $("video").src = replayHasEO ? ("/rec/replay/frame?t=0") : BLANK;
       $("rb-text").innerHTML = "REPLAY — " + esc(s.name || s.sid) + " — " + esc(s.t0)
@@ -1425,6 +1425,10 @@
       }
       sawOpen = true; replayBad = 0;
       var rs = st.replay_state || st.state || st; if (!rs) return;   /* /state nests as .state, /stats as .replay_state */
+      /* If the HD mp4 is ALREADY built (cached), switch to it ONCE and stream it — no rebuild, no
+       * tapping NATIVE. We open in display to avoid triggering a build on a not-yet-built movie;
+       * this flips to the cache the moment the recorder reports it ready. A manual toggle wins after. */
+      if (replayHasEO && !autoNatived && rs.native_mp4 === "ready" && rs.video_src !== "native") { autoNatived = true; rctl("video=native"); }
       if (replayHasEO) updateReplayVideo(rs);   /* native mp4 (60 fps) or paced MJPEG, + overlay sync */
       if (!scrubbing) { $("tp-scrub").value = rs.t_ms; $("tp-cur").textContent = fmtClockT(rs.t_ms); }
       $("tp-play").textContent = (rs.playing && rs.t_ms < rs.dur_ms) ? "⏸" : "⏵";
@@ -1438,7 +1442,7 @@
   }
   $("tp-play").onclick = function () { rctl($("tp-play").textContent === "⏸" ? "pause=1" : "play=1"); };
   $("tp-rate").onclick = function () { var i = (RATES.indexOf(parseFloat($("tp-rate").textContent)) + 1) % RATES.length; rctl("rate=" + RATES[i]); };
-  $("tp-video").onclick = function () { rctl("video=" + ($("tp-video").textContent === "NATIVE" ? "display" : "native")); };
+  $("tp-video").onclick = function () { autoNatived = true; rctl("video=" + ($("tp-video").textContent === "NATIVE" ? "display" : "native")); };   /* manual choice wins over auto-native */
   $("tp-step-b").onclick = function () { rctl("step=-1"); };
   $("tp-step-f").onclick = function () { rctl("step=1"); };
   $("tp-scrub").oninput = function () {
