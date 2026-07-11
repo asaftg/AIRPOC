@@ -272,6 +272,7 @@
    * server-side. Init + readback come from /rstats (the daemon's own /stats). ── */
   var RADARC = [
     { key: "fov",     stat: "fov_half_deg",     fmt: function (v) { return v.toFixed(0) + "°"; } },
+    { key: "elmax",   stat: "el_max_deg",       fmt: function (v) { return v.toFixed(0) + "°"; } },
     { key: "snrmin",  stat: "snr_min_db",       fmt: function (v) { return v.toFixed(0) + " dB"; } },
     { key: "speed",   stat: "speed_min_mps",    fmt: function (v) { return v.toFixed(1) + " m/s"; } },
     { key: "doppler", stat: "doppler_gate_mps", fmt: function (v) { return v.toFixed(1) + " m/s"; } },
@@ -1115,7 +1116,14 @@
     $("video").src = BLANK;
     buildTagFilter(); loadLibrary();
   };
-  $("lib-close").onclick = function () {   /* EXIT to live -> reconnect the live streams */
+  $("lib-close").onclick = function () {   /* EXIT to live -> guarantee a clean live state */
+    /* Cancel any in-flight replay open (its late callback would flip replaying=true over the live
+     * view) and NEVER strand replaying=true in live — that dead-locks REC + LIGHT (both bail while
+     * replaying) until a reload. Also stop any replay pollers and drop the replay chrome. */
+    replayGen++; replaying = false;
+    if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
+    stopReplayRadarPoll(); stopReplayDetPoll();
+    document.body.classList.remove("replay");
     $("library").hidden = true; libSel = {};
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
@@ -1233,11 +1241,16 @@
    * cycles (black EO, unrecoverable without a reboot). The recorder pre-builds the replay mp4,
    * so keeping the live stack running during review costs nothing extra. The browser's live
    * media streams are still closed on library-open (connection budget) and reopened on exit. */
-  var opening = false;
+  var opening = false, replayGen = 0;
   function openReplay(s) {
     if (opening) return;                                 /* ignore double-taps while an open is in flight */
     if (!s || !s.sid) return;                            /* malformed session -> nothing to open */
     opening = true;
+    var myGen = ++replayGen;                             /* if EXIT-to-live or another open happens while this
+                                                          * async open is in flight, replayGen moves on and the
+                                                          * late callback below aborts instead of flipping
+                                                          * replaying=true over the live view (which dead-locked
+                                                          * REC + LIGHT until a reload). */
     var done = false;
     var fin = function () { if (done) return false; done = true; clearTimeout(guard); opening = false; return true; };
     /* Arm the timeout FIRST so `opening` is ALWAYS released — even if the synchronous setup below
@@ -1265,6 +1278,7 @@
         if (done) return;                                /* already timed out */
         if (!r || !r.ok) throw 0;
         fin();
+        if (myGen !== replayGen) { fetch("/rec/replay/ctl?close=1").catch(function () {}); return; }   /* user left to live / opened another while this was in flight — abort, don't hijack the live view */
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
@@ -1299,6 +1313,7 @@
     } catch (e) { if (fin()) toast("Couldn't open that recording — tap it again.", "err", 4500); }
   }
   function closeReplay() {
+    replayGen++;                                         /* cancel any in-flight open so it can't re-enter replay */
     fetch("/rec/replay/ctl?close=1").catch(function () {});
     replaying = false; replaySession = null; document.body.classList.remove("replay");
     if (replayStatePoll) { clearInterval(replayStatePoll); replayStatePoll = null; }
