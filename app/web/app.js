@@ -1156,7 +1156,11 @@
    * one at a time, cached, survives navigation. We poll it for a progress %, then refresh the
    * library so the card flips to "HD ✓". hdBuild holds the one in-flight build so a re-render
    * (search/filter) keeps showing its progress. */
-  var hdBuild = null, hdTimer = null;
+  var hdBuild = null, hdTimer = null, hdReady = {};   /* sids whose HD mp4 we KNOW is ready (converted this
+                                                       * session). bytes.native is the RAW recording, NOT the
+                                                       * HD mp4 — it does not mean HD is built. Until the
+                                                       * recorder reports HD status per session in /rec/library,
+                                                       * ✓ only shows for ones actually converted here. */
   function setHdBtn(btn, state, pct) {
     btn.classList.remove("ready", "building");
     if (state === "ready") { btn.textContent = "HD ✓"; btn.title = "native HD available"; btn.classList.add("ready"); btn.disabled = true; }
@@ -1167,7 +1171,7 @@
     fetch("/rec/replay/transcode?sid=" + encodeURIComponent(sid)).then(function (r) { return r.json(); }).then(function (j) {
       var st = j && j.state, pct = (j && (j.pct != null ? j.pct : j.percent)) || 0;
       var btn = document.querySelector('.lib-card[data-sid="' + sid + '"] .lib-hd');
-      if (st === "ready") { hdBuild = null; if (btn) setHdBtn(btn, "ready"); loadLibrary(); return; }
+      if (st === "ready") { hdBuild = null; hdReady[sid] = 1; if (btn) setHdBtn(btn, "ready"); loadLibrary(); return; }
       if (st === "failed") { hdBuild = null; if (btn) setHdBtn(btn, "none"); toast("HD conversion failed.", "err", 3500); return; }
       hdBuild = { sid: sid, pct: pct };
       if (btn) setHdBtn(btn, "building", pct);
@@ -1213,7 +1217,7 @@
       fetch("/rec/replay/transcode?sid=" + encodeURIComponent(s.sid)).catch(function () {});
       hdPoll(s.sid);
     };
-    setHdBtn(hdb, (hdBuild && hdBuild.sid === s.sid) ? "building" : (s.bytes && s.bytes.native > 0 ? "ready" : "none"), hdBuild ? hdBuild.pct : 0);
+    setHdBtn(hdb, (hdBuild && hdBuild.sid === s.sid) ? "building" : (hdReady[s.sid] || s.hd === "ready" ? "ready" : "none"), hdBuild ? hdBuild.pct : 0);
     nrow.appendChild(nm); nrow.appendChild(eb); nrow.appendChild(cpb); nrow.appendChild(hdb); body.appendChild(nrow);
     var rest = document.createElement("div");
     rest.innerHTML = '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
