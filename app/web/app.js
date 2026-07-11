@@ -287,7 +287,9 @@
   RADARC.forEach(function (c) {
     $("rd-" + c.key).oninput = function () { $("rv-" + c.key).textContent = c.fmt(parseFloat(this.value)); rcTouch = Date.now(); ctl("radar_" + c.key + "=" + this.value); };
   });
-  setTimeout(function () { if (!replaying) { rcTouch = Date.now(); ctl("radar_fov=60"); } }, 900);   /* default the radar FOV to ±60° on load */
+  /* (Removed the auto radar_fov=60 send on page load — the console must not push ANY radar
+   * control unless the operator moves a slider. It was overriding the radar's FOV on every
+   * reload. The FOV slider still seeds from the radar's live value via pollRstats.) */
   function pollRstats() {
     if (!$("dev").classList.contains("open")) return;   /* only the DEV panel shows these — don't poll when it's closed */
     fetch(API.rstats).then(function (r) { return r.json(); }).then(function (d) {
