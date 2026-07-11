@@ -59,7 +59,7 @@ are the "why 8-of-12 and not 8-of-20" answers.
 | Velocity-fit window | 0.9 s, min span 0.22 s | least-squares slope of position history → range-rate / angle-rate. |
 | Position blend | r 0.55, az 0.70, el 0.10 | measurement-vs-prediction smoothing; az tracks faster, **el is heavily smoothed** because the 2-row array's elevation is noisy. |
 | Seed link / guard | 5 m, 3.5 m cross / 5 m, 2.5° | how dots group into a new track; don't seed on top of an existing one. |
-| Elevation band / min range | −9°…+2.5° / 3 m | *physical*: ground-target elevation window; ignore returns closer than 3 m. |
+| Min range | 3 m | *physical*: ignore returns closer than 3 m. (The old fixed −9°…+2.5° elevation band was removed 2026-07-10 — level-mount-only tuning, wrong on a gimbal and blind to airborne targets; elevation gating is the `elmax` knob only.) |
 | Emit range / FOV | 500 m / the FOV knob | full radar coverage — no artificial clamp. |
 | Frame rate assumption | 26 Hz (`TRK_FPS`) | converts the coast/park **seconds** knobs to frames; matches the A/G profile. |
 
