@@ -215,7 +215,7 @@
   /* ── EO ISP — the full preview control set, forwarded to the EO feed's /ctl:
    * ae (auto/manual exposure), expms, gain, gaincap, median. The feed owns the sensor;
    * these are the same knobs the eo_pipeline preview exposes. ── */
-  var EXP_DEFAULTS = { gaincap: 120, median: 1 };   /* the sensor's default AUTO state */
+  var EXP_DEFAULTS = { gaincap: 120, median: 0 };   /* console default AUTO state (median OFF by operator request) */
   document.querySelectorAll("#ae-btns [data-ae]").forEach(function (b) {
     b.onclick = function () {
       setSeg("ae-btns", b); var auto = b.dataset.ae === "1"; setExpMode(auto); ispTouch = Date.now();
@@ -1482,4 +1482,12 @@
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();
+  /* Console-enforced sensor defaults on load (operator request): EO MEDIAN off, detector MOTION
+   * on. Push once the feeds are up; set the touch guards so the /stats readback doesn't revert
+   * the button before the feed/detector applies the change. */
+  setTimeout(function () {
+    if (replaying) return;
+    ispTouch = Date.now(); ctl("median=0"); var md = document.querySelector('#md-btns [data-md="0"]'); if (md) setSeg("md-btns", md);
+    dtTouch = Date.now(); ctl("det_motion=1"); var mb = document.querySelector('#mot-btns [data-mot="1"]'); if (mb) setSeg("mot-btns", mb);
+  }, 1000);
 })();
