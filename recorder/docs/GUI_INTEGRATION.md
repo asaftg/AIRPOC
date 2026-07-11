@@ -52,6 +52,17 @@ relays the replay MJPEG stream). On connect failure: `502` with
 - Selection mode: checkboxes → `DELETE (n)` (confirm →
   `/rec/ctl?delete=a,b,c`), per-card "FREE SPACE — drop raw" →
   `/rec/ctl?purge_native=<sid>` (confirm).
+- **Convert to native (HD)** — per-card button so the operator can build the
+  smooth full-res movie *without sitting on the replay screen*. `GET
+  /rec/replay/transcode?sid=<sid>` starts a persistent background encode and
+  returns `{state:"queued|building|ready",pct}`. Poll it (or `/rec/replay/state`
+  `native_mp4`) to show a progress ring; flip the button to "HD ready" at
+  `ready`. Notes: it **survives navigation** (leaving the movie no longer stops
+  it — that was a bug), only **one runs at a time** (starting another supersedes
+  it — the box can't encode two at once without stalling the live camera), and
+  the result is **cached permanently**, so it's a one-time wait per recording.
+  Software encode on this SoC (no HW encoder), so a 5-min clip takes several
+  minutes — hence the background/off-screen flow.
 - **OFFLOAD (n)** — download the selected sessions: a tier picker (meta =
   annotations+thumbs+radar · display = + the video · full = + native raw) then
   `window.location = "/rec/export?sids=a,b,c&tier=display"`. The recorder streams

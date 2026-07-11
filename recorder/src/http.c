@@ -366,6 +366,19 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
             transcode_request(sid);                       /* first-ever build; tell client to wait */
             send_json(fd, 202, "{\"building\":true,\"pct\":0}");
         }
+    } else if (!strcmp(path, "/replay/transcode")) {
+        /* "Convert to native (HD)" — start a persistent background encode for a
+         * session (no need to sit on the replay screen; survives navigation; caps
+         * to one; result is cached so it's a one-time wait). Poll this for progress. */
+        char sid[SID_LEN + 1] = "";
+        query_get(qs, "sid", sid, sizeof sid);
+        if (strlen(sid) != SID_LEN) { send_json(fd, 400, "{\"err\":\"sid=\"}"); return; }
+        transcode_request(sid);                           /* no-op if already the current HD build */
+        int pct = 0, st = transcode_current_state(sid, &pct);
+        char b[112];
+        snprintf(b, sizeof b, "{\"sid\":\"%s\",\"state\":\"%s\",\"pct\":%d}", sid,
+                 st == 2 ? "ready" : st == 1 ? "building" : "queued", pct);
+        send_json(fd, 200, b);
     } else if (!strcmp(path, "/export")) {
         handle_export(fd, qs);                            /* selected sessions -> .tar download */
     } else if (!strcmp(path, "/replay/stream")) {

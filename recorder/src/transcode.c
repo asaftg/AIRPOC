@@ -88,6 +88,19 @@ int transcode_status(const char *sid, int *pct)
     return st;
 }
 
+/* For the explicit "Convert to native (HD)" button: is the CURRENT-quality mp4
+ * ready (2), building now (1), or not started (0)? Distinct from transcode_status,
+ * which reports "ready" for any playable file including a stale pre-cap one. */
+int transcode_current_state(const char *sid, int *pct)
+{
+    if (mp4_current(sid)) { if (pct) *pct = 100; return 2; }
+    pthread_mutex_lock(&g_lk);
+    int building = (!strcmp(g_job.sid, sid) && g_job.state == 1);
+    if (pct) *pct = building ? g_job.pct : 0;
+    pthread_mutex_unlock(&g_lk);
+    return building ? 1 : 0;
+}
+
 /* read one channel's index rows + a payload fetcher, straight off disk */
 static AirecIdxRow *load_idx(const char *dir, const char *chan, long *n)
 {
