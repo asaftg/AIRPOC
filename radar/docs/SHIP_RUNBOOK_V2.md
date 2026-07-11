@@ -1,4 +1,18 @@
-# V2 RADAR SHIP RUNBOOK (draft — finalized after 3-agent review)
+# V2 RADAR SHIP RUNBOOK (fw review PASSED — SHIP-WITH-FIXES, fixes folded)
+
+FW image: agv2 sha256 173f622a...7245 (seeker repo firmware/flash_agv2.cfg;
+review fix = ISR landmine removed + rebuilt). FW REVIEW MANDATES:
+- FLASH WITH THE COMB GATE OFF (no emptyBandGateCfg line) = stock dataflow
+  + crash fix only. Run all regression gates before touching the gate.
+- The gate's 12 dB margin is a PLACEHOLDER: before production enablement,
+  dump the Z-array for a corner reflector to fit the true LSB/dB slope,
+  then margin-sweep (3/6/12/24 dB) against the 500 m corpus. The gate is a
+  range-vs-ghost knob; guard the far-target detect rate while sweeping.
+- Under real overload a deferred frame may carry mixed points (counted in
+  queryDemoStatus "UART deferred frames") - host treats such frames as
+  suspect. The 450-pt clamp makes this rare.
+- emptyBandGateCfg must appear AFTER the doppler cfarCfg line (cfarCfg
+  memsets the struct; out-of-order = silently off, fail-safe).
 
 Gate: Build B firmware + guard SW + this plan each pass their dedicated
 adversarial review agent. Only then is Asaf asked for the flash.
