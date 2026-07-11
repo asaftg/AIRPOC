@@ -60,17 +60,21 @@ typedef struct {
 static Job g_job;               /* one at a time (one replay open at a time) */
 static pthread_mutex_t g_lk = PTHREAD_MUTEX_INITIALIZER;
 
-/* Cancellation: every build captures g_txgen at start and aborts the moment it
- * changes. Starting a new build or calling transcode_cancel() bumps it, so at
- * most ONE encode is ever running and closing a replay (or opening another) kills
- * the in-flight encode instead of leaking a ~2-core ffmpeg per session. */
+/* One encode runs at a time (~2 cores), never a stack. Concurrent requests for
+ * DIFFERENT sessions are queued 1-deep (g_pending) and run to completion in turn —
+ * NOT cancelled — so two operators converting two clips don't ping-pong forever.
+ * g_txgen is the abort token: a build captures it and aborts its frame loop the
+ * moment it changes (ffmpeg then hits stdin EOF and exits — prompt, not an instant
+ * signal-kill). Only transcode_cancel() bumps it (explicit stop). */
 static volatile unsigned g_txgen = 0;
 typedef struct { char sid[SID_LEN + 1]; unsigned gen; } BuildArg;
+static char g_pending[SID_LEN + 1] = "";     /* next sid to build when the running one finishes */
 
 void transcode_cancel(void)
 {
     pthread_mutex_lock(&g_lk);
-    g_txgen++;                   /* signal any in-flight build_mp4 loop to abort */
+    g_txgen++;                   /* in-flight build aborts on its next frame */
+    g_pending[0] = 0;
     if (g_job.state == 1) g_job.state = 0;
     pthread_mutex_unlock(&g_lk);
 }
@@ -124,16 +128,17 @@ int transcode_status(const char *sid, int *pct)
 }
 
 /* For the explicit "Convert to native (HD)" button: is the CURRENT-quality mp4
- * ready (2), building now (1), or not started (0)? Distinct from transcode_status,
- * which reports "ready" for any playable file including a stale pre-cap one. */
+ * ready (2), building now (1), failed (-1), or not started (0)? Distinct from
+ * transcode_status, which reports "ready" for any playable file incl. a stale one. */
 int transcode_current_state(const char *sid, int *pct)
 {
     if (mp4_current(sid)) { if (pct) *pct = 100; return 2; }
     pthread_mutex_lock(&g_lk);
-    int building = (!strcmp(g_job.sid, sid) && g_job.state == 1);
-    if (pct) *pct = building ? g_job.pct : 0;
+    int st = 0;
+    if (!strcmp(g_job.sid, sid)) st = g_job.state == 1 ? 1 : g_job.state == -1 ? -1 : 0;
+    if (pct) *pct = (st == 1) ? g_job.pct : 0;
     pthread_mutex_unlock(&g_lk);
-    return building ? 1 : 0;
+    return st;
 }
 
 /* read one channel's index rows + a payload fetcher, straight off disk */
@@ -245,6 +250,21 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
     return -1;
 }
 
+static void *build_thread(void *arg);            /* forward decl (start_build_locked spawns it) */
+
+/* Start a build for sid. MUST be called with g_lk held, and only when no build is
+ * currently running (state != 1). Gives the build a fresh abort token. */
+static void start_build_locked(const char *sid)
+{
+    unsigned gen = ++g_txgen;
+    snprintf(g_job.sid, sizeof g_job.sid, "%s", sid);
+    g_job.state = 1; g_job.pct = 0;
+    BuildArg *arg = malloc(sizeof *arg);
+    if (arg) { snprintf(arg->sid, sizeof arg->sid, "%s", sid); arg->gen = gen; }
+    if (arg && pthread_create(&g_job.tid, NULL, build_thread, arg) == 0) pthread_detach(g_job.tid);
+    else { g_job.state = -1; free(arg); }
+}
+
 static void *build_thread(void *arg)
 {
     BuildArg *ba = arg;
@@ -254,25 +274,21 @@ static void *build_thread(void *arg)
     free(ba);
     int rc = build_mp4(sid, &g_job.pct, gen);
     pthread_mutex_lock(&g_lk);
-    /* only record the result if we're still the current job (not cancelled/superseded) */
+    /* record the result + drain the queue only if we're still the current job (a
+     * superseding build owns g_job and manages its own queue). */
     if (!strcmp(g_job.sid, sid) && g_txgen == gen) {
         g_job.state = rc == 0 ? 2 : -1;
         if (rc == 0) g_job.pct = 100;
+        if (g_pending[0]) {                          /* 1-deep queue: start the next requested build */
+            char next[SID_LEN + 1];
+            snprintf(next, sizeof next, "%s", g_pending);
+            g_pending[0] = 0;
+            if (strcmp(next, sid) != 0 && !mp4_current(next)) start_build_locked(next);
+        }
     }
     pthread_mutex_unlock(&g_lk);
     if (rc != 0) fprintf(stderr, "transcode: %s failed/cancelled\n", sid);
     return NULL;
-}
-
-/* Ensure native.mp4 exists (build it synchronously if missing). For export. */
-int transcode_ensure(const char *sid)
-{
-    if (strlen(sid) != SID_LEN || strchr(sid, '/')) return -1;
-    if (mp4_current(sid)) return 0;                             /* current build already there */
-    pthread_mutex_lock(&g_lk);
-    unsigned gen = ++g_txgen;                                   /* supersede any in-flight build */
-    pthread_mutex_unlock(&g_lk);
-    return build_mp4(sid, NULL, gen);
 }
 
 void transcode_request(const char *sid)
@@ -281,13 +297,21 @@ void transcode_request(const char *sid)
     if (strlen(sid) != SID_LEN || strchr(sid, '/')) return;
 
     pthread_mutex_lock(&g_lk);
-    if (!strcmp(g_job.sid, sid) && g_job.state == 1) { pthread_mutex_unlock(&g_lk); return; }
-    unsigned gen = ++g_txgen;                                  /* cancel any other in-flight build (cap to 1) */
-    snprintf(g_job.sid, sizeof g_job.sid, "%s", sid);
-    g_job.state = 1; g_job.pct = 0;
-    BuildArg *arg = malloc(sizeof *arg);
-    if (arg) { snprintf(arg->sid, sizeof arg->sid, "%s", sid); arg->gen = gen; }
-    if (arg && pthread_create(&g_job.tid, NULL, build_thread, arg) == 0) pthread_detach(g_job.tid);
-    else { g_job.state = -1; free(arg); }
+    if (g_job.state == 1) {
+        /* A build is running. Queue a DIFFERENT session 1-deep instead of
+         * cancelling it — cancelling on every poll made two concurrent conversions
+         * ping-pong and never finish. Same sid already building → nothing to do. */
+        if (strcmp(g_job.sid, sid) != 0) snprintf(g_pending, sizeof g_pending, "%s", sid);
+        pthread_mutex_unlock(&g_lk);
+        return;
+    }
+    /* Nothing running. Don't re-kick a build that just FAILED for this same sid —
+     * else every <video> range request re-storms ffmpeg on a session whose encode
+     * can't succeed. It retries once another session builds (clears g_job.sid). */
+    if (!strcmp(g_job.sid, sid) && g_job.state == -1) {
+        pthread_mutex_unlock(&g_lk);
+        return;
+    }
+    start_build_locked(sid);
     pthread_mutex_unlock(&g_lk);
 }

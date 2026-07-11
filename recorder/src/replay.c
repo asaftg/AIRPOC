@@ -287,7 +287,6 @@ static void tonemap_verify_vs_display(void)
     int nw = g_rp.nat_w, nh = g_rp.nat_h;
     uint8_t *disp = malloc((size_t)dw * dh);
     uint8_t *nat  = malloc((size_t)nw * nh);
-    uint8_t *nds  = malloc((size_t)dw * dh);
     EoToneState st = { 0, 0, 0 };
     int ddw = 0, ddh = 0;
     /* Match the display JPEG exactly at the compare frame:
@@ -303,7 +302,7 @@ static void tonemap_verify_vs_display(void)
      *    settle the EMA, which is computed pre-median. */
     int median = ev_int(ev_at(EV_EO, g_rp.jpeg.t_ms[pick]), "median", 0);
     int warm_ok = 0;
-    if (disp && nat && nds &&
+    if (disp && nat &&
         render_decode_jpeg_gray(djpg, djlen, disp, (uint32_t)dw * dh, &ddw, &ddh) == 0 &&
         ddw == dw && ddh == dh) {
         long w0 = ni - 16; if (w0 < 0) w0 = 0;
@@ -339,7 +338,7 @@ static void tonemap_verify_vs_display(void)
         if (g_rp.tm_vs_eo < 0)
             fprintf(stderr, "replay: tone map DRIFT vs EO feed (mean diff %.1f) — mirror eo_tonemap.c\n", mean);
     }
-    free(disp); free(nat); free(nds);
+    free(disp); free(nat);
 }
 
 /* ---- open/close ---- */
@@ -824,13 +823,19 @@ void replay_stream(int fd)
             } else {
                 uint32_t plen;
                 const uint8_t *p = rchan_payload(vc, i, &plen, NULL);
-                if (p) {
-                    pthread_mutex_unlock(&g_rp.lk);   /* pushers>0 keeps mmap valid */
+                /* Copy the frame OUT of the mmap while holding the lock, then write
+                 * from the heap. Writing the mmap pointer after unlocking races a
+                 * concurrent replay_close() that unmaps after a bounded drain — a
+                 * stalled socket would otherwise read freed/unmapped memory (SIGSEGV).
+                 * (natbuf is 1 MiB; display/wire frames are <=512 KiB.) */
+                if (p && natbuf && plen <= NAT_JPG_CAP) {
+                    memcpy(natbuf, p, plen);
+                    pthread_mutex_unlock(&g_rp.lk);
                     char ph[128];
                     int hn = snprintf(ph, sizeof ph,
                         "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", plen);
                     bad = write(fd, ph, (size_t)hn) != hn ||
-                          write(fd, p, plen) != (ssize_t)plen ||
+                          write(fd, natbuf, plen) != (ssize_t)plen ||
                           write(fd, "\r\n", 2) != 2;
                     pthread_mutex_lock(&g_rp.lk);
                 }
@@ -849,21 +854,26 @@ void replay_stream(int fd)
     free(natbuf);
 }
 
-/* Radar SSE push — the replay twin of the live `/radar/stream`. The live scope
- * is SSE-pushed at the sensor's ~26 Hz; a 120 ms replay poll shows only ~8 Hz,
- * so replay looked choppy next to live even though every frame was recorded.
- * Emit each recorded radar frame as the playback clock crosses it: the 5 ms
- * wait loop is well under the ~38 ms frame spacing at 1×, so no frame is dropped
- * at normal speed (higher rates naturally coalesce). Wire JSON byte-verbatim
- * with "replay":true, exactly like /replay/radar. Respects pause/seek/rate via
- * the shared clock + cv, and gen so open/close/source-switch drops the stream. */
-void replay_radar_stream(int fd)
+/* Generic replay SSE pusher — the replay twin of the live `/radar/stream` and
+ * `/det/stream`. Live radar/det are SSE-pushed at the sensor rate; a fixed poll
+ * (120/150 ms) undersamples and lags. Emit each recorded frame as the playback
+ * clock crosses it (the 5 ms wait is well under frame spacing at 1x, so nothing
+ * is dropped; higher rates coalesce). Wire JSON byte-verbatim + "replay":true,
+ * paced by the shared clock/cv, gen-gated to drop on open/close/source-switch.
+ *
+ * The frame is COPIED into a per-connection heap buffer under the lock and written
+ * from the heap: writing the mmap pointer after unlocking races a concurrent
+ * replay_close() that unmaps after a bounded drain — a stalled socket would
+ * otherwise read freed/unmapped memory (SIGSEGV). */
+static void replay_sse_stream(int fd, RChan *chan)
 {
     static const char *head =
         "HTTP/1.0 200 OK\r\n"
         "Content-Type: text/event-stream\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
     if (write(fd, head, strlen(head)) < 0) return;
+    char *sbuf = malloc(NAT_JPG_CAP);            /* holds the whole SSE frame (1 MiB >= 256 KiB wire cap) */
+    if (!sbuf) return;
 
     pthread_mutex_lock(&g_rp.lk);
     unsigned gen = g_rp.gen;
@@ -872,19 +882,20 @@ void replay_radar_stream(int fd)
 
     while (g_rp.open && g_rp.gen == gen) {
         int64_t t = clock_now();
-        long i = rchan_at(&g_rp.radar, t);
-        if (i < 0) i = g_rp.radar.n ? 0 : -1;             /* before first: hold the first */
+        long i = rchan_at(chan, t);
+        if (i < 0) i = chan->n ? 0 : -1;                  /* before first: hold the first */
         if (i >= 0 && i != last) {
             last = i;
             uint32_t plen;
-            const uint8_t *p = rchan_payload(&g_rp.radar, i, &plen, NULL);
-            if (p && plen >= 2 && p[0] == '{') {
-                pthread_mutex_unlock(&g_rp.lk);           /* pushers>0 keeps mmap valid */
-                char pre[32];
-                int pn = snprintf(pre, sizeof pre, "data: {\"replay\":true,");
-                int bad = write(fd, pre, (size_t)pn) != pn ||
-                          write(fd, p + 1, plen - 1) != (ssize_t)(plen - 1) ||
-                          write(fd, "\n\n", 2) != 2;
+            const uint8_t *p = rchan_payload(chan, i, &plen, NULL);
+            if (p && plen >= 2 && p[0] == '{' && (size_t)plen + 24 <= NAT_JPG_CAP) {
+                size_t o = 0;
+                memcpy(sbuf, "data: {\"replay\":true", 20); o = 20;
+                if (plen > 2) sbuf[o++] = ',';            /* non-empty keeps the comma; "{}" stays valid JSON */
+                memcpy(sbuf + o, p + 1, plen - 1); o += plen - 1;   /* rest incl closing } */
+                sbuf[o++] = '\n'; sbuf[o++] = '\n';
+                pthread_mutex_unlock(&g_rp.lk);
+                int bad = write(fd, sbuf, o) != (ssize_t)o;
                 pthread_mutex_lock(&g_rp.lk);
                 if (bad) break;
             }
@@ -898,52 +909,8 @@ void replay_radar_stream(int fd)
     }
     g_rp.pushers--;
     pthread_mutex_unlock(&g_rp.lk);
+    free(sbuf);
 }
 
-/* Detection SSE push — the replay twin of the live `/det/stream`. Live detector
- * boxes are SSE-pushed (~15/s); a 150 ms replay poll shows only ~6-7/s, so the
- * boxes visibly lag the moving object under 60 fps video. Emit each recorded
- * detector frame as the playback clock crosses it (same schema + "replay":true
- * as /replay/det), so replay boxes track at the recorded rate like live. */
-void replay_det_stream(int fd)
-{
-    static const char *head =
-        "HTTP/1.0 200 OK\r\n"
-        "Content-Type: text/event-stream\r\n"
-        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
-    if (write(fd, head, strlen(head)) < 0) return;
-
-    pthread_mutex_lock(&g_rp.lk);
-    unsigned gen = g_rp.gen;
-    g_rp.pushers++;
-    long last = -2;
-
-    while (g_rp.open && g_rp.gen == gen) {
-        int64_t t = clock_now();
-        long i = rchan_at(&g_rp.det, t);
-        if (i < 0) i = g_rp.det.n ? 0 : -1;               /* before first: hold the first */
-        if (i >= 0 && i != last) {
-            last = i;
-            uint32_t plen;
-            const uint8_t *p = rchan_payload(&g_rp.det, i, &plen, NULL);
-            if (p && plen >= 2 && p[0] == '{') {
-                pthread_mutex_unlock(&g_rp.lk);           /* pushers>0 keeps mmap valid */
-                char pre[32];
-                int pn = snprintf(pre, sizeof pre, "data: {\"replay\":true,");
-                int bad = write(fd, pre, (size_t)pn) != pn ||
-                          write(fd, p + 1, plen - 1) != (ssize_t)(plen - 1) ||
-                          write(fd, "\n\n", 2) != 2;
-                pthread_mutex_lock(&g_rp.lk);
-                if (bad) break;
-            }
-            continue;
-        }
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 5000000;
-        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-        pthread_cond_timedwait(&g_rp.cv, &g_rp.lk, &ts);
-    }
-    g_rp.pushers--;
-    pthread_mutex_unlock(&g_rp.lk);
-}
+void replay_radar_stream(int fd) { replay_sse_stream(fd, &g_rp.radar); }
+void replay_det_stream(int fd)   { replay_sse_stream(fd, &g_rp.det); }

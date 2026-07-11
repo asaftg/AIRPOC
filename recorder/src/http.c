@@ -48,13 +48,13 @@ int query_get(const char *qs, const char *key, char *out, size_t outlen)
 
 static void send_head(int fd, int code, const char *status, const char *ctype, long clen)
 {
+    char cl[48] = "";                                   /* omit Content-Length entirely when clen<0 */
+    if (clen >= 0) snprintf(cl, sizeof cl, "Content-Length: %ld\r\n", clen);
     char h[256];
     int n = snprintf(h, sizeof h,
-        "HTTP/1.0 %d %s\r\nContent-Type: %s\r\n%s%ld%s"
+        "HTTP/1.0 %d %s\r\nContent-Type: %s\r\n%s"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        code, status, ctype,
-        clen >= 0 ? "Content-Length: " : "", clen >= 0 ? clen : 0,
-        clen >= 0 ? "\r\n" : "\r\n");
+        code, status, ctype, cl);
     if (write(fd, h, (size_t)n) != n) {}
 }
 
@@ -151,7 +151,11 @@ static void handle_export(int fd, const char *qs)
         static char all[256][SID_LEN + 1];
         int na = store_list_sids(g_rec.root, all, 256);
         size_t o = 0;
-        for (int i = 0; i < na; i++) o += (size_t)snprintf(sids + o, sizeof sids - o, "%s%s", i ? "," : "", all[i]);
+        for (int i = 0; i < na; i++) {
+            int wn = snprintf(sids + o, sizeof sids - o, "%s%s", i ? "," : "", all[i]);
+            if (wn < 0 || (size_t)wn >= sizeof sids - o) break;   /* clamp: never advance o past the buffer */
+            o += (size_t)wn;
+        }
         if (!sids[0]) { send_json(fd, 404, "{\"err\":\"no sessions\"}"); return; }
     }
 
@@ -171,7 +175,9 @@ static void handle_export(int fd, const char *qs)
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
         if (access(probe, F_OK) != 0) continue;
-        lo += (size_t)snprintf(list + lo, sizeof list - lo, " '%s'", tok);
+        int wn = snprintf(list + lo, sizeof list - lo, " '%s'", tok);
+        if (wn < 0 || (size_t)wn >= sizeof list - lo) break;      /* clamp: stop before overrunning the cmd list */
+        lo += (size_t)wn;
         nsid++;
     }
     if (!nsid) { send_json(fd, 404, "{\"err\":\"no such sessions\"}"); return; }
@@ -364,6 +370,8 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
             char b[64]; snprintf(b, sizeof b, "{\"building\":true,\"pct\":%d}", pct);
             send_head(fd, 202, "Accepted", "application/json", (long)strlen(b));
             if (write(fd, b, strlen(b)) < 0) {}
+        } else if (st < 0) {                              /* encode failed for this sid — don't poll forever */
+            send_json(fd, 500, "{\"failed\":true,\"err\":\"native conversion failed\"}");
         } else {
             transcode_request(sid);                       /* first-ever build; tell client to wait */
             send_json(fd, 202, "{\"building\":true,\"pct\":0}");
@@ -379,7 +387,7 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         int pct = 0, st = transcode_current_state(sid, &pct);
         char b[112];
         snprintf(b, sizeof b, "{\"sid\":\"%s\",\"state\":\"%s\",\"pct\":%d}", sid,
-                 st == 2 ? "ready" : st == 1 ? "building" : "queued", pct);
+                 st == 2 ? "ready" : st == 1 ? "building" : st < 0 ? "failed" : "queued", pct);
         send_json(fd, 200, b);
     } else if (!strcmp(path, "/export")) {
         handle_export(fd, qs);                            /* selected sessions -> .tar download */
@@ -436,6 +444,7 @@ static void *accept_thread(void *arg)
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
         Client *c = malloc(sizeof *c);
+        if (!c) { close(fd); continue; }             /* OOM: drop this connection, keep serving */
         c->fd = fd;
         pthread_t t;
         if (pthread_create(&t, NULL, client_thread, c) == 0) pthread_detach(t);
