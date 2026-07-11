@@ -172,6 +172,8 @@ void session_guard_start(void);
 void session_marker(const char *text);
 void session_clock_anchor(void);
 
+void json_escape(const char *in, char *out, size_t outlen);   /* session.c: string -> JSON-safe */
+
 /* store.c */
 int  store_manifest_read(const char *dir, char *buf, size_t len);
 int  store_manifest_field(const char *json, const char *key, char *out, size_t outlen);

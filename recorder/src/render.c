@@ -53,9 +53,10 @@ static int encode_gray(const uint8_t *g, int w, int h, int quality,
 int render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
                         int median_on, void *tone_state, int reseed, uint8_t *out8)
 {
+    if (w < 16 || w > 8192 || h < 16 || h > 8192) return -1;   /* reject corrupt geometry before the size math overflows */
     uint32_t npx = (uint32_t)w * h;
     uint32_t need = mode == MODE_RAW16 ? npx * 2 : mode == MODE_Y8 ? npx : npx * 10 / 8;
-    if (plen + 8 < need) return -1;
+    if (plen < need) return -1;                                 /* require the full frame — a short record would read OOB in the unpack */
 
     /* left-justified 16-bit LE view (what eo_tonemap reads: (lo|hi<<8)>>6) */
     const uint8_t *y16;

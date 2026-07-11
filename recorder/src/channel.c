@@ -348,6 +348,7 @@ static void *drain_small(void *arg)
 {
     Chan *c = arg;
     uint8_t *buf = malloc(c->cfg->max_rec);
+    if (!buf) { fprintf(stderr, "rec: %s drain alloc failed\n", c->cfg->name); return NULL; }
     AirTapRec r;
 
     for (;;) {

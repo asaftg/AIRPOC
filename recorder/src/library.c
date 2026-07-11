@@ -99,6 +99,14 @@ void library_json(const char *qs, char *buf, size_t len)
         if (!tags_match(tags, f_tags)) continue;
         if (f_q[0] && !strcasestr_has(name, f_q) && !strcasestr_has(note, f_q)) continue;
 
+        /* store_manifest_field UN-escapes string fields, so name/note now hold raw
+         * quotes/backslashes/newlines — re-escape before emitting or ONE session with
+         * a quote in its name breaks the whole /library JSON. (tags is a verbatim
+         * array; state/iso/mode/reason are controlled values — all JSON-safe.) */
+        char ename[NAME_MAX_LEN * 3], enote[NOTE_MAX_LEN * 3];
+        json_escape(name, ename, sizeof ename);
+        json_escape(note, enote, sizeof enote);
+
         uint64_t b_native = dir_bytes(dir, "eo_y10");
         uint64_t b_disp = dir_bytes(dir, "eo_jpeg");
         uint64_t b_radar = dir_bytes(dir, "radar_raw") + dir_bytes(dir, "radar_wire");
@@ -112,8 +120,8 @@ void library_json(const char *qs, char *buf, size_t len)
             "\"dur_ms\":%s,\"tags\":%s,\"note\":\"%s\",\"stopped_reason\":\"%s\","
             "\"mode\":\"%s\",\"thumbs\":%d,"
             "\"bytes\":{\"native\":%llu,\"display\":%llu,\"radar\":%llu,\"meta\":%llu}}",
-            emitted ? "," : "", sids[i], name, state, iso,
-            dur[0] ? dur : "0", tags, note, reason, mode, has_thumbs ? 8 : 0,
+            emitted ? "," : "", sids[i], ename, state, iso,
+            dur[0] ? dur : "0", tags, enote, reason, mode, has_thumbs ? 8 : 0,
             (unsigned long long)b_native, (unsigned long long)b_disp,
             (unsigned long long)b_radar, (unsigned long long)b_meta);
         emitted++;

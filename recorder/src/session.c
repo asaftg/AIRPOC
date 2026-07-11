@@ -27,7 +27,7 @@ static char g_stop_reason[24] = "operator";
 
 /* ---- JSON helpers ---- */
 
-static void json_escape(const char *in, char *out, size_t outlen)
+void json_escape(const char *in, char *out, size_t outlen)
 {
     size_t o = 0;
     for (const char *p = in; *p && o + 4 < outlen; p++) {
@@ -293,7 +293,9 @@ int session_save(const char *sid, const char *name, const char *tags, const char
      * transcode CPU spike while an operator is live. No-op if the session has no
      * native channel. */
     transcode_request(sid);
+    pthread_mutex_lock(&g_rec.lk);                 /* pending_sid is also written by session_stop under this lock */
     if (!strcmp(sid, g_rec.pending_sid)) g_rec.pending_sid[0] = 0;
+    pthread_mutex_unlock(&g_rec.lk);
     return 0;
 }
 
@@ -303,7 +305,9 @@ int session_discard(const char *sid)
     if (sid_dir(sid, dir, sizeof dir) != 0) return -1;
     store_manifest_set_state(dir, "discarded");
     store_rm_rf_async(dir);
+    pthread_mutex_lock(&g_rec.lk);
     if (!strcmp(sid, g_rec.pending_sid)) g_rec.pending_sid[0] = 0;
+    pthread_mutex_unlock(&g_rec.lk);
     return 0;
 }
 
