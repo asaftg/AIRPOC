@@ -1,0 +1,47 @@
+{
+ "T1": {
+  "frames": 5709,
+  "rate": 26.38,
+  "ppf": 246,
+  "false_mv": 96,
+  "false_snr": 17.0,
+  "static_snr": 33.0,
+  "real_mv": 6.63
+ },
+ "T2": {
+  "frames": 10179,
+  "rate": 26.39,
+  "ppf": 249,
+  "false_mv": 94,
+  "false_snr": 17.0,
+  "static_snr": 35.0,
+  "real_mv": 3.42
+ },
+ "T3": {
+  "frames": 664,
+  "rate": 26.37,
+  "ppf": 298,
+  "false_mv": 96,
+  "false_snr": 17.0,
+  "static_snr": 27.0,
+  "real_mv": 0.52
+ },
+ "T4": {
+  "frames": 691,
+  "rate": 26.25,
+  "ppf": 321,
+  "false_mv": 94,
+  "false_snr": 17.0,
+  "static_snr": 26.0,
+  "real_mv": 0.35
+ },
+ "T5": {
+  "frames": 2384,
+  "rate": 26.28,
+  "ppf": 309,
+  "false_mv": 92,
+  "false_snr": 17.0,
+  "static_snr": 26.0,
+  "real_mv": 0.42
+ }
+}
