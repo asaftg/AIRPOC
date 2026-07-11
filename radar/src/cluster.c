@@ -137,6 +137,24 @@
 #define INHERIT_S 2.0
 #define INHERIT_R 10.0
 #define INHERIT_CROSS 6.0
+/* ship-gate review fixes (2026-07-11):
+ *  - RELATCH_DR: an earned latch is re-earnable IN PLACE (walk-then-stand far
+ *    target keeps its box; a never-latched wanderer gains nothing by standing)
+ *  - FAINT_R/FAR_MARGIN: beyond FAINT_R the brightness bar sits at the noise
+ *    floor, so passing it outright needs a margin (real far tracks measure
+ *    >= +2.6 dB over the bar, spur streaks +1.5); below the margin the faint
+ *    path is the only way to emit: a FULL coherent streak plus DOPPLER SELF-
+ *    CONSISTENCY (a real mover's claimed points carry doppler matching its
+ *    fitted range-rate, p50 err 0.9-3.3 m/s; a spur-comb streak's apparent
+ *    motion comes from re-latching, its point doppler is soup, p50 16-19).
+ *    Caveat: a fast radial target beyond the doppler fold fails the faint
+ *    path; acceptable for the faint-far (slow/small) case. */
+#define RELATCH_DR 15.0
+#define FAINT_R 200.0
+#define FAR_MARGIN_DB 2.0   /* ramps in over FAR_MARGIN_R0..FAINT_R (no cliff) */
+#define FAR_MARGIN_R0 150.0
+#define DOP_GATE 4.0
+#define DOP_ALPHA 0.2
 
 typedef struct {
     int used, tid;
@@ -152,6 +170,9 @@ typedef struct {
     double last_moved_t;
     /* consistency guard */
     int guard_bad, ok_streak, guard_pass, ever_passed, coh_bad;
+    int jit_ctr, deep_pass;  /* soft-trouble counter; held a FULL streak once */
+    double pass_r;           /* range where the latch was last held */
+    double dop_err;          /* EWMA |median claimed doppler - fitted vr| */
     double snr_peak;         /* lifetime max claimed SNR (brightness evidence) */
     int snr_unknown;         /* saw a point without SNR (no TLV7) -> fail open */
 } Track;
@@ -380,7 +401,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     for (int i=0;i<n;i++) pts[i].tid = 255;
 
     /* ---- channel split (srcpt keeps pts index for tid tagging) ---- */
-    static double rs[RADAR_MAX_POINTS], azs[RADAR_MAX_POINTS], els[RADAR_MAX_POINTS], snrs[RADAR_MAX_POINTS];
+    static double rs[RADAR_MAX_POINTS], azs[RADAR_MAX_POINTS], els[RADAR_MAX_POINTS], snrs[RADAR_MAX_POINTS], dops[RADAR_MAX_POINTS];
     static int ismv[RADAR_MAX_POINTS], srcpt[RADAR_MAX_POINTS], snrok[RADAR_MAX_POINTS];
     static double ar[RADAR_MAX_POINTS], aa_[RADAR_MAX_POINTS];
     int m=0, nmv=0, nall=0;
@@ -394,6 +415,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         int snr_known = !isnan(snr);
         if (fabs(v)>=R->vmin && (!snr_known || snr>=R->snr_mv)) {
             rs[m]=r; azs[m]=az; els[m]=el; snrs[m]=snr_known?snr:0.0;
+            dops[m]=v;
             snrok[m]=snr_known; ismv[m]=1; srcpt[m]=i; m++; nmv++;
         } else if (snr_known && snr>=snr_st) {
             st_idx[nst]=i; st_r[nst]=r; st_a[nst]=az; st_e[nst]=el; st_s[nst]=snr; nst++;
@@ -429,6 +451,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             for(int i=0;i<nc;i++) cnt[lbl[i]]++;
             for(int i=0;i<nc;i++) if(cnt[lbl[i]]>=ST_MIN_PTS && m<RADAR_MAX_POINTS){
                 rs[m]=cr[i]; azs[m]=ca[i]; els[m]=ce[i]; snrs[m]=cs_[i];
+                dops[m]=0.0;
                 snrok[m]=1; ismv[m]=0; srcpt[m]=cidx[i]; m++;
             }
         }
@@ -483,11 +506,12 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     for(int oi=0;oi<R->nord;oi++){
         int ti=R->ord[oi]; Track *t=&R->tracks[ti];
         int ng=0, nmv_hit=0, any_unk=0; double smax=-1e9;
+        static double gv[RADAR_MAX_POINTS];
         for(int i=0;i<m;i++) if(owner[i]==ti){
             gr[ng]=rs[i]; ga[ng]=azs[i]; ge[ng]=els[i];
             if(ismv[i]){                       /* brightness: MOVING points only */
-                nmv_hit++;
                 if(snrok[i]){ if(snrs[i]>smax) smax=snrs[i]; } else any_unk=1;
+                gv[nmv_hit++]=dops[i];
             }
             if(srcpt[i]>=0&&srcpt[i]<n) pts[srcpt[i]].tid=t->tid;
             ng++;
@@ -507,6 +531,10 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(smax>t->snr_peak
                && !(now_t < R->flood_until && t->r < FLOOD_R+FLOOD_MARGIN))
                 t->snr_peak=smax;
+            if(nmv_hit){                       /* doppler self-consistency */
+                double derr=fabs(med(gv,nmv_hit) - t->vr);
+                t->dop_err=(1-DOP_ALPHA)*t->dop_err + DOP_ALPHA*derr;
+            }
             /* half-extents from the frame's points (for the wire box) */
             double mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
             for(int i=0;i<m;i++) if(owner[i]==ti){
@@ -567,19 +595,46 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(c_floor<r_floor) c_floor=r_floor;
             c_bad = (c_path>=c_floor && c_net/c_path<COH_MIN);
         }
-        int jit_bad = t->jit > JIT_BASE + JIT_RK*t->r;
-        int bad = r_bad||spd_bad||tele_bad||c_bad||jit_bad;
-        t->coh_bad = r_bad||c_bad||spd_bad;
-        if(bad){ t->guard_bad++; t->ok_streak=0; }
+        /* only judge jitter on frames WITH evidence: during a miss streak
+         * the EWMA is stale and the window is starving - the miss-based
+         * lifecycle owns that case, not the guard */
+        int jit_bad = judged && t->jit > JIT_BASE + JIT_RK*t->r;
+        /* coherent net progress per DOMAIN: a directed mover. A coherent
+         * mover dragging its gate through clutter shows jitter and flutter
+         * in the OTHER domain - measurement extent, not a ghost re-latch.
+         * KILL only on overall coherence failure or the always-hard physics
+         * tests; single-domain incoherence on a coherent mover only
+         * UNLATCHES; jitter on a coherent mover is excused. */
+        int prog_r = judged && r_path>0.0 && r_net>=POS_NET
+                     && r_net/r_path>=COH_MIN;
+        int prog_c = judged && c_path>0.0 && c_net>=c_move_floor
+                     && c_net/c_path>=COH_MIN;
+        int prog = prog_r || prog_c;
+        int hard = spd_bad || tele_bad
+                   || ((r_bad || c_bad || jit_bad) && !prog);
+        int soft = !hard && ((r_bad && !prog_r) || (c_bad && !prog_c));
+        /* gate freeze only on OVERALL incoherence (freezing a coherent
+         * mover's gates while clutter disturbs one domain starves it into a
+         * dropout death) */
+        t->coh_bad = spd_bad || ((r_bad || c_bad) && !prog);
+        if(hard) t->guard_bad++;
+        else if(t->guard_bad>0) t->guard_bad--;
+        if(soft) t->jit_ctr++;
+        else if(t->jit_ctr>0) t->jit_ctr--;
+        if(hard || soft) t->ok_streak=0;
         else {
-            if(t->guard_bad>0) t->guard_bad--;
             int frozen = (now_t < R->flood_until) && (t->r < FLOOD_R+FLOOD_MARGIN);
-            if(judged && !frozen && (r_net>=POS_NET || c_net>=c_move_floor))
+            int standing = t->ever_passed && fabs(t->r - t->pass_r) < RELATCH_DR;
+            if(judged && !frozen
+               && (r_net>=POS_NET || c_net>=c_move_floor || standing))
                 t->ok_streak++;
         }
         int need = t->ever_passed ? GUARD_EMIT_RE : GUARD_EMIT;
         if(t->ok_streak>=need){ t->guard_pass=1; t->ever_passed=1; }
-        if(t->guard_bad>=GUARD_UNLATCH) t->guard_pass=0;
+        if(t->ok_streak>=GUARD_EMIT) t->deep_pass=1;
+        if(t->guard_pass) t->pass_r=t->r;
+        if(t->guard_bad>=GUARD_UNLATCH || t->jit_ctr>=GUARD_UNLATCH)
+            t->guard_pass=0;
     }
     /* ---- lifecycle + confirmation (python order) ---- */
     for(int oi=0;oi<R->nord;){
@@ -669,6 +724,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 t->used=1; t->tid=R->next_tid++; t->r=crr; t->az=caz; t->el=cel;
                 t->sx=t->sy=t->sz=MIN_SIZE_M;
                 t->last_moved_t=now_t;
+                t->pass_r=crr;
                 if(any_unk) t->snr_unknown=1;
                 if(smax>-1e9
                    && !(now_t < R->flood_until && crr < FLOOD_R+FLOOD_MARGIN))
@@ -679,6 +735,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                     double cross=fabs((g->az-caz)*DEG)*0.5*(g->r+crr);
                     if(fabs(g->r-crr)<INHERIT_R && cross<INHERIT_CROSS){
                         t->guard_pass=1; t->ever_passed=1;
+                        t->pass_r=crr;
                         if(g->snr_peak>t->snr_peak) t->snr_peak=g->snr_peak;
                         break;
                     }
@@ -701,8 +758,15 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         int ti=R->ord[oi]; Track *t=&R->tracks[ti];
         if(!t->confirmed) continue;
         if(!t->guard_pass) continue;            /* no positive coherence yet */
-        if(!t->snr_unknown && t->snr_peak < snr_req(t->r))
-            continue;                           /* not target-bright for THIS range */
+        {
+            double req = snr_req(t->r);
+            double ramp = (t->r - FAR_MARGIN_R0) / (FAINT_R - FAR_MARGIN_R0);
+            req += FAR_MARGIN_DB * clampd(ramp, 0.0, 1.0);
+            if(!t->snr_unknown && t->snr_peak < req
+               /* faint-far relief: FULL coherent streak + doppler-consistent */
+               && !(t->r >= FAINT_R && t->deep_pass && t->dop_err <= DOP_GATE))
+                continue;                       /* not target-bright for THIS range */
+        }
         int moved_recently = t->moved_frames>=MOVE_CONFIRM
                              && (now_t - t->last_moved_t) <= R->park_s;
         if(!(t->moving || moved_recently)) continue;   /* static/phantom */

@@ -9,15 +9,24 @@
  * dedup so co-located tracks emit one box.
  *
  * Post-confirmation CONSISTENCY GUARD (2026-07-11): a confirmed track must stay
- * physically coherent to live (sustained radial random-walk, unphysical path
- * speed, re-latch teleports, wander or jitter KILL it — this is what ended the
- * immortal wandering garage track and the 16 dB ghost storms), and must earn
- * emission with positive evidence: a streak of judged-coherent frames with net
- * progress, plus a lifetime peak MOVING-point SNR that clears a range-dependent
- * brightness bar (floor noise is 16-21 dB everywhere; a real target near the
- * radar is far brighter, R^4). During a near-field flood (something moving
- * right next to the radar lights the whole sidelobe hemisphere) close tracks
- * can not earn evidence at all. All guard thresholds are range-aware.
+ * physically coherent to live and must earn emission with positive evidence.
+ * KILL is reserved for overall incoherence — unphysical path speed, re-latch
+ * teleports, or domain incoherence on a track with no coherent progress in
+ * EITHER domain (this is what ended the immortal wandering garage track and
+ * the 16 dB ghost storms). A coherent directed mover is never killed for
+ * jitter or for flutter in one domain (measurement extent / clutter passing
+ * through its gate) — those only UNLATCH its emission until it looks clean
+ * again, and a track re-earns a previously-held latch cheaply, including in
+ * place (walk-then-stand keeps its box). Emission also needs brightness: the
+ * lifetime peak MOVING-point SNR over a range-dependent bar (floor noise is
+ * 16-21 dB everywhere; a real close target is far brighter, R^4; at range the
+ * bar gains a margin because it sits at the floor). A faint far track that
+ * cannot clear the bar may emit only on a full coherent streak PLUS doppler
+ * self-consistency (claimed doppler must match its own fitted range-rate —
+ * spur streaks fail this by an order of magnitude). During a near-field flood
+ * (something moving right next to the radar lights the whole sidelobe
+ * hemisphere) close tracks can not earn evidence at all. All thresholds are
+ * range-aware, and the guard only judges frames with fresh measurements.
  *
  * Validated offline against the fixture corpus; parity vs the Python reference
  * via radar/tools/track_replay.c + parity_check.py (see those for the corpus

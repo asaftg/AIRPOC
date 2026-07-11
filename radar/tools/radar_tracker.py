@@ -173,6 +173,35 @@ DEFAULTS = dict(
     guard_unlatch=5,     # counter level that unlatches emission (ghosts never
                          #     latch at all, so this only trades real-target
                          #     flicker; 5 keeps a briefly-noisy real box up)
+    relatch_dr=15.0,     # m   a track that EARNED the latch may re-earn it
+                         #     without net progress while it stays near the
+                         #     range where it last held it (a walk-then-STAND
+                         #     far target keeps its box; a never-latched
+                         #     wanderer gains nothing by standing)
+    faint_r=200.0,       # m   beyond this, a track that has held a FULL
+                         #     coherent streak may emit below the brightness
+                         #     bar (a small drone at 250 m lives in the
+                         #     16-17 dB band; the bar cannot separate it from
+                         #     floor noise there, so coherence must)
+    dop_gate=4.0,        # m/s faint-far relief also demands DOPPLER SELF-
+                         #     CONSISTENCY: a real mover's claimed points carry
+                         #     doppler matching its fitted range-rate (measured
+                         #     p50 err 0.9-3.3 on real tracks); a spur-comb
+                         #     streak's apparent motion comes from re-latching,
+                         #     its point doppler is soup (p50 err 16-19).
+                         #     Caveat: a fast radial target beyond the doppler
+                         #     fold would fail this; acceptable for the faint-
+                         #     far case (slow/small targets), documented.
+    dop_alpha=0.2,       #     EWMA rate for the consistency error
+    far_margin_db=2.0,   # dB  at range the plain bar sits at the noise floor,
+                         #     so passing it outright needs this margin (real
+                         #     far tracks measure >= +2.6 dB over the bar; spur
+                         #     streaks measure +1.5); ramps in linearly over
+                         #     far_margin_r0..faint_r (no cliff a streak can
+                         #     duck under); below the margin the faint path
+                         #     (coherence + doppler self-consistency) is the
+                         #     only way to emit
+    far_margin_r0=150.0, # m   margin ramp start
     pos_net=2.0,         # m   net window displacement (range, or cross above the
                          #     angle-noise floor) that counts as POSITIVE progress
                          #     evidence for the emission latch. "Not incoherent"
@@ -222,7 +251,8 @@ class Track:
                  "disp_flag", "r0", "az0", "born_static",
                  "moved_frames", "last_moved_t", "moving",
                  "guard_bad", "guard_pass", "ok_streak", "coh_bad",
-                 "snr_peak", "ever_passed")
+                 "snr_peak", "ever_passed", "pass_r", "jit_ctr", "deep_pass",
+                 "dop_err")
 
     def __init__(self, tid, t, r, az, el, n_win, born_static):
         self.tid = tid
@@ -255,6 +285,10 @@ class Track:
         self.coh_bad = False
         self.snr_peak = 0.0
         self.ever_passed = False
+        self.pass_r = r
+        self.jit_ctr = 0
+        self.deep_pass = False
+        self.dop_err = 0.0
 
     def travel(self):
         return math.hypot(self.r - self.r0,
@@ -424,8 +458,8 @@ def tracker(frames, **kw):
         warm = (t - t0) < P["warmup_s"]
 
         # ---- split points into channels ---- (carry el as 3rd element)
-        mv = []     # (r, az, el, snr) moving
-        st = []     # (r, az, el, snr) static candidates (band+snr), freshness below
+        mv = []     # (r, az, el, snr, v) moving
+        st = []     # (r, az, el, snr, v) static candidates (band+snr), freshness below
         allpts = [] # (r, az) for map update
         for (r, az, el, v, snr) in fr["pts"]:
             if r < P["r_min"] or abs(az) > P["az_keep"]:
@@ -434,20 +468,20 @@ def tracker(frames, **kw):
                 continue
             allpts.append((r, az))
             if abs(v) >= P["vmin"] and snr >= P["snr_mv"]:
-                mv.append((r, az, el, snr))
+                mv.append((r, az, el, snr, v))
             elif snr >= P["snr_st"]:
-                st.append((r, az, el, snr))
+                st.append((r, az, el, snr, v))
 
         # ---- fresh-static extraction (before map update) ----
         fresh = []
         if not warm and st:
-            for (r, az, el, snr) in st:
+            for (r, az, el, snr, v) in st:
                 ir = int((r - GR_R0) / GR_DR)
                 ia = int((az - GR_A0) / GR_DA)
                 if 0 <= ir < NR and 0 <= ia < NA:
                     nb = occ[max(ir-1, 0):ir+2, max(ia-1, 0):ia+2].max()
                     if nb < P["occ_free"]:
-                        fresh.append((r, az, el, snr))
+                        fresh.append((r, az, el, snr, v))
             # fresh statics must form a small cluster to count
             if fresh:
                 fp = list(fresh)
@@ -473,6 +507,7 @@ def tracker(frames, **kw):
             azs = np.array([p[1] for p in sel])
             els = np.array([p[2] for p in sel])
             snrs = np.array([p[3] for p in sel])
+            dops = np.array([p[4] for p in sel])
             is_mv = np.arange(m) < n_mv
         claimed = np.zeros(m, dtype=bool)
 
@@ -549,6 +584,10 @@ def tracker(frames, **kw):
                 # brightness belongs to the flood, angle info is gone)
                 mv_idx = idx[is_mv[idx]]
                 if len(mv_idx):
+                    # doppler self-consistency (vs last frame's fitted vr)
+                    derr = abs(float(np.median(dops[mv_idx])) - tk.vr)
+                    da_ = P["dop_alpha"]
+                    tk.dop_err = (1 - da_) * tk.dop_err + da_ * derr
                     smax = float(snrs[mv_idx].max())
                     if smax > tk.snr_peak and not (
                             t < flood_until
@@ -620,22 +659,56 @@ def tracker(frames, **kw):
                              and c_net / c_path < P["coh_min"])
                 else:
                     r_bad = spd_bad = tele_bad = c_bad = False
-                jit_bad = tk.jit > P["jit_base"] + P["jit_rk"] * tk.r
-                bad = r_bad or spd_bad or tele_bad or c_bad or jit_bad
-                tk.coh_bad = r_bad or c_bad or spd_bad
-                if bad:
+                # only judge jitter on frames WITH evidence: during a miss
+                # streak the EWMA is stale and the window is starving - the
+                # miss-based lifecycle owns that case, not the guard
+                jit_bad = (judged
+                           and tk.jit > P["jit_base"] + P["jit_rk"] * tk.r)
+                # coherent net progress per DOMAIN (above the noise floor at
+                # this range): a directed mover. A coherent mover dragging its
+                # gate through clutter shows jitter and flutter in the OTHER
+                # domain - that is measurement extent, not a ghost re-latch.
+                # KILL only on overall coherence failure (no domain coherent)
+                # or on the always-hard physics tests (speed, teleports);
+                # single-domain incoherence on a coherent mover only UNLATCHES
+                # emission; jitter on a coherent mover is excused.
+                prog_r = (judged and r_path > 0.0
+                          and r_net >= P["pos_net"]
+                          and r_net / r_path >= P["coh_min"])
+                prog_c = (judged and c_path > 0.0
+                          and c_net >= c_move_floor
+                          and c_net / c_path >= P["coh_min"])
+                prog = prog_r or prog_c
+                hard = (spd_bad or tele_bad
+                        or ((r_bad or c_bad or jit_bad) and not prog))
+                soft = (not hard) and ((r_bad and not prog_r)
+                                       or (c_bad and not prog_c))
+                # gate freeze only on OVERALL incoherence (a coherent
+                # mover's fit is real; freezing its gates while clutter
+                # disturbs one domain starves it into a dropout death)
+                tk.coh_bad = spd_bad or ((r_bad or c_bad) and not prog)
+                if hard:
                     tk.guard_bad += 1
-                    tk.ok_streak = 0
                 else:
                     tk.guard_bad = max(tk.guard_bad - 1, 0)
-                    # positive progress: coherent NET motion above the noise
-                    # floor at this range (radial is clean; cross must beat
-                    # the angular noise floor)
+                if soft:
+                    tk.jit_ctr += 1
+                else:
+                    tk.jit_ctr = max(tk.jit_ctr - 1, 0)
+                if hard or soft:
+                    tk.ok_streak = 0
+                else:
+                    # positive evidence: coherent NET motion above the noise
+                    # floor, OR standing where the latch was last held (an
+                    # earned latch is re-earnable in place: walk-then-stand)
                     frozen = (t < flood_until
                               and tk.r < P["flood_r"] + P["flood_margin"])
+                    standing = (tk.ever_passed
+                                and abs(tk.r - tk.pass_r) < P["relatch_dr"])
                     if (judged and not frozen
                             and (r_net >= P["pos_net"]
-                                 or c_net >= c_move_floor)):
+                                 or c_net >= c_move_floor
+                                 or standing)):
                         tk.ok_streak += 1
                 # emission latch: positive evidence turns it on, sustained
                 # trouble turns it off (re-earned with a fresh streak)
@@ -644,7 +717,12 @@ def tracker(frames, **kw):
                 if tk.ok_streak >= need:
                     tk.guard_pass = True
                     tk.ever_passed = True
-                if tk.guard_bad >= P["guard_unlatch"]:
+                if tk.ok_streak >= P["guard_emit"]:
+                    tk.deep_pass = True         # held a FULL coherent streak
+                if tk.guard_pass:
+                    tk.pass_r = tk.r
+                if (tk.guard_bad >= P["guard_unlatch"]
+                        or tk.jit_ctr >= P["guard_unlatch"]):
                     tk.guard_pass = False
                 if glog is not None:
                     glog.append(dict(tid=tk.tid, t=t, n=n, r=tk.r,
@@ -738,6 +816,7 @@ def tracker(frames, **kw):
                                 and cross < P["inherit_cross"]):
                             tk.guard_pass = True      # re-acquired target
                             tk.ever_passed = True
+                            tk.pass_r = cr
                             tk.snr_peak = max(tk.snr_peak, gsnr_)
                             break
                     tracks.append(tk)
@@ -767,8 +846,18 @@ def tracker(frames, **kw):
                 continue
             req = min(max(P["snr_evid_hi"] - P["snr_evid_slope"] * tk.r,
                           P["snr_evid_lo"]), P["snr_evid_hi"])
-            if P["guard"] and tk.snr_peak < req:         # not target-bright for THIS range
-                continue
+            ramp = ((tk.r - P["far_margin_r0"])
+                    / max(P["faint_r"] - P["far_margin_r0"], 1e-9))
+            req += P["far_margin_db"] * min(max(ramp, 0.0), 1.0)
+            if P["guard"] and tk.snr_peak < req:
+                # faint-far relief: beyond faint_r the bar sits at the noise
+                # floor and cannot separate a small target (a drone at 250 m
+                # lives at 16-17 dB); a track that has held a FULL coherent
+                # streak AND whose claimed doppler matches its own range-rate
+                # has proven itself by physics instead.
+                if not (tk.r >= P["faint_r"] and tk.deep_pass
+                        and tk.dop_err <= P["dop_gate"]):
+                    continue
             moved_recently = (tk.moved_frames >= P["move_confirm"]
                               and (t - tk.last_moved_t) <= P["park_s"])
             if not (tk.moving or moved_recently):        # static/phantom -> not emitted
