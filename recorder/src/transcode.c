@@ -82,8 +82,9 @@ void transcode_cancel(void)
 /* Bump when the encode parameters change so already-cached mp4s auto-rebuild.
  * v1 = uncapped (violated H.264 level, stalled decoders).
  * v2 = capped 20 Mbit/s (fixed stall but too soft).
- * v3 = 50 Mbit/s + keyframe/s — high quality, still level-conformant, smooth seek. */
-#define TRANSCODE_VER 3
+ * v3 = 50 Mbit/s + keyframe/s — high quality, still level-conformant, smooth seek.
+ * v4 = + the live view's median grain filter, so night grain doesn't flicker. */
+#define TRANSCODE_VER 4
 
 /* An mp4 is usable only if it exists AND carries the current encoder version
  * (sidecar native.mp4.ver). Older recordings' mp4s have no marker (or a stale
@@ -156,6 +157,39 @@ static AirecIdxRow *load_idx(const char *dir, const char *chan, long *n)
     return rows;
 }
 
+/* Session-level median (grain filter) flag from the recorded EO stats. The live
+ * view median-filters night grain; the mp4 must too, or grain flickers frame-to-
+ * frame in replay while the live view is smooth. (Whole-session read; median is a
+ * stable AE decision — a mid-session toggle isn't tracked, acceptable for the
+ * motion proxy since full detail comes from the raw frames on pause/step.) */
+static int read_median_flag(const char *dir)
+{
+    long n = 0;
+    AirecIdxRow *rows = load_idx(dir, "events", &n);
+    if (!rows) return 0;
+    int median = 0;
+    FILE *cur = NULL; uint32_t cur_seg = 0xffffffff;
+    char buf[4096], sp[720];
+    for (long i = 0; i < n && i < 4000; i++) {          /* scan the early events */
+        AirecIdxRow *r = &rows[i];
+        if (r->payload_len == 0 || r->payload_len >= sizeof buf) continue;
+        if (r->segment_no != cur_seg) {
+            if (cur) fclose(cur);
+            snprintf(sp, sizeof sp, "%s/events/data.%05u.airec", dir, r->segment_no);
+            cur = fopen(sp, "rb"); cur_seg = r->segment_no;
+            if (!cur) break;
+        }
+        if (fseek(cur, (long)r->offset + (long)sizeof(AirecRecHdr), SEEK_SET) != 0 ||
+            fread(buf, 1, r->payload_len, cur) != r->payload_len) continue;
+        buf[r->payload_len] = 0;
+        const char *m = strstr(buf, "\"median\":");
+        if (m) { median = atoi(m + 9) != 0; break; }    /* first event carrying it wins */
+    }
+    if (cur) fclose(cur);
+    free(rows);
+    return median;
+}
+
 /* Build native.mp4 for a session (blocking). pct (optional) tracks progress.
  * Unique tmp per caller so a replay-triggered build and an export build can't
  * clobber each other. Returns 0 on success. */
@@ -210,6 +244,7 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
     uint8_t *out8 = malloc((size_t)w * h);
     uint8_t *raw = malloc((size_t)w * h * 2);
     EoToneState st = { 0, 0, 0 };
+    int median = read_median_flag(dir);                /* match the live view's grain filter */
     FILE *cur = NULL; uint32_t cur_seg = 0xffffffff;   /* one segment open at a time */
     int ok = out8 && raw;
 
@@ -229,7 +264,7 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
             r->payload_len > (uint32_t)w * h * 2 ||
             fread(raw, 1, r->payload_len, cur) != r->payload_len) continue;
 
-        if (render_native_gray8(raw, r->payload_len, w, h, mode, 0, &st, i == 0, out8) == 0)
+        if (render_native_gray8(raw, r->payload_len, w, h, mode, median, &st, i == 0, out8) == 0)
             if (fwrite(out8, 1, (size_t)w * h, ff) != (size_t)w * h) { ok = 0; break; }
         if (pct) *pct = (int)((i + 1) * 100 / n);
     }
