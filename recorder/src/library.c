@@ -115,13 +115,21 @@ void library_json(const char *qs, char *buf, size_t len)
         snprintf(tpath, sizeof tpath, "%s/thumbs/0.jpg", dir);
         int has_thumbs = access(tpath, F_OK) == 0;
 
+        /* HD movie status for the per-card badge: "ready" = a current-version
+         * native.mp4 is cached (opens instantly, no re-encode); "building" = an
+         * encode for this sid is in progress; "none" = no current mp4 (missing or a
+         * superseded older encode — the operator converts it). Mirrors native_mp4
+         * in /replay/state. */
+        int hd_st = transcode_current_state(sids[i], NULL);
+        const char *hd = hd_st == 2 ? "ready" : hd_st == 1 ? "building" : "none";
+
         o += (size_t)snprintf(buf + o, len - o,
             "%s{\"sid\":\"%s\",\"name\":\"%s\",\"state\":\"%s\",\"t0\":\"%s\","
             "\"dur_ms\":%s,\"tags\":%s,\"note\":\"%s\",\"stopped_reason\":\"%s\","
-            "\"mode\":\"%s\",\"thumbs\":%d,"
+            "\"mode\":\"%s\",\"thumbs\":%d,\"hd\":\"%s\","
             "\"bytes\":{\"native\":%llu,\"display\":%llu,\"radar\":%llu,\"meta\":%llu}}",
             emitted ? "," : "", sids[i], ename, state, iso,
-            dur[0] ? dur : "0", tags, enote, reason, mode, has_thumbs ? 8 : 0,
+            dur[0] ? dur : "0", tags, enote, reason, mode, has_thumbs ? 8 : 0, hd,
             (unsigned long long)b_native, (unsigned long long)b_disp,
             (unsigned long long)b_radar, (unsigned long long)b_meta);
         emitted++;
