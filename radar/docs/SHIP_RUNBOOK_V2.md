@@ -90,18 +90,28 @@ if at all possible - at 14/13 the junk flood + 450-pt clamp can evict weak
 far targets and make results clamp-limited, D3). Watch ppf vs 450 +
 deferred-frames each step. Scored with walkout_score.py + trajectory plots.
 
-## DECISION BOX — tracker knob posture (D5: yours, not a default)
-The guard was validated GATES-OPEN (snr 16 / el +-20): walk restored to 94%
-of narrow coverage, far hold intact, ghosts zero, T2 IMPROVED. Costs: T1
-detect -3.1pts (confined to a ghost-identical 1.9s flicker per the builder;
-SW review verifying), and T4/T5 tangential queue-traffic track-frames drop
-(recoverable only by Phase 3, not by a looser guard).
-  (a) OPEN posture (snr 16, el +-20 = compiled defaults): airborne-capable,
-      cleaner tracks, accepts the tangential cost until P3.
-  (b) NARROW posture (el +-5 via /ctl): maximal ground-target continuity,
-      blind above +5 deg. LANDMINE: compiled defaults are OPEN - every
-      daemon restart reverts to (a) unless the default is changed in code.
-Pick one; if (b), say so and the default gets changed in cluster.h first.
+## KNOB POSTURE — RESOLVED by the final SW ship-gate (round-2 re-review)
+Guard round 2 (commit 6b24d7e) fixed all three round-1 blockers; reviewer
+independently re-verified (incl. a synthetic 16-17dB drone @250m: EMITS via
+the doppler-consistency relief; ghost streaks mechanically rejected at 4-5x
+margin). VERDICT: DEPLOY at compiled defaults (snr 16, el +-20). The narrow
+posture (el +-5) buys ~60 T4 track-frames and costs T5, T1 detect, and ALL
+airborne elevation coverage - no reason to use it.
+
+Round-2 vs live-today: ghosts 138/6831/0 -> 0/0/0; T2 far-hold 48.6s vs
+32.6 (BETTER), far-band exact recovery; T7 walks ~= narrow reference; T4
+mover 513 vs 588 (-13%); T1 false<200m .077 (flat), detect .680 vs .711
+(residual confined to ghost-identical flicker + latch cycles).
+
+THREE LOGGED ACCEPTANCES (operator sign-off at deploy):
+1. T5 tangential queue/junction traffic -87% under the guard - the known
+   crosstraffic blind spot, recovered by Phase 3 angle-MTI, not by knobs
+   (narrow posture is equally bad: -90%).
+2. Far-standing drift beyond 15m of the last-held spot only partially held
+   (T7-style stand; T2-style stand fully recovered).
+3. Watch items for first field sessions: "zombie" unlatched-but-alive
+   drifters shadowing real seeds (garage multipath); grave-inheritance
+   phantom-hold; +0.3s confirm latency (EO remains the fast channel).
 
 ## Rollback tree (unchanged)
 FW: flash_agv1.cfg (Build A) / flash_demoDDM.cfg (V1.0). SW: revert commit /
