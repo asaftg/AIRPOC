@@ -38,7 +38,12 @@ typedef struct RadarClusterer RadarClusterer;
 #define CLUSTER_DEFAULT_SPEED    0.7    /* m/s — Doppler motion threshold */
 #define CLUSTER_DEFAULT_SNR      16.0   /* dB  — point strength gate */
 #define CLUSTER_DEFAULT_FOV      90.0   /* deg — azimuth half-angle gate (90 = full) */
-#define CLUSTER_DEFAULT_ELMAX    90.0   /* deg — elevation half-angle gate (90 = off) */
+#define CLUSTER_DEFAULT_ELMAX    20.0   /* deg — elevation half-angle gate. Default =
+                                         * the antenna's physical elevation beam edge:
+                                         * beyond ~±20 the array has no real gain, so
+                                         * reports there are angle-noise / multipath.
+                                         * Beam moves with the radar → gimbal-safe.
+                                         * Operator widens to 90 (= off) via /ctl. */
 #define CLUSTER_DEFAULT_DOP      1.2    /* m/s — merge velocity-coherence gate */
 #define CLUSTER_EPS_MIN_M        0.5
 #define CLUSTER_EPS_MAX_M        50.0

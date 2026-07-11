@@ -20,8 +20,10 @@
 #define MAX_TRK RADAR_MAX_TARGETS
 
 /* ---- fixed (non-knob) tracker params (== radar_tracker.py DEFAULTS) ---- */
-#define EL_LO (-9.0)
-#define EL_HI 2.5
+/* Elevation gating is the elmax knob ONLY (symmetric, radar-frame). The old
+ * hard EL_LO -9 / EL_HI +2.5 window was a level-mount ground-bench tuning:
+ * on a gimbal it is wrong in every pose, and it silently blinded the tracker
+ * to any airborne target above +2.5 deg. Removed 2026-07-10. */
 #define AZ_KEEP_CAP 90.0     /* input az also gated by the FOV knob */
 #define R_MIN 3.0
 #define OCC_FREE 0.35
@@ -257,7 +259,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     for (int i=0;i<n;i++){
         double r=pts[i].range, az=pts[i].az, el=pts[i].el, v=pts[i].doppler, snr=pts[i].snr;
         if (r<R_MIN || fabs(az)>fov || fabs(el)>el_max) continue;
-        if (!(el>=EL_LO && el<=EL_HI)) continue;
         ar[nall]=r; aa_[nall]=az; nall++;
         int snr_known = !isnan(snr);
         if (fabs(v)>=R->vmin && (!snr_known || snr>=R->snr_mv)) {
