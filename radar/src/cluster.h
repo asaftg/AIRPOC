@@ -2,11 +2,26 @@
  *
  * Replaces the earlier per-frame DBSCAN+Kalman (ground-bench clustering.py port).
  * Class-agnostic track-before-detect: velocity from position history (range-rate
- * / angle-rate, never ambiguous Doppler); nearest-track association (one physical
- * target -> one track, no fragmentation); a moving channel plus a fresh-static
- * occupancy channel so a car that drives in and parks keeps its box; fast M-of-N
- * confirm; short coast; spatial dedup so co-located tracks emit one box.
- * Validated offline against the ground-truth recording (host tool: radar/tools).
+ * / angle-rate, never ambiguous Doppler); two-tier nearest-track association
+ * (confirmed tracks claim points first — junk cannot shred an established
+ * target); a moving channel plus a fresh-static occupancy channel so a car that
+ * drives in and parks keeps its box; fast M-of-N confirm; short coast; spatial
+ * dedup so co-located tracks emit one box.
+ *
+ * Post-confirmation CONSISTENCY GUARD (2026-07-11): a confirmed track must stay
+ * physically coherent to live (sustained radial random-walk, unphysical path
+ * speed, re-latch teleports, wander or jitter KILL it — this is what ended the
+ * immortal wandering garage track and the 16 dB ghost storms), and must earn
+ * emission with positive evidence: a streak of judged-coherent frames with net
+ * progress, plus a lifetime peak MOVING-point SNR that clears a range-dependent
+ * brightness bar (floor noise is 16-21 dB everywhere; a real target near the
+ * radar is far brighter, R^4). During a near-field flood (something moving
+ * right next to the radar lights the whole sidelobe hemisphere) close tracks
+ * can not earn evidence at all. All guard thresholds are range-aware.
+ *
+ * Validated offline against the fixture corpus; parity vs the Python reference
+ * via radar/tools/track_replay.c + parity_check.py (see those for the corpus
+ * results and the FP-chaos caveat).
  *
  * Behind the SAME interface as before, so on-chip gtrack TLVs (308/309) can
  * replace it later without touching the parser, wire, or previewer.
