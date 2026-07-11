@@ -380,7 +380,9 @@ static int rec_connect(void)
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons((uint16_t)g_rec_port) };
     if (inet_pton(AF_INET, g_rec_host, &a.sin_addr) != 1) { close(fd); return -1; }
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
-    sock_timeouts(fd, 15, 30);          /* a hung recorder can't block read(rfd) forever */
+    sock_timeouts(fd, 15, 180);         /* a hung recorder can't block read(rfd) forever, but give
+                                         * /rec/export (builds a whole .tar) generous time before the
+                                         * first byte — 30s wrongly aborted large offloads. */
     return fd;
 }
 static void handle_rec(int cfd, const char *req)

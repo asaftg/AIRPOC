@@ -1219,10 +1219,15 @@
    * "ask where to save each file" to choose one). tier=display keeps it reasonable; raw
    * native is excluded (regenerable). */
   function offloadTar(sids, n) {
-    if (!confirm("Offload " + n + " session(s)?\n\nDownloads a .tar (display video + radar + data) to this device — it goes to your Downloads folder unless your browser is set to ask where to save.")) return;
+    if (!confirm("Offload " + n + " session(s) as a .tar (display video + radar + data)?\n\nIt saves to your Downloads. To CHOOSE A FOLDER each time, turn on Chrome ▸ Settings ▸ Downloads ▸ \"Ask where to save each file before downloading\" — then a Save-As window opens for every offload.\n\nA large session takes up to a minute to build before the download starts.")) return;
     var a = document.createElement("a");
     a.href = "/rec/export?sids=" + encodeURIComponent(sids) + "&tier=display";
+    /* download attr => the browser SAVES A FILE (shows it in the download bar) instead of
+     * NAVIGATING the tab to the URL — which is what dumped you on the ERR_EMPTY_RESPONSE page
+     * when the build was slow. With "ask where to save" on, this same click opens the folder picker. */
+    a.download = "airpoc-" + ((n === 1 && sids !== "all" && sids.indexOf(",") < 0) ? sids : n + "-sessions") + ".tar";
     document.body.appendChild(a); a.click(); a.remove();
+    toast("Offload started — building the .tar; it'll land in your downloads (large sessions take ~a minute).", "ok", 6000);
   }
   $("lib-offall").onclick = function () { if (!libSessions.length) { alert("Library is empty."); return; } offloadTar("all", libSessions.length); };
   $("lib-offsel").onclick = function () { var s = Object.keys(libSel).filter(function (k) { return libSel[k]; }); if (!s.length) { alert("Select sessions first (the checkboxes)."); return; } offloadTar(s.join(","), s.length); };
