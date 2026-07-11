@@ -45,6 +45,7 @@ int main(int argc, char **argv)
         return 1;
     }
     session_recover_all();
+    transcode_cleanup_tmp();          /* clear encode temps orphaned by a crash/kill */
     session_guard_start();
     events_start();
 

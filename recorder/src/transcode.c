@@ -14,6 +14,41 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <dirent.h>
+
+/* Delete orphaned encode temp files (native.mp4.<tid>.tmp) in one session dir —
+ * left behind when a transcode is SIGKILL'd (normal cancel unlinks its own). */
+static void cleanup_tmp_dir(const char *sdir)
+{
+    DIR *sd = opendir(sdir);
+    if (!sd) return;
+    struct dirent *f;
+    while ((f = readdir(sd))) {
+        size_t l = strlen(f->d_name);
+        if (strncmp(f->d_name, "native.mp4.", 11) == 0 && l > 4 &&
+            strcmp(f->d_name + l - 4, ".tmp") == 0) {
+            char fp[1400];
+            snprintf(fp, sizeof fp, "%s/%s", sdir, f->d_name);
+            unlink(fp);
+        }
+    }
+    closedir(sd);
+}
+
+/* Startup sweep: clear stale encode temps across all sessions. */
+void transcode_cleanup_tmp(void)
+{
+    DIR *root = opendir(g_rec.root);
+    if (!root) return;
+    struct dirent *e;
+    while ((e = readdir(root))) {
+        if (e->d_name[0] == '.') continue;
+        char sdir[700];
+        snprintf(sdir, sizeof sdir, "%s/%s", g_rec.root, e->d_name);
+        cleanup_tmp_dir(sdir);
+    }
+    closedir(root);
+}
 
 typedef struct {
     char sid[SID_LEN + 1];
@@ -123,6 +158,7 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
 {
     char dir[600];
     snprintf(dir, sizeof dir, "%s/%s", g_rec.root, sid);
+    cleanup_tmp_dir(dir);        /* clear any orphaned temp from a prior killed build (cap-1: none live) */
 
     int w = 1440, h = 1088, mode = MODE_Y10P;
     char cj[512], v[24], cjp[700];

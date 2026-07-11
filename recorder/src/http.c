@@ -156,10 +156,13 @@ static void handle_export(int fd, const char *qs)
     }
 
     if (strcmp(tier, "meta") && strcmp(tier, "full")) snprintf(tier, sizeof tier, "display");
-    int want_video = strcmp(tier, "meta") != 0;      /* display/full carry the movie */
 
-    /* validate every sid (charset-checked -> safe for the shell) + exists; and for
-     * video tiers, make sure the playable native.mp4 is built (sync) before tarring */
+    /* validate every sid (charset-checked -> safe for the shell) + exists. NOTE: we
+     * do NOT build the native.mp4 here — a synchronous transcode blocked the whole
+     * export (no TTFB -> the client timed out with an empty response) and spawned a
+     * second concurrent encode. The tar carries whatever native.mp4 is already
+     * cached; the operator uses "Convert to native" first if they want the HD movie
+     * in the offload. Export is pure I/O and streams immediately. */
     char list[8192]; size_t lo = 0; int nsid = 0;
     char work[8192]; snprintf(work, sizeof work, "%s", sids);
     char *save = NULL;
@@ -168,7 +171,6 @@ static void handle_export(int fd, const char *qs)
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
         if (access(probe, F_OK) != 0) continue;
-        if (want_video) transcode_ensure(tok);        /* build the EO native.mp4 if missing */
         lo += (size_t)snprintf(list + lo, sizeof list - lo, " '%s'", tok);
         nsid++;
     }

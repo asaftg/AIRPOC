@@ -224,6 +224,7 @@ int  render_selftest(void);
 /* transcode.c — cache a smooth H.264 MP4 of a session's native replay */
 void transcode_request(const char *sid);         /* kick an async build (replay) */
 void transcode_cancel(void);                      /* abort the in-flight encode (close/new open) */
+void transcode_cleanup_tmp(void);                 /* startup: sweep orphaned native.mp4.*.tmp */
 int  transcode_ensure(const char *sid);          /* build eo native.mp4 sync if missing (export) */
 int  transcode_status(const char *sid, int *pct);/* 2=ready(any file) 1=building 0=none -1=failed */
 int  transcode_current_state(const char *sid, int *pct); /* HD build: 2=ready 1=building 0=not started */
