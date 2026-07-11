@@ -221,8 +221,12 @@ static int has(const char *req, const char *path)
 
 static void send_asset(int fd, const char *ctype, const unsigned char *body, unsigned len)
 {
+    /* no-store, not no-cache: the assets are embedded in the binary and change on every deploy,
+     * so a stale cached page (old UI, missing controls) is a recurring source of "why did this
+     * disappear" confusion. no-store forbids caching entirely -> every load is the current UI.
+     * The assets are a few KB, so re-fetching per load is free. */
     dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\n"
-                "Cache-Control: no-cache, must-revalidate\r\n"
+                "Cache-Control: no-store, no-cache, must-revalidate\r\n"
                 "Content-Length: %u\r\nConnection: close\r\n\r\n", ctype, len);
     ssize_t wr = write(fd, body, len); (void)wr;
 }
