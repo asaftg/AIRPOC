@@ -95,7 +95,7 @@
   /* if the mp4 can't decode/load, never sit on a black <video> — mark it failed so
    * updateReplayVideo falls back to the MJPEG. Guarded so resetMp4State's load() (no src)
    * doesn't trip it. */
-  $("nvid").addEventListener("error", function () { if (mp4State.srcSet) { mp4State.ready = false; mp4State.pct = -1; } });
+  $("nvid").addEventListener("error", function () { if (mp4State.srcSet) resetMp4State(); });   /* mp4 failed to load -> fall back to the MJPEG path */
   /* Recorded still frame not ready yet (recorder just opened the session) -> the <img> errors,
    * and because the still src only re-sets when the timeline moves it would stay blank ("EO not
    * there"). Retry the current still a few times so it recovers on its own. */
@@ -859,42 +859,24 @@
     radarES.onmessage = function (e) { if (replaying) return; var f = parseJSONsafe(e.data); if (f) onRadarFrame(f); };
     radarES.onerror = function () { if (!replaying) onRadarFrame({ connected: false }); };   /* auto-reconnects */
   }
-  /* ---- Replay overlays are POLLED, never SSE --------------------------------------------------
-   * Rock-solid connection budget: a replay holds exactly ONE long-lived socket — the mp4 <video>.
-   * Radar + det overlays ride SELF-CHAINING polls: each fetch schedules the next only AFTER it
-   * settles (+ a floor gap), so at most one request per stream is ever in flight. That cannot pile
-   * up sockets on a lossy link the way a fixed-interval poll (stacks when a fetch outlives its
-   * period) or a long-lived SSE (slow to tear down -> FIN-WAIT pileup, the "can't enter a movie
-   * after 3-4" bug) does. Fast link -> self-paces to ~14 Hz; bad link -> slows, never leaks. */
-  var REPLAY_GAP = 70;                                    /* ms floor between overlay polls */
-  var radarPollT = null, radarPolling = false;
-  function stopReplayRadarPoll() { radarPolling = false; if (radarPollT) { clearTimeout(radarPollT); radarPollT = null; } }
-  function openReplayRadarStream() {                      /* name kept; now a self-chaining poll */
-    if (radarES) { radarES.close(); radarES = null; }     /* ensure no live radar SSE lingers */
-    stopReplayRadarPoll(); radarPolling = true; pumpReplayRadar();
+  /* ---- Replay overlays over SSE (recorder pushes clock-paced at the full recorded rate) -------
+   * The recorder streams replay radar + det on /rec/replay/{radar,det}/stream, paced to the
+   * playback clock (pause/seek/rate). SSE = smooth ~26 Hz radar + on-time boxes (a poll was
+   * ~8-14 Hz / laggy). Safe on the ~6-socket budget now that the old FIN-WAIT pileup causes are
+   * gone: closeReplay closes these on EXIT (not next-open), the library list holds no streams,
+   * and the recorder no longer transcodes on open. radarES/detES are the same handles the live
+   * streams use — reused here, and closed by closeReplay / openReplay. */
+  function stopReplayRadarPoll() {}   /* poll retired for SSE; kept as a safe no-op for existing callers */
+  function stopReplayDetPoll() {}
+  function openReplayRadarStream() {
+    if (radarES) { radarES.close(); radarES = null; }
+    radarES = new EventSource("/rec/replay/radar/stream");
+    radarES.onmessage = function (e) { if (!replaying) return; var f = parseJSONsafe(e.data); if (f) onRadarFrame(f); };
   }
-  function pumpReplayRadar() {
-    if (!replaying || !radarPolling) return;
-    fetch(API.radar).then(function (r) { if (!r.ok) throw 0; return r.text(); })
-      .then(function (t) { if (replaying) { var f = parseJSONsafe(t); if (f) onRadarFrame(f); } })
-      .catch(function () {})
-      .then(function () { if (replaying && radarPolling) radarPollT = setTimeout(pumpReplayRadar, REPLAY_GAP); });
-  }
-  var detPollT = null, detPolling = false, detGap = REPLAY_GAP;
-  function stopReplayDetPoll() { detPolling = false; if (detPollT) { clearTimeout(detPollT); detPollT = null; } }
-  function openReplayDetStream() {                         /* name kept; now a self-chaining poll */
+  function openReplayDetStream() {
     if (detES) { detES.close(); detES = null; } lastDet = null;
-    stopReplayDetPoll(); detGap = REPLAY_GAP; detPolling = true; pumpReplayDet();
-  }
-  function pumpReplayDet() {
-    if (!replaying || !detPolling) return;
-    fetch("/rec/replay/det").then(function (r) {
-        if (r.status === 404) { detGap = 5000; return null; }   /* channel not shipped -> slow probe, not 14/s */
-        detGap = REPLAY_GAP; if (!r.ok) throw 0; return r.text();
-      })
-      .then(function (t) { if (replaying && t !== null) { var m = parseJSONsafe(t); lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); } })
-      .catch(function () { if (replaying && lastDet) { lastDet = null; draw(true, false); } })
-      .then(function () { if (replaying && detPolling) detPollT = setTimeout(pumpReplayDet, detGap); });
+    detES = new EventSource("/rec/replay/det/stream");
+    detES.onmessage = function (e) { if (!replaying) return; var m = parseJSONsafe(e.data); lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); };
   }
 
   /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
@@ -1169,6 +1151,29 @@
     return s;
   }
   function libDate(t0) { try { var d = new Date(t0); return d.toLocaleDateString() + " " + ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); } catch (e) { return t0; } }
+  /* "Convert to native (HD)" per card. The recorder transcodes the recording to a 60fps H.264
+   * mp4 in the background (GET /rec/replay/transcode?sid= -> {state:none|building|ready|failed, pct}),
+   * one at a time, cached, survives navigation. We poll it for a progress %, then refresh the
+   * library so the card flips to "HD ✓". hdBuild holds the one in-flight build so a re-render
+   * (search/filter) keeps showing its progress. */
+  var hdBuild = null, hdTimer = null;
+  function setHdBtn(btn, state, pct) {
+    btn.classList.remove("ready", "building");
+    if (state === "ready") { btn.textContent = "HD ✓"; btn.title = "native HD available"; btn.classList.add("ready"); btn.disabled = true; }
+    else if (state === "building") { btn.textContent = "HD " + (pct || 0) + "%"; btn.title = "building native HD…"; btn.classList.add("building"); btn.disabled = true; }
+    else { btn.textContent = "⬆ HD"; btn.title = "convert to native 60 fps HD (background, one-time)"; btn.disabled = false; }
+  }
+  function hdPoll(sid) {
+    fetch("/rec/replay/transcode?sid=" + encodeURIComponent(sid)).then(function (r) { return r.json(); }).then(function (j) {
+      var st = j && j.state, pct = (j && (j.pct != null ? j.pct : j.percent)) || 0;
+      var btn = document.querySelector('.lib-card[data-sid="' + sid + '"] .lib-hd');
+      if (st === "ready") { hdBuild = null; if (btn) setHdBtn(btn, "ready"); loadLibrary(); return; }
+      if (st === "failed") { hdBuild = null; if (btn) setHdBtn(btn, "none"); toast("HD conversion failed.", "err", 3500); return; }
+      hdBuild = { sid: sid, pct: pct };
+      if (btn) setHdBtn(btn, "building", pct);
+      hdTimer = setTimeout(function () { hdPoll(sid); }, 2000);
+    }).catch(function () { hdTimer = setTimeout(function () { hdPoll(sid); }, 3000); });
+  }
   function libCard(s) {
     var card = document.createElement("div"); card.className = "lib-card" + (libSel[s.sid] ? " sel" : ""); card.dataset.sid = s.sid;
     var hasThumbs = s.thumbs && s.thumbs > 0, poster;
@@ -1199,7 +1204,17 @@
     eb.onclick = function (e) { e.stopPropagation(); openEditDialog(s); };
     var cpb = document.createElement("button"); cpb.className = "lib-act"; cpb.textContent = "⧉"; cpb.title = "copy name";
     cpb.onclick = function (e) { e.stopPropagation(); copyText(s.name || s.sid); };
-    nrow.appendChild(nm); nrow.appendChild(eb); nrow.appendChild(cpb); body.appendChild(nrow);
+    var hdb = document.createElement("button"); hdb.className = "lib-act lib-hd";
+    hdb.onclick = function (e) {
+      e.stopPropagation();
+      if (hdBuild && hdBuild.sid !== s.sid) { toast("Another HD conversion is running — one at a time.", "err", 3000); return; }
+      if (hdTimer) clearTimeout(hdTimer);
+      setHdBtn(hdb, "building", 0); hdBuild = { sid: s.sid, pct: 0 };
+      fetch("/rec/replay/transcode?sid=" + encodeURIComponent(s.sid)).catch(function () {});
+      hdPoll(s.sid);
+    };
+    setHdBtn(hdb, (hdBuild && hdBuild.sid === s.sid) ? "building" : (s.bytes && s.bytes.native > 0 ? "ready" : "none"), hdBuild ? hdBuild.pct : 0);
+    nrow.appendChild(nm); nrow.appendChild(eb); nrow.appendChild(cpb); nrow.appendChild(hdb); body.appendChild(nrow);
     var rest = document.createElement("div");
     rest.innerHTML = '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
       + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
@@ -1345,62 +1360,41 @@
     $("library").hidden = false; loadLibrary();
   }
   $("rb-close").onclick = closeReplay;
-  /* Native replay prefers the recorded H.264 mp4 (/rec/replay/native.mp4) — full 60 fps and
-   * small over WiFi — over the MJPEG stream the recorder caps at 20 fps. The mp4 is transcoded
-   * on demand; readiness is probed from the endpoint itself (1-byte range: 200/206 = ready,
-   * 202 = building{pct}) so it works whatever recorder build is running (the deployed one
-   * doesn't report mp4 status in /state). The <video> is SLAVED to the transport clock so the
-   * det/radar overlays — paced by the recorder clock — stay in sync. Display channel, radar-
-   * only, or while-building all fall back to the paced MJPEG <img>. */
-  var mp4State = { sid: null, ready: false, pct: 0, nextProbe: 0, srcSet: false };
+  /* Native replay = the recorded H.264 mp4 (/rec/replay/native.mp4), full 60fps. The recorder
+   * reports its status in /rec/replay/state as native_mp4 (none|building|ready|failed) + a pct,
+   * so we READ it there — no endpoint probing. The <video> plays on its OWN clock and is nudged
+   * to the transport clock only on a big drift; the scrub handler seeks it directly. Display
+   * channel, radar-only, or while-building fall back to the paced MJPEG <img>. */
+  var mp4State = { sid: null, srcSet: false };
   function resetMp4State() {
-    mp4State = { sid: null, ready: false, pct: 0, nextProbe: 0, srcSet: false };
+    mp4State = { sid: null, srcSet: false };
     var nv = $("nvid"); nv.pause(); nv.removeAttribute("src"); nv.load();
     nv.style.display = "none"; $("video").style.display = ""; $("nat-badge").hidden = true;
-  }
-  function probeMp4(sid) {
-    mp4State.nextProbe = Date.now() + 1500;                        /* throttle re-probes */
-    fetch("/rec/replay/native.mp4?sid=" + encodeURIComponent(sid), { headers: { Range: "bytes=0-0" } })
-      .then(function (r) {
-        if (mp4State.sid !== sid) return;
-        if (r.status === 200 || r.status === 206) { mp4State.ready = true; mp4State.pct = 100; }
-        else if (r.status === 202) { r.json().then(function (j) { if (mp4State.sid === sid) mp4State.pct = (j && (j.pct != null ? j.pct : j.percent)) || 0; }).catch(function () {}); }
-        else mp4State.pct = -1;                                    /* unavailable -> stay on MJPEG */
-      }).catch(function () {});
   }
   function updateReplayVideo(rs) {
     var vid = $("video"), nv = $("nvid"), badge = $("nat-badge");
     var sid = replaySession && replaySession.sid;
-    if (rs.video_src === "native" && sid) {
-      if (mp4State.sid !== sid) { resetMp4State(); mp4State.sid = sid; }
-      if (!mp4State.ready && mp4State.pct !== -1 && Date.now() >= mp4State.nextProbe) probeMp4(sid);
-      if (mp4State.ready) {                                        /* play the mp4, loosely following the clock */
-        if (!mp4State.srcSet) { mp4State.srcSet = true; nv.src = "/rec/replay/native.mp4?sid=" + encodeURIComponent(sid); vid.src = BLANK; }  /* BLANK stops the hidden MJPEG stream */
-        nv.style.display = "block"; vid.style.display = "none"; badge.hidden = true;   /* "" would revert to the stylesheet's display:none -> black */
-        replayPlaying = false; replayStillT = -1;                 /* re-arm MJPEG src if we switch back */
-        var tv = rs.t_ms / 1000;
-        nv.playbackRate = rs.rate || 1;
-        if (rs.playing && rs.t_ms < rs.dur_ms) {
-          if (nv.paused) nv.play().catch(function () {});
-          /* Let the <video> FREE-RUN on its own smooth decode clock; only re-sync to the
-           * transport clock on a BIG drift (a scrub, a decode stall, a throttled background
-           * tab). Nudging currentTime every poll turned smooth playback into constant seeking
-           * — that was the passive-watch stutter. Keyframe-per-second mp4 makes the rare
-           * correction cheap. */
-          if (!scrubbing && nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.3) nv.currentTime = tv;
-        } else {
-          if (!nv.paused) nv.pause();
-          /* paused: pin the exact frame to the transport position. While actively SCRUBBING the
-           * scrub handler seeks the video directly (immediate, per-input) — don't fight it here
-           * with the laggier poll-clock value, or the frame appears to freeze during the drag. */
-          if (!scrubbing && nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.05) nv.currentTime = tv;
-        }
-        return;
-      }
-      badge.hidden = mp4State.pct === -1;                          /* building -> show progress */
-      if (!badge.hidden) badge.textContent = "PREPARING NATIVE 60 fps · " + mp4State.pct + "%";
+    var nat = rs.native_mp4;                                       /* none | building | ready | failed */
+    if (rs.video_src === "native" && sid && nat === "ready") {
+      if (mp4State.sid !== sid || !mp4State.srcSet) { mp4State.sid = sid; mp4State.srcSet = true; nv.src = "/rec/replay/native.mp4?sid=" + encodeURIComponent(sid); vid.src = BLANK; }  /* BLANK stops the hidden MJPEG stream */
+      nv.style.display = "block"; vid.style.display = "none"; badge.hidden = true;   /* "" would revert to display:none -> black */
+      replayPlaying = false; replayStillT = -1;                   /* re-arm MJPEG src if we switch back */
+      var tv = rs.t_ms / 1000;
+      nv.playbackRate = rs.rate || 1;
+      if (rs.playing && rs.t_ms < rs.dur_ms) { if (nv.paused) nv.play().catch(function () {}); }
+      else { if (!nv.paused) nv.pause(); }
+      /* Let the <video> run on its OWN clock; correct to the transport clock ONLY on a big drift
+       * (>0.3s: scrub, stall, throttled tab). Hard-setting currentTime every poll turned playback
+       * and scrub into constant seeking that reset to frame 0. The scrub handler seeks directly
+       * per input while scrubbing. Keyframe-per-second mp4 makes the rare correction cheap. */
+      if (!scrubbing && nv.readyState >= 1 && isFinite(tv) && Math.abs(nv.currentTime - tv) > 0.3) nv.currentTime = tv;
+      return;
+    }
+    if (rs.video_src === "native" && sid && nat === "building") {
+      if (mp4State.srcSet) resetMp4State();                        /* was playing, now (re)building -> back to MJPEG under the badge */
+      badge.hidden = false; badge.textContent = "PREPARING NATIVE 60 fps · " + (rs.native_mp4_pct || 0) + "%";
     } else {
-      if (mp4State.sid !== null) resetMp4State();                  /* left native -> tear the video down */
+      if (mp4State.sid !== null) resetMp4State();                  /* left native / none / failed -> tear the video down */
       badge.hidden = true;
     }
     /* MJPEG path: stream while playing, recorded still while paused/scrubbed */
@@ -1449,7 +1443,7 @@
      * like the DISPLAY still does. Without this the frame only moved on the 150 ms poll and the
      * mp4's own seeks lagged behind, so it looked frozen while scrubbing. */
     var nv = $("nvid");
-    if (mp4State.ready && mp4State.srcSet && nv.readyState >= 1) nv.currentTime = v / 1000;
+    if (mp4State.srcSet && nv.readyState >= 1) nv.currentTime = v / 1000;   /* native loaded -> seek the mp4 directly to track the drag */
     var now = Date.now(); if (now - scrubThrottle >= 80) { scrubThrottle = now; rctl("seek=" + Math.round(v)); }
   };
   $("tp-scrub").onchange = function () { rctl("seek=" + Math.round(this.value)); setTimeout(function () { scrubbing = false; }, 150); };
