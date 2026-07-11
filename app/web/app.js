@@ -272,7 +272,6 @@
    * server-side. Init + readback come from /rstats (the daemon's own /stats). ── */
   var RADARC = [
     { key: "fov",     stat: "fov_half_deg",     fmt: function (v) { return v.toFixed(0) + "°"; } },
-    { key: "elmax",   stat: "el_max_deg",       fmt: function (v) { return v.toFixed(0) + "°"; } },
     { key: "snrmin",  stat: "snr_min_db",       fmt: function (v) { return v.toFixed(0) + " dB"; } },
     { key: "speed",   stat: "speed_min_mps",    fmt: function (v) { return v.toFixed(1) + " m/s"; } },
     { key: "doppler", stat: "doppler_gate_mps", fmt: function (v) { return v.toFixed(1) + " m/s"; } },
