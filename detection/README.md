@@ -14,8 +14,11 @@ Two detection paths:
 - **Appearance model** (TensorRT, GPU) at native 1440×1088 — classified boxes.
 - **Motion worker** (OpenCV, CPU thread, camera rate) — a safety net that catches
   any *moving* target the model missed (far tiny drone, or a mid-range vehicle /
-  person lost to poor contrast). Emits unclassified `movers`. Where a mover
-  overlaps a model box the model wins → one box per target.
+  person lost to poor contrast). It models the scene with a **rolling background**
+  (per-pixel median of the last few seconds), subtracts it, removes the night row
+  read-noise, and confirms a mover with an M-of-N tracker over ~1 s. Emits
+  unclassified `movers`. Where a mover overlaps a model box the model wins → one
+  box per target.
 
 Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 
@@ -26,10 +29,13 @@ Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRAT
   (separate data/training agent) drops in with no code change — same format, same
   endpoint. `human`/`vehicle` today (`vehicle` = car/bus/truck); `drone` comes
   with the trained model.
-- **Motion:** built + verified on a synthetic mover/static test. **Off by default**
-  — the frame-diff path floods on a *moving* camera until real ego-motion
-  (IMU/VIO, or the `-E` ECC stabilizer) is wired behind `stabilize()`. Safe on a
-  static mount; enable via `/ctl`.
+- **Motion:** **rolling-background** worker (median-of-recent-frames − destripe −
+  M-of-N), validated offline on a night NIR recording where it holds a walking
+  human that the appearance model drops. **Off by default** — the background is
+  built in the current frame, so on a *moving* camera it needs ego-motion alignment
+  (IMU/VIO, or the `-E` ECC stabilizer) behind `stabilize()` first. Safe on a
+  static/holding mount; enable via `/ctl`. Window length is the `mot_window_s`
+  knob (1–6 s, default 5).
 - **Contract + recorder tap live;** the app/console already consumes `:8094`.
 
 ### Latency (measured on-device, hot GPU, native resolution)
@@ -83,7 +89,7 @@ detection/
        source.h tap_source.c  frame source (live tap; replay sources land next)
        preproc.cu/.h          Y10 -> normalized model input (CUDA)
        infer.cpp/.h           TensorRT engine + raw-head decode + NMS
-       motion.cpp/.h          motion worker (OpenCV, down-res frame-diff)
+       motion.cpp/.h          motion worker (OpenCV, down-res rolling-background)
        stab.h stab_identity.c stab_ecc.cpp   frame-alignment interface + impls
        http.h http.c          /stream + /stats + /ctl
        emit.h emit.c          detection-message JSON + pixel->angle mapping

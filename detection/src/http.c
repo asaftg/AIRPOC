@@ -21,7 +21,8 @@ static DetKnobs g_k = {
     .conf = DET_CONF_DEFAULT, .cadence = DET_CADENCE_DEFAULT,
     .motion = DET_MOTION_DEFAULT, .max_dets = DET_MAXDETS_DEFAULT,
     .nms = DET_NMS_DEFAULT,
-    .mot_k = DET_MOT_K_DEFAULT, .mot_persist = DET_MOT_PERSIST_DEFAULT,
+    .mot_k = DET_MOT_K_DEFAULT, .mot_window_s = DET_MOT_WINDOW_S_DEFAULT,
+    .mot_persist = DET_MOT_PERSIST_DEFAULT,
 };
 static void (*g_ctl_cb)(const DetKnobs *, void *) = NULL;
 static void  *g_ctl_user = NULL;
@@ -124,14 +125,15 @@ static int build_stats(char *b, size_t cap)
         "\"infer_ms\":{\"p50\":%.2f,\"p95\":%.2f},\"e2e_ms\":{\"p50\":%.2f,\"p95\":%.2f}},"
         "\"motion\":{\"active\":%s,\"fps\":%.1f,\"stab_fail_pct\":%.1f,\"candidates\":%d},"
         "\"knobs\":{\"conf\":%.2f,\"cadence\":%d,\"motion\":%d,\"max_dets\":%d,"
-        "\"nms\":%.2f,\"mot_k\":%.1f,\"mot_persist\":%d}}\n",
+        "\"nms\":%.2f,\"mot_k\":%.1f,\"mot_window_s\":%.1f,\"mot_persist\":%d}}\n",
         g_version, g_ifov_urad, g_img_w, g_img_h,
         g_tap.connected ? "true" : "false", g_tap.fps, g_tap.gaps, g_tap.drops_cum,
         g_tap.frame_id,
         g_det.active ? "true" : "false", g_det.fps, g_det.model, g_det.precision,
         g_det.infer_p50, g_det.infer_p95, g_det.e2e_p50, g_det.e2e_p95,
         g_mot.active ? "true" : "false", g_mot.fps, g_mot.stab_fail_pct, g_mot.candidates,
-        g_k.conf, g_k.cadence, g_k.motion, g_k.max_dets, g_k.nms, g_k.mot_k, g_k.mot_persist);
+        g_k.conf, g_k.cadence, g_k.motion, g_k.max_dets, g_k.nms, g_k.mot_k,
+        g_k.mot_window_s, g_k.mot_persist);
 }
 
 static void *client(void *arg)
@@ -152,7 +154,7 @@ static void *client(void *arg)
         close(fd); return NULL;
     }
 
-    /* GET /ctl?conf=&cadence=&motion=&max_dets=&mot_k=&mot_persist=
+    /* GET /ctl?conf=&cadence=&motion=&max_dets=&mot_k=&mot_window_s=&mot_persist=
      * Absent params keep their current value. Clamped server-side. Always 200. */
     if (!strncmp(req, "GET /ctl", 8)) {
         char *q;
@@ -165,6 +167,7 @@ static void *client(void *arg)
         if ((q = strstr(req, "max_dets=")))    k.max_dets = atoi(q + 9);
         if ((q = strstr(req, "nms=")))         k.nms = atof(q + 4);
         if ((q = strstr(req, "mot_k=")))       k.mot_k = atof(q + 6);
+        if ((q = strstr(req, "mot_window_s="))) k.mot_window_s = atof(q + 13);
         if ((q = strstr(req, "mot_persist=")))  k.mot_persist = atoi(q + 12);
         k.conf = clampd(k.conf, DET_CONF_MIN, DET_CONF_MAX);
         k.cadence = clampi(k.cadence, DET_CADENCE_MIN, DET_CADENCE_MAX);
@@ -172,6 +175,7 @@ static void *client(void *arg)
         k.max_dets = clampi(k.max_dets, DET_MAXDETS_MIN, DET_MAXDETS_MAX);
         k.nms = clampd(k.nms, DET_NMS_MIN, DET_NMS_MAX);
         k.mot_k = clampd(k.mot_k, DET_MOT_K_MIN, DET_MOT_K_MAX);
+        k.mot_window_s = clampd(k.mot_window_s, DET_MOT_WINDOW_S_MIN, DET_MOT_WINDOW_S_MAX);
         k.mot_persist = clampi(k.mot_persist, DET_MOT_PERSIST_MIN, DET_MOT_PERSIST_MAX);
         pthread_mutex_lock(&g_lock);
         g_k = k;

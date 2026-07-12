@@ -63,8 +63,9 @@ static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
     fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d motion=%d max_dets=%d "
-            "nms=%.2f mot_k=%.1f mot_persist=%d\n",
-            k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k, k->mot_persist);
+            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d\n",
+            k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k,
+            k->mot_window_s, k->mot_persist);
 }
 
 static void *motion_thread(void *arg)
@@ -87,9 +88,11 @@ static void *motion_thread(void *arg)
 
         DetKnobs k; http_get_knobs(&k);
         int nmov = 0, sf = 0;
-        if (k.motion)
-            nmov = motion_process(mw, f.y10, f.w, f.h, k.mot_k, k.mot_persist,
-                                  local, MAX_MOV_CAP, &sf);
+        if (k.motion) {
+            MotionParams mp = { .k_mad = k.mot_k, .window_s = k.mot_window_s,
+                                .fps = fps > 1.0 ? fps : 60.0, .persist = k.mot_persist };
+            nmov = motion_process(mw, f.y10, f.w, f.h, &mp, local, MAX_MOV_CAP, &sf);
+        }
 
         pthread_mutex_lock(&g_mov_lock);
         memcpy(g_movers, local, (size_t)nmov * sizeof(Mover));

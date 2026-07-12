@@ -9,7 +9,7 @@
 #ifndef DET_CONFIG_H
 #define DET_CONFIG_H
 
-#define DET_VERSION       "0.2.0"          /* model (TRT) + motion + contract */
+#define DET_VERSION       "0.3.0"          /* model (TRT) + rolling-background motion + contract */
 
 /* IMX296 native frame delivered on airpoc.eo_y10 (Y10 in 16-bit LE words). */
 #define EO_IMG_W          1440
@@ -46,18 +46,27 @@
                                           a higher-scoring one (see infer.cpp). */
 #define DET_NMS_MIN            0.10
 #define DET_NMS_MAX            0.90
-#define DET_MOTION_DEFAULT     0       /* motion worker OFF by default: the frame-diff
-                                          path floods on a MOVING camera until real
-                                          ego-motion (IMU/VIO, or ECC -E) is wired
-                                          behind stabilize(). Enable via /ctl only on a
-                                          static mount or once ego-motion is real. */
+#define DET_MOTION_DEFAULT     0       /* motion worker OFF by default: the rolling
+                                          background is built in the current frame, so
+                                          on a MOVING camera it needs ego-motion
+                                          alignment (IMU/VIO, or ECC -E) behind
+                                          stabilize() first. Enable via /ctl on a
+                                          static/holding mount or once ego-motion is real. */
 #define DET_MAXDETS_DEFAULT    128
 #define DET_MAXDETS_MIN        1
 #define DET_MAXDETS_MAX        512
 #define DET_MOT_K_DEFAULT      6.0     /* MAD multiplier for the motion threshold */
 #define DET_MOT_K_MIN          1.0
 #define DET_MOT_K_MAX          30.0
-#define DET_MOT_PERSIST_DEFAULT 3      /* hits required within the 5-frame window */
+#define DET_MOT_WINDOW_S_DEFAULT 5.0   /* rolling-background window (seconds): how far back
+                                          "normal scene" is modelled. Short adapts fast &
+                                          is cleaner in a changing scene; long is smoother
+                                          but slower to forget a stopped object. GUI slider. */
+#define DET_MOT_WINDOW_S_MIN   1.0
+#define DET_MOT_WINDOW_S_MAX   6.0
+#define DET_MOT_PERSIST_DEFAULT 3      /* confirmation strength 1..5 = fraction of the ~1 s
+                                          M-of-N tracker window that must hit before a mover
+                                          is reported (rejects sparkle/twinkle) */
 #define DET_MOT_PERSIST_MIN    1
 #define DET_MOT_PERSIST_MAX    5
 

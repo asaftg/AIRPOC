@@ -22,7 +22,8 @@ typedef struct {
     int    max_dets;
     double nms;           /* box-merge IoU threshold (lower = merge more) */
     double mot_k;         /* motion MAD threshold multiplier */
-    int    mot_persist;   /* hits required in the 5-frame window */
+    double mot_window_s;  /* rolling-background window (seconds) */
+    int    mot_persist;   /* confirmation strength 1..5 (fraction of the ~1 s M-of-N window) */
 } DetKnobs;
 
 int  http_start(int port);

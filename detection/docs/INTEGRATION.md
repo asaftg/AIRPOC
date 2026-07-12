@@ -59,13 +59,13 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
 
 ## Output — `GET /stats`
 ```json
-{"version":"0.1.0","ifov_urad":287.5,"img":{"w":1440,"h":1088},
+{"version":"0.3.0","ifov_urad":287.5,"img":{"w":1440,"h":1088},
  "tap":{"connected":true,"fps":60.0,"gaps":0,"drops_cum":0,"frame_id":184223},
  "det":{"active":false,"fps":0.0,"model":"none","precision":"",
         "infer_ms":{"p50":0,"p95":0},"e2e_ms":{"p50":0,"p95":0}},
  "motion":{"active":false,"fps":0.0,"stab_fail_pct":0.0,"candidates":0},
  "knobs":{"conf":0.35,"cadence":4,"motion":1,"max_dets":128,
-          "mot_k":6.0,"mot_persist":3}}
+          "mot_k":6.0,"mot_window_s":5.0,"mot_persist":3}}
 ```
 `det.active` is true once an engine is loaded (`-e`); `motion.active` is true once
 the motion thread has processed a frame. `candidates` is the raw mover count
@@ -82,11 +82,16 @@ replies `ok`.
 | `motion` | 0/1 | motion worker on/off |
 | `max_dets` | 1–512 | cap on detections per frame |
 | `nms` | 0.10–0.90 | box-merge IoU (lower = merge more; also merges a box mostly inside a higher-scoring one — collapses the multiple boxes a big/close object produces) |
-| `mot_k` | 1–30 | motion MAD threshold multiplier |
-| `mot_persist` | 1–5 | hits required within the 5-frame window |
+| `mot_k` | 1–30 | motion MAD threshold multiplier (noise floor above the median diff) |
+| `mot_window_s` | 1–6 s | rolling-background window: how far back "normal scene" is modelled. Short adapts fast & is cleaner in a changing scene; long is smoother but slower to forget a stopped object. **GUI slider.** |
+| `mot_persist` | 1–5 | confirmation strength = fraction of the ~1 s M-of-N tracker window a mover must hit before it's reported (rejects sparkle/twinkle) |
 
 Raise `cadence` toward 1 as a target closes — a fast crosser up close needs the
 higher rate; searching at range can run slower to save GPU.
+
+> Pitfall: the motion worker's rolling background is built in the current frame, so
+> it is correct only on a static/holding mount until real ego-motion is wired behind
+> `stabilize()`. It is `motion=0` by default for that reason.
 
 ## Output — `airpoc.det_wire` (recorder tap)
 Best-effort shm publisher (protocol v1), byte-verbatim `/stream` JSON, 16 slots.
