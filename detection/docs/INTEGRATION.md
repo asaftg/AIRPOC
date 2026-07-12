@@ -65,7 +65,7 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
         "infer_ms":{"p50":0,"p95":0},"e2e_ms":{"p50":0,"p95":0}},
  "motion":{"active":false,"fps":0.0,"stab_fail_pct":0.0,"candidates":0},
  "knobs":{"conf":0.35,"cadence":4,"motion":1,"max_dets":128,
-          "mot_k":6.0,"mot_window_s":5.0,"mot_persist":3}}
+          "mot_k":6.0,"mot_window_s":15.0,"mot_persist":3}}
 ```
 `det.active` is true once an engine is loaded (`-e`); `motion.active` is true once
 the motion thread has processed a frame. `candidates` is the raw mover count
@@ -83,7 +83,7 @@ replies `ok`.
 | `max_dets` | 1–512 | cap on detections per frame |
 | `nms` | 0.10–0.90 | box-merge IoU (lower = merge more; also merges a box mostly inside a higher-scoring one — collapses the multiple boxes a big/close object produces) |
 | `mot_k` | 1–30 | motion MAD threshold multiplier (noise floor above the median diff) |
-| `mot_window_s` | 1–6 s | rolling-background window: how far back "normal scene" is modelled. Short adapts fast & is cleaner in a changing scene; long is smoother but slower to forget a stopped object. **GUI slider.** |
+| `mot_window_s` | 1–60 s | rolling-background window: how far back "normal scene" is modelled. Short adapts fast & is cleaner in a changing scene; long is smoother but slower to forget a stopped object. **GUI slider.** |
 | `mot_persist` | 1–5 | confirmation strength = fraction of the ~1 s M-of-N tracker window a mover must hit before it's reported (rejects sparkle/twinkle) |
 
 Raise `cadence` toward 1 as a target closes — a fast crosser up close needs the

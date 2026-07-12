@@ -35,7 +35,7 @@ Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRAT
   built in the current frame, so on a *moving* camera it needs ego-motion alignment
   (IMU/VIO, or the `-E` ECC stabilizer) behind `stabilize()` first. Safe on a
   static/holding mount; enable via `/ctl`. Window length is the `mot_window_s`
-  knob (1–6 s, default 5).
+  knob (1–60 s, default 15).
 - **Contract + recorder tap live;** the app/console already consumes `:8094`.
 
 ### Latency (measured on-device, hot GPU, native resolution)

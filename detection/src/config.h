@@ -58,12 +58,12 @@
 #define DET_MOT_K_DEFAULT      6.0     /* MAD multiplier for the motion threshold */
 #define DET_MOT_K_MIN          1.0
 #define DET_MOT_K_MAX          30.0
-#define DET_MOT_WINDOW_S_DEFAULT 5.0   /* rolling-background window (seconds): how far back
+#define DET_MOT_WINDOW_S_DEFAULT 15.0  /* rolling-background window (seconds): how far back
                                           "normal scene" is modelled. Short adapts fast &
                                           is cleaner in a changing scene; long is smoother
                                           but slower to forget a stopped object. GUI slider. */
 #define DET_MOT_WINDOW_S_MIN   1.0
-#define DET_MOT_WINDOW_S_MAX   6.0
+#define DET_MOT_WINDOW_S_MAX   60.0
 #define DET_MOT_PERSIST_DEFAULT 3      /* confirmation strength 1..5 = fraction of the ~1 s
                                           M-of-N tracker window that must hit before a mover
                                           is reported (rejects sparkle/twinkle) */
