@@ -1,108 +1,99 @@
-# Radar module — status & future work
+# Radar module — versions & roadmap
 
-## Status (2026-07-08)
+The radar ships as locked versions; each is a complete revert point (fw image +
+flash cfg + chip cfg + tracker sources) packaged in the repo. This doc is the
+map: what each version is, what is open, and what comes next. Detail lives in
+the linked docs — don't duplicate it here.
 
-Working and **verified on the board**: aarch64 build, cfg push, 3.125 Mbaud
-UART, **26 Hz / 0 dropped frames** (zero-compromise dead-time trim — see
-[`FRAMERATE.md`](FRAMERATE.md)), per-point **SNR live** (~16–50 dB), the chip's
-own DSP timing surfaced in `/stats` (`dsp_proc_ms`/`dsp_margin_ms`), a
-**temporal multi-target tracker** → class-less target boxes (velocity from
-position history, M-of-N confirm, short coast, park-hold, spatial dedup), SSE
-previewer with a live tuning panel (**9** live `/ctl` knobs: dedup / min-pts /
-min-speed / min-SNR / FOV / merge-gate / confirm / coast / park). Consumed
-end-to-end by the GUI (`app/radar_client.c` → `:8092`). Detections are
-class-less; the tracker confirms/coasts/park-holds, so the GUI no longer adds
-its own persistence. Offline-validated against the session recording (detect
-0.70, matches the Python reference). Daemon runs at ~1% CPU / <1 MB RSS. See
-[`README.md`](../README.md) and [`TUNING.md`](TUNING.md).
+| Version | State | Package |
+|---|---|---|
+| V1 | frozen 2026-07-10 (tag `AIRPOC-RADAR-V1.0`) | [`radar/v1/`](../v1/README.md) · [`VERSION_V1.0.md`](../VERSION_V1.0.md) |
+| V2 | **shipped 2026-07-11** — flashed + field-verified | [`radar/v2/`](../v2/README.md) · [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) |
+| V3 | planned (three items below) | [`PHASE3_ANGLE_MOTION_SPEC.md`](PHASE3_ANGLE_MOTION_SPEC.md) |
 
-## Future work — ordered by value / readiness
+## V1 (frozen) — the known-good baseline
 
-### 1. Re-tune across more recordings (near-term, high value)
-Every tracker parameter was tuned against **one** recording (see the caveat in
-[`TUNING.md`](TUNING.md)). As we capture more scenes — open field, heavy
-clutter, faster movers, different mount height — re-validate and adjust. Tune the
-live knobs first; touch the fixed numbers only when a whole behaviour is wrong;
-and re-check **all** recordings before shipping a change so a fix for one scene
-doesn't regress another. Single best next step; pairs with #2.
+The stack as field-used 2026-05-22 → 2026-07-10: interleave fw (sha
+`7292938f`, stock TI DDM datapath), 17.0 dB doppler CFAR / compression 0.5
+cfg, tracker with a hard −9°…+2.5° elevation window and no consistency guard.
+Verified: vehicles ~380 m radial, humans ~230 m (350 m best night), 26.3 Hz /
+0 drops. Known faults it shipped with: the chip **silently bricked** when a
+frame exceeded the UART budget, ~95 DDMA-comb ghost movers/frame, wandering
+immortal tracks in multipath clutter, level-mount-only elevation gating.
 
-### 2. Offline scorer / regression harness (enables repeatable tuning)
-Recording + replay already exist (the recorder taps raw radar + the wire; replay
-serves recorded frames). What's missing is the **scorer**: a committed `tools/`
-utility that replays a recording through the tracker and diffs the result
-against ground truth (detect / false / latency / one-box-per-target). That is
-what makes #1 repeatable — the tracker was validated exactly this way with bench
-scaffolding; productizing it lets every future change (and the gtrack migration)
-be regression-checked before it lands.
+## V2 (shipped 2026-07-11) — crash-proof fw + guarded tracker
 
-### 3. (done) Live control surface
-The tracker exposes **9** live `/ctl` knobs (dedup, min-pts, min-speed, min-SNR,
-FOV, merge-gate, confirm, coast, park). The remaining fixed internals (confirm
-window, jitter gates, occupancy rates, association gates) are documented in
-[`TUNING.md`](TUNING.md) and rarely need live tuning; promote one only if a real
-scene shows it's needed.
+**Firmware `agv2`** (sha `173f622a`): the overload crash fix — a frame that
+exceeds the UART budget is now **deferred + counted** instead of killing the
+chip (450-pt frame clamp, ISR-safe crash record) — plus the DDMA **empty-band
+comb gate** (new `emptyBandGateCfg` CLI, shipped dark). Field-verified: survived
+the exact car-drive-by stimulus that bricked V1-era fw twice (434 pts/frame
+peak, 0 deaths).
 
-### 3b. Clutter robustness — kill "immortal wandering tracks" (known bug)
-In dense multipath clutter (e.g. near buildings/vehicles, or a bench radar inside
-a room) a confirmed track can **never die and wander across the whole FOV**: it
-always finds a scrap of clutter within its miss-grown gate, resets, and drifts.
-Demonstrator: recording `20260709T010421Z` — radar 1–2 m inside a garage, one
-track spanned 45–145 m and ±29° over 23 s on ~0.4 real points/frame. Root cause:
-position-consistency (jitter) is checked only at **confirm** time, never after.
-Fix: a post-confirm guard that de-confirms/kills a track whose jitter stays high
-or whose path is incoherent — **validate against the open-scene recordings** so it
-doesn't kill real sparse tracks. Not urgent (open scenes are clean); needed before
-any clutter-heavy deployment. Garage recordings are worst-case multipath, not a
-representative test.
+**Chip cfg**: doppler CFAR 17.0 → **16.0 dB**, compression 0.5 → **0.75**
+(closes the weak-near-strong quantization hole), rangeProfile TLV off.
 
-### 4. Sensitivity: use SNR to trade false-alarms vs range (medium)
-Now that per-point SNR is live, explore: lower the CFAR floor (toward ~16 dB)
-to detect farther, and lean on a host `min SNR` gate + SNR-weighted cluster
-centroids to keep false alarms down. Requires a power-cycle to re-push a lower
-CFAR cfg; measure human detection range before/after.
+**Tracker (SW)**: post-confirm **consistency guard** (commits `65cb276` +
+`6b24d7e`) — wandering/ghost tracks die (0/0/0 on the junk fixtures), coherent
+movers and standing far targets survive, faint-far targets get a
+doppler-consistency relief. The hard elevation window is gone — elevation
+gating is the live `elmax` knob (default ±20°, gimbal-safe). cfg push hardened
+(every line must ack `Done`).
 
-### 5. Frame rate — 26 Hz SHIPPED; 30 Hz+ is firmware, and parked
-**Done:** 26 Hz via a zero-compromise dead-time trim (idle/ramp), 0 drops. The
-profile is DSP-bound at ~17 ms/frame (measured), so 25/30 Hz at the old timing
-gave *zero* frames — the earlier "just tighten the period" idea was wrong. 30 Hz
-clean needs a small firmware DSP trim; 40 Hz is a firmware stretch; 50–60 Hz is
-impossible at full dwell. **Firmware frame-rate work is parked** — reflash only
-earns its keep for *better detection*, never for Hz. Full analysis + the Phase-0
-(measure the 17 ms split) recipe in [`FRAMERATE.md`](FRAMERATE.md).
+**Measured envelope** (operator-confirmed field sessions): human ~**300 m**
+night-quiet / ~**200 m** day-busy — scene-noise limited, not sensor-limited;
+vehicle radial echoes to ~**424 m**. Crossing (tangential) traffic is still
+blind — physics (Doppler ≈ 0), the Phase-3 item.
 
-### 6. On-chip Group Tracker (gtrack) — the one real remaining firmware item
-Link TI's gtrack into our custom firmware so the chip emits target boxes
-(TLV 308/309, already handled by `tlv.c`) and the host clusterer retires.
-Offloads the Jetson and is TI's productized people/vehicle tracker. **Optional**
-— host clustering works today, and full tracking is the downstream *tracking*
-module's job regardless. Firmware build/flash process is documented in the
-ground-bench repo.
+**Known open (V2):**
+- **The comb gate does not activate at runtime** — enabling `emptyBandGateCfg`
+  has no observed effect; root-cause analysis is in progress. Until it works,
+  junk points remain ~250/frame at 16 dB (the guard keeps the *emitted tracks*
+  clean; the junk loads the tracker input and the UART budget).
+- Logged ship acceptances: tangential queue/junction traffic weak until
+  Phase 3; far-standing drift >15 m only partially held; +0.3 s confirm
+  latency (EO remains the fast channel).
 
-### 7. AI / learned detection (big, data-gated — NOT killed)
-A learned point-cloud detector (PointNet++-style segmentation → clustering, the
-current research SOTA) could **materially improve human & vehicle range and
-accuracy** — it can recognise a faint 2–3-dot smudge as a person, separate two
-people walking together, and reject clutter hard enough to lower thresholds. It
-can't invent signal from nothing, but it squeezes more out of what's there.
+## V3 / next — three items, in order
 
-**Blocker: data.** We surveyed ~15 radar datasets — none are both commercially
-usable *and* relevant (the good point-cloud sets are non-commercial; the
-commercial ones are wrong-sensor RF tensors; none have drones). Radar detectors
-are strongly sensor-specific, so even a licensed automotive set wouldn't
-transfer to our seeker geometry. **Path = collect and label our own recordings
-on this exact sensor** (which is also what item 2 sets up). Real effort, real
-upside; a deliberate future investment, not a shortcut. (Drones have *no* usable
-public data at all — but the human/vehicle upside alone can justify it.)
+1. **Fix + calibrate the comb gate.** Root-cause why the gate is inert, then
+   the enablement recipe already written: corner-reflector LSB/dB calibration,
+   margin sweep 3/6/12/24 dB on a comb-heavy scene, A/B vs gate-off on the
+   regression corpus — [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) step 7.
+2. **Bar-ladder max-range session.** 16 → 15 → 14 → 13 dB, same walk each
+   step, gate ON first (junk flood at 14/13 dB can evict weak far targets via
+   the 450-pt clamp) — [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) step 8,
+   scored with `tools/walkout_score.py`.
+3. **Phase 3 — on-chip angle-motion detector** for crossing traffic (the
+   tangential blindness). Full implementation spec:
+   [`PHASE3_ANGLE_MOTION_SPEC.md`](PHASE3_ANGLE_MOTION_SPEC.md).
 
-### 8. Fusion hand-off (other module)
-Radar emits class-less detections with per-point SNR + velocity; classification
-(person/vehicle) and cross-sensor association (radar + EO + thermal) belong to
-the **fusion** module. Contract: [`INTEGRATION.md`](INTEGRATION.md).
+The firmware-side analysis behind V2 + Phase 3 (root causes, cfg wave, review
+verdicts) is preserved in [`AG_FW_PLAN.md`](AG_FW_PLAN.md) (historical detail).
+
+## Longer horizon (unordered, unchanged in value)
+
+- **Per-unit antenna calibration** — `antennaCalibParams` are TI sample values
+  (angle accuracy gap for standalone guidance). Corner-reflector
+  `measureRangeBiasAndRxChanPhase` bench, gated like an incident
+  (AG_FW_PLAN item C6).
+- **On-chip Group Tracker (gtrack)** — chip emits target boxes (TLV 308/309,
+  parser already handles them), host tracker retires. Optional.
+- **Learned point-cloud detection** — real upside for faint humans/drones;
+  blocked on collecting + labelling our own recordings (no usable public
+  radar data). The regression corpus discipline
+  ([`TEST_CORPUS.md`](TEST_CORPUS.md)) is the on-ramp.
+- **Re-tune across more scenes** — every change re-validated against the full
+  fixture set before shipping ([`TUNING.md`](TUNING.md) re-tuning loop).
 
 ## Known constraints (don't re-discover these)
+
 - **One cfg per power-cycle** — the daemon reads-first and won't re-push to a
-  live chip; a stuck sensor needs a radar power-cycle (see FIRMWARE.md).
-- **No DCA** — raw-ADC / PMM / micro-Doppler paths are physically impossible on
+  live chip; a stuck sensor needs a radar power-cycle (see
+  [`FIRMWARE.md`](FIRMWARE.md)).
+- **No DCA1000** — raw-ADC / micro-Doppler paths are physically impossible on
   this build; radar is the UART point cloud only.
+- **Frame rate is DSP-bound at 26 Hz** — firmware-only above that; parked
+  (see [`FRAMERATE.md`](FRAMERATE.md)).
 - **Per-point SNR** is a `guiMonitor detectedObjects` flag (1 = with), not a
   firmware feature to build.

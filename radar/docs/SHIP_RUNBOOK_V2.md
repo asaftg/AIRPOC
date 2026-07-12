@@ -1,5 +1,12 @@
 # V2 RADAR SHIP RUNBOOK (rev 3 — all three ship-gates passed, defects folded)
 
+> **STATUS 2026-07-11: EXECUTED.** Steps 0–6 done — agv2 flashed, field-verified
+> (survived the car-drive-by overload stimulus that killed agv1; 434 pts/frame
+> peak, 0 deaths), SW guard deployed, cfg at 16.0 dB. **Step 7 is OPEN**: the
+> comb gate does not activate at runtime (root-cause in progress) — the
+> calibration recipe below still applies once fixed. **Step 8 pending** (gate
+> first). Current status map: [`ROADMAP.md`](ROADMAP.md).
+
 FW image: agv2 sha256 173f622a...7245 (seeker repo firmware/flash_agv2.cfg).
 Contents: overload crash fix (unconditional) + DDMA empty-band comb gate
 (DEFAULT OFF — ships dark; enablement is step 7, after calibration).

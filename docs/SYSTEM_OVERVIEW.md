@@ -56,7 +56,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
 | Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector SSE, forwards controls, adds the radar scope + EO/detector overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + tracking + day/night. No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
-| Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
+| Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Open: comb gate inactive (RCA), tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + CPU motion safety-net, one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Stateless — temporal/tracking is the EO tracker's | [`detection/`](../detection/README.md) |
 | Fusion | — | ⬜ not started | — |
@@ -110,19 +110,23 @@ websockets, no CDN, assets sent `no-store`. A feed that is down shows **NOT CONN
 synthetic data). Detail + endpoints:
 [`app/README.md`](../app/README.md) · [`app/docs/GUI.md`](../app/docs/GUI.md).
 
-### Radar (HW-verified; box/angle optimization is future work)
+### Radar (V2 shipped 2026-07-11; comb gate + crossing traffic open)
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA** — data is the mmw_demo TLV
 point cloud over UART. The C daemon (`radar/src/`) pushes the A/G long-range
-profile, parses the stream drop-free, clusters it into **class-less** target
-boxes (host DBSCAN + Kalman, until on-chip gtrack lands), and serves a PPI
-previewer over SSE on `:8092`. Detects vehicles/drones/humans out to max range
-(human baseline ~100 m). **On-hardware verified: 26 Hz / 0 dropped frames,
-per-point SNR live, ~1.9% CPU**, consumed by the operator console
-(`app/radar_client.c` ← `:8092`). The profile is DSP-bound at ~17 ms/frame
-(measured, in `/stats`); 26 Hz is the zero-compromise shipped rate — see
-[`radar/docs/FRAMERATE.md`](../radar/docs/FRAMERATE.md). **Known future work:**
-tightening the bounding-box / angle quality so radar can acquire-track-guide
-**standalone, EO-blind** (root-caused; plan parked). GUI contract:
+profile, parses the stream drop-free, runs a **temporal multi-target tracker**
+(class-less boxes: M-of-N confirm, post-confirm consistency guard, coast,
+park-hold), and serves SSE on `:8092` — consumed by the operator console
+(`app/radar_client.c`). **V2** = crash-proof firmware (a point-flood frame is
+deferred + counted instead of bricking the chip — field-verified), 16.0 dB
+CFAR / compression 0.75 cfg, and the guard that killed the wandering-ghost
+bug. **Measured:** human ~300 m night-quiet / ~200 m day-busy, vehicle radial
+echoes ~424 m; 26 Hz / 0 drops (DSP-bound — see
+[`radar/docs/FRAMERATE.md`](../radar/docs/FRAMERATE.md)). **Open:** the fw's
+DDMA comb gate doesn't activate at runtime (RCA in progress; junk points
+~250/frame until fixed); crossing traffic is Doppler-blind (Phase-3 on-chip
+angle-motion detector, spec written); per-unit antenna cal for the angle
+accuracy that standalone EO-blind guidance needs. Versions + plan:
+[`radar/docs/ROADMAP.md`](../radar/docs/ROADMAP.md). GUI contract:
 [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md). Detail:
 [`radar/`](../radar/README.md).
 

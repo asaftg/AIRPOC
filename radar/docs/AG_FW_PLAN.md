@@ -1,5 +1,12 @@
 # AIRPOC Radar — Best-A/G Firmware Plan (v3, morning 2026-07-10)
 
+> **STATUS: HISTORICAL DETAIL.** This plan was executed: Build A flashed
+> 2026-07-10 as `agv1`; Build B's B1 comb gate shipped (dark) in `agv2`,
+> flashed 2026-07-11 with the overload crash fix; the cfg wave landed as
+> C0 + C1a(16.0) + C3(0.75). Kept for the root-cause analysis and the C6 /
+> B3 recipes. Current status: [`ROADMAP.md`](ROADMAP.md); the V2 ship record:
+> [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md).
+
 Mission: A/G = vehicles (~500m), humans (~300m), DRONE BODIES (small RCS), any
 direction, >=20Hz. Baseline never regresses. Production-grade only.
 AWR2944P EVM, TLV point cloud over UART, NO DCA1000.

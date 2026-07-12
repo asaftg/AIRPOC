@@ -79,7 +79,9 @@ loop:
 4. **Re-validate across *all* recordings** before shipping a change — a value
    that fixes scene B must not regress scene A.
 
-> The offline scorer used to validate this tracker (replay a recording → run the
-> tracker → diff vs. ground truth) currently exists only as bench scaffolding,
-> not a committed tool. Productizing it under `tools/` is what makes step 2
-> repeatable across a growing set of recordings. See [`ROADMAP.md`](ROADMAP.md).
+The offline tooling for step 2 is committed under `tools/`: `track_replay`
+(replay a fixture through the shipping `cluster.c`), `walkout_score.py` (score
+what the live tracker did in a recording), `parity_check.py` (C vs Python
+reference), and `regression/` (fixture conversion + baseline fingerprints —
+fixture list in [`TEST_CORPUS.md`](TEST_CORPUS.md)). See
+[`ROADMAP.md`](ROADMAP.md) for what's next.

@@ -1,11 +1,12 @@
 # Radar module
 
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA1000**. The chip runs our
-mmw_demoDDM firmware and emits a TLV point cloud over UART; this module
-pushes the profile, parses that stream with **zero frame loss**, runs a
-**temporal multi-target tracker** producing **class-less** target boxes, and
-serves a PPI previewer. Person/vehicle labelling is **not** done here — that is
-the fusion module's job.
+mmw_demoDDM firmware (**V2 `agv2`** — crash-proof under point-flood overload;
+see [`docs/FIRMWARE.md`](docs/FIRMWARE.md)) and emits a TLV point cloud over
+UART; this module pushes the profile, parses that stream with **zero frame
+loss**, runs a **temporal multi-target tracker** producing **class-less**
+target boxes, and serves a PPI previewer. Person/vehicle labelling is **not**
+done here — that is the fusion module's job.
 
 ## I/O contract
 
@@ -124,15 +125,34 @@ directly and this daemon drops to a pure parse-and-forward — no rewrite, becau
 the tracker sits behind the same `cluster_step` interface. See
 [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 
+## Versions
+
+The radar ships as locked, fully-packaged versions — each folder holds the fw
+image + flash cfg + exact fw sources, the chip cfg, and the tracker sources of
+that version, so any layer can be reverted independently.
+
+- [`v1/`](v1/README.md) — **V1, frozen 2026-07-10** (tag `AIRPOC-RADAR-V1.0`;
+  revert recipe: [`VERSION_V1.0.md`](VERSION_V1.0.md)).
+- [`v2/`](v2/README.md) — **V2, shipped 2026-07-11** (crash-proof fw `agv2` +
+  consistency-guard tracker; on-chip now).
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — what each version is, what's open,
+  what's next.
+
 ## Layout
 - `src/` — C daemon (`serial`, `cfg_push`, `tlv`, `cluster`, `wire`, `http`,
   `sim`). `cluster` is the temporal multi-target tracker (class-less). `-s` =
   simulation (no board); read-first startup (won't re-push to a live chip).
-- `cfg/awr2944P_ag.cfg` — the shipped A/G long-range profile (LVDS off,
-  per-point SNR on).
+- `cfg/awr2944P_ag.cfg` — the shipped A/G long-range profile (V2: 16.0 dB
+  doppler CFAR, BFP compression 0.75, rangeProfile TLV off, LVDS off,
+  per-point SNR on). The `awr2944P_ag_v2_*.cfg` files are the staged V2
+  cfg-wave variants kept for reference/rollback.
 - `web/` — PPI previewer (`index.html`, `radar_view.js`) with a live tuning panel.
-- `tools/` — `radar_tlv_probe.py` (bench TLV dumper) and the offline tracker
-  reference + golden-replay validator (diagnostic only, Python).
+- `tools/` — bench/offline tools (Python + one C harness): `radar_tlv_probe.py`
+  (TLV dumper), `radar_tracker.py` (tracker reference) + `track_replay.c` +
+  `parity_check.py` (C-vs-reference replay validation), `walkout_score.py`
+  (max-range walk scorer), `regression/` (fixture conversion + baseline
+  fingerprints — see [`docs/TEST_CORPUS.md`](docs/TEST_CORPUS.md)).
+- `v1/`, `v2/` — the locked version packages (above).
 - `docs/` —
   [`HARDWARE`](docs/HARDWARE.md) ·
   [`FIRMWARE`](docs/FIRMWARE.md) ·
@@ -140,4 +160,10 @@ the tracker sits behind the same `cluster_step` interface. See
   [`PREVIEW`](docs/PREVIEW.md) ·
   [`INTEGRATION`](docs/INTEGRATION.md) (GUI/fusion contract) ·
   [`TUNING`](docs/TUNING.md) (parameters + how to tune) ·
-  [`ROADMAP`](docs/ROADMAP.md) (status + future work).
+  [`ROADMAP`](docs/ROADMAP.md) (versions + status + future work) ·
+  [`TEST_CORPUS`](docs/TEST_CORPUS.md) (regression fixtures) ·
+  [`SHIP_RUNBOOK_V2`](docs/SHIP_RUNBOOK_V2.md) (V2 ship record + the open
+  comb-gate/bar-ladder steps) ·
+  [`AG_FW_PLAN`](docs/AG_FW_PLAN.md) (historical fw root-cause analysis) ·
+  [`PHASE3_ANGLE_MOTION_SPEC`](docs/PHASE3_ANGLE_MOTION_SPEC.md) (crossing-traffic
+  detector spec).

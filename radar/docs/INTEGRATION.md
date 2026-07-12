@@ -10,8 +10,8 @@ For the GUI agent. The radar daemon is standalone and publishes over HTTP on
 | GET | `/` | the standalone PPI previewer (works on its own) |
 | GET | `/radar_view.js` | the previewer script (reference renderer) |
 | GET | `/stream` | **SSE** — one `data: <frame-json>\n\n` per radar frame |
-| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db, fov_half_deg, doppler_gate_mps, dsp_valid, dsp_proc_ms, dsp_margin_ms, active_cpu_pct, interframe_cpu_pct}` |
-| GET | `/ctl?eps=&minpts=&speed=&snrmin=&fov=&doppler=` | set the host clustering live → `200 ok` |
+| GET | `/stats` | `{fps, drops, num_points, num_targets, connected, profile, max_range_m, cluster_eps_m, cluster_min_pts, speed_min_mps, snr_min_db, fov_half_deg, el_max_deg, doppler_gate_mps, confirm, coast_s, park_s, dsp_valid, dsp_proc_ms, dsp_margin_ms, active_cpu_pct, interframe_cpu_pct}` |
+| GET | `/ctl?eps=&minpts=&speed=&snrmin=&fov=&elmax=&doppler=&confirm=&coast=&park=` | set the live tracker knobs → `200 ok` |
 
 ## Recorder taps (module outputs — protocol per `recorder/docs/TAP.md` v1)
 
@@ -30,26 +30,31 @@ logs once and runs unchanged (a recorder-less system is identical).
 (wire). Not part of the GUI contract — the GUI consumes `/stream`; these taps are
 for the recorder only.
 
-## Live controls — `/ctl` (the 6 tuning knobs)
+## Live controls — `/ctl` (the 10 tuning knobs)
 
-`GET /ctl?...` sets the host-side clustering **live** (no restart, applies on
+`GET /ctl?...` sets the host-side tracker **live** (no restart, applies on
 the next frame) and returns `200 ok`. Every param is optional — an absent one
-keeps its current value. All are clamped server-side.
+keeps its current value. All are clamped server-side. Full meaning/rationale
+per knob: [`TUNING.md`](TUNING.md).
 
 | key | units | min | max | default | what it does |
 |---|---|---|---|---|---|
-| `eps` | m | 0.5 | 50 | 8 | cluster spacing (near-field base; grows with range internally) |
-| `minpts` | count | 1 | 20 | 2 | points to seed a cluster **at the sensor** (tapers to 2 far internally) |
-| `speed` | m/s | 0 | 5 | 0.4 | dynamic-only gate (below = static clutter, excluded) |
-| `snrmin` | dB | 0 | 60 | 0 | per-point SNR gate (0 = off; above CFAR's ~17 dB floor) |
-| `fov` | deg | 5 | 90 | 90 | azimuth half-angle gate — points with `|az| > fov` don't cluster (and the wedge follows it) |
-| `doppler` | m/s | 0.5 | 20 | 3 | doppler-similarity gate — two dots join only if their speeds are within this (raise to hold a fragmenting vehicle together) |
+| `eps` | m | 0.5 | 50 | 4.5 | dedup radius — co-located tracks emit one box |
+| `minpts` | count | 1 | 20 | 2 | radar dots needed to start a track |
+| `speed` | m/s | 0 | 5 | 0.7 | Doppler motion threshold (below = static clutter) |
+| `snrmin` | dB | 0 | 60 | 16 | per-point SNR gate (chip CFAR already floors at ~16 dB) |
+| `fov` | deg | 5 | 90 | 90 | azimuth half-angle gate, input **and** emit |
+| `elmax` | deg | 5 | 90 | 20 | elevation half-angle gate (radar-frame, gimbal-safe; 90 = off) |
+| `doppler` | m/s | 0.5 | 20 | 1.2 | merge gate — co-located tracks merge only if speeds agree within this |
+| `confirm` | hits | 1 | 6 | 3 | M-of-N fast-confirm (lower = appears faster, more false) |
+| `coast` | s | 0 | 3 | 0.4 | how long a confirmed track survives a dropout |
+| `park` | s | 0 | 60 | 15 | how long a moved-then-stopped track is held |
 
-`/stats` echoes all six **post-clamp** under: `cluster_eps_m`,
-`cluster_min_pts`, `speed_min_mps`, `snr_min_db`, `fov_half_deg`,
-`doppler_gate_mps` — initialise the sliders from `/stats` on load, don't assume
-defaults. Changes take effect on the **next frame** — a box that stops
-clustering disappears immediately (no coasting).
+`/stats` echoes all ten **post-clamp** under: `cluster_eps_m`,
+`cluster_min_pts`, `speed_min_mps`, `snr_min_db`, `fov_half_deg`, `el_max_deg`,
+`doppler_gate_mps`, `confirm`, `coast_s`, `park_s` — initialise the sliders
+from `/stats` on load, don't assume defaults. Changes take effect on the
+**next frame**.
 
 ## Chip DSP timing in `/stats` (frame-rate health)
 
@@ -85,17 +90,16 @@ if it trends to ~0 the frame period is too aggressive and frames will drop.
   point has `snr` in dB — filter on it directly). Default the azimuth slider to
   ~±60 (useful AoA) and the SNR slider to the ~16 dB floor (raise to hide weak
   returns).
-- **targets[]:** **class-less per-frame detections** — a box is emitted **only
-  for a cluster detected this frame**. There is **no coasting**: a target the
-  sensor doesn't see this frame simply isn't in the list (it does not linger or
-  dead-reckon). `sx/sy/sz` are box half-extents; `vx/vy/vz` a light per-frame
-  velocity estimate; `conf` 0..1. `tid` is stable across frames via nearest-
-  neighbour association (so boxes keep their colour), but is a transient per-
-  sensor id — **fusion assigns the global id**. `class` is always
+- **targets[]:** **class-less confirmed temporal tracks** — a box is emitted
+  after the track passes M-of-N confirmation plus a post-confirm consistency
+  guard (ghosts/wanderers are killed), **coasts briefly** through dropouts
+  (`coast`), and a moved-then-stopped target is held (`park`). `sx/sy/sz` are
+  box half-extents; `vx/vy/vz` velocity from the track's own position history;
+  `conf` 0..1. `tid` is stable across frames, but is a transient per-sensor
+  id — **fusion assigns the global id**. `class` is always
   `"radar_detection"` — labelling is fusion's.
-  > Display persistence is the **GUI's** job — if you don't want a box to blink
-  > on a one-frame miss, hold-and-fade it briefly on your side (~300 ms). Real
-  > motion-model coasting belongs to the future **tracking** module, not here.
+  > The tracker confirms/coasts/park-holds, so the GUI does **not** add its
+  > own display persistence — render the list as-is.
 
 ## Consuming it
 
