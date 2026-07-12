@@ -309,8 +309,9 @@
     { key: "nms",         fmt: function (v) { return v.toFixed(2); } },
     { key: "cadence",     fmt: function (v) { return String(v | 0); } },
     { key: "max_dets",    fmt: function (v) { return String(v | 0); } },
-    { key: "mot_k",       fmt: function (v) { return v.toFixed(1); } },
-    { key: "mot_persist", fmt: function (v) { return String(v | 0); } }
+    { key: "mot_k",        fmt: function (v) { return v.toFixed(1); } },
+    { key: "mot_persist",  fmt: function (v) { return String(v | 0); } },
+    { key: "mot_window_s", fmt: function (v) { return v.toFixed(1) + " s"; } }
   ];
   var dtTouch = 0;
   DETC.forEach(function (c) {
