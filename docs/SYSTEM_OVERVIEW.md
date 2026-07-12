@@ -55,7 +55,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
-| Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
+| Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector SSE, forwards controls, adds the radar scope + EO/detector overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + tracking + day/night. No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
 | Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + CPU motion safety-net, one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Stateless — temporal/tracking is the EO tracker's | [`detection/`](../detection/README.md) |
@@ -82,24 +82,32 @@ moving target. The open item is **syncing the pulse to the camera exposure windo
 (see [`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail:
 [`illuminator/`](../illuminator/README.md).
 
-### Operator console (`app/`) — main process, a proxy (in progress)
+### Operator console (`app/`) — main process, a proxy (running on the Jetson)
 The field GUI and the system's main process — a **thin proxy** that consumes the sensor
 modules' feeds and adds the integrated picture. It does **no capture/ISP/AE/encode/
 illuminator-serial**; each module owns its domain and the app couples to its served
-contract only (so an EO/radar refactor doesn't break it).
+contract only (so an EO/radar/detector refactor doesn't break it).
 
 - **EO:** `app/eo_client.c` consumes the EO module's MJPEG feed (`eo/pipeline`, `:8091`),
   relays the video on `/stream`, mirrors its `/stats`, and forwards zoom/AE/gain/exposure/
   illuminator to its `/ctl`. The EO module owns the camera, ISP, AE, and the illuminator.
-- **Radar:** `app/radar_client.c` consumes the radar daemon's SSE (`:8092`), serves the
-  frame verbatim on `/radar` (browser single-origin) per
-  [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md), and forwards cluster cfg.
-- **Console-only:** the radar scope render, EO overlays, tracking target-selection
-  (AUTO = most important: fused → nearer → confidence; MANUAL = tap) with GUI display-
-  persistence, and styling/day-night.
+- **Radar:** `app/radar_client.c` consumes the radar daemon's SSE (`:8092`), serves it
+  verbatim on `/radar` + `/radar/stream` per
+  [`radar/docs/INTEGRATION.md`](../radar/docs/INTEGRATION.md), and forwards the ten tracker
+  knobs (incl. the elevation gate).
+- **Detector:** `app/det_client.c` consumes the detection daemon's SSE (`:8094`), re-broadcasts
+  boxes on `/det/stream`, and forwards `det_*` knobs. Human/vehicle model boxes + motion-only
+  movers are drawn over the video.
+- **Record / replay:** the recorder daemon (`:8093`) is proxied at `/rec/*`. REC records; the
+  LIBRARY browses/edits/deletes/offloads; replay reuses the live renderers. Native-HD 60 fps
+  replay streams the recorder's cached `native.mp4` (state-driven, auto-plays when built, never
+  rebuilds on entry) with a per-clip Convert-to-HD action.
+- **Console-only:** the radar scope render, EO + detector overlays, tracking target-selection
+  (AUTO = most important: fused → nearer → confidence; MANUAL = tap), and styling/day-night.
 
-Serves over polled `/stats` + `/stream` + `/radar` + `GET /ctl` — no websockets, no CDN.
-A feed that is down shows **NOT CONNECTED** (no synthetic data). Detail + endpoints:
+Serves over `/stats` + `/stream` (MJPEG) + `/radar`,`/det` (SSE) + `GET /ctl` + `/rec/*` — no
+websockets, no CDN, assets sent `no-store`. A feed that is down shows **NOT CONNECTED** (no
+synthetic data). Detail + endpoints:
 [`app/README.md`](../app/README.md) · [`app/docs/GUI.md`](../app/docs/GUI.md).
 
 ### Radar (HW-verified; box/angle optimization is future work)

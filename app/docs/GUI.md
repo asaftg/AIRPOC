@@ -41,26 +41,38 @@ live controls (but keeps DEV ✕ / RETURN TO CONTROL usable). A striped amber ba
 transport bar (play/pause/step/rate/scrub/hover, NATIVE↔DISPLAY when a native channel was
 recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORDED**.
 
-- **EO video source in replay.** DISPLAY channel = the paced MJPEG `/rec/replay/stream` (the
-  recorder caps it ~20 fps for the link). NATIVE = the recorded full-res **60 fps**: the
-  console plays the recorder's cached **H.264 `/rec/replay/native.mp4`** in a `<video>`
-  element **slaved to the transport clock** (currentTime nudged to `rs.t_ms`, playbackRate =
-  rate, play/pause follow state) so the server-clock-paced overlays stay in sync. The mp4 is
-  transcoded on demand — while it builds, a **"PREPARING NATIVE 60 fps · N%"** badge shows
-  and the paced MJPEG plays meanwhile; readiness is probed from the endpoint (1-byte range:
-  200/206 ready, 202 building{pct}). If the mp4 can't decode it falls back to MJPEG.
-- **Replay radar + detections push over SSE**, not polls — `/rec/replay/radar/stream` and
+- **EO video source in replay.** A replay **opens on the DISPLAY channel** (instant): the
+  paced MJPEG `/rec/replay/stream` (the recorder caps it ~20 fps for the link). **NATIVE** =
+  the recorded full-res **60 fps** H.264 `/rec/replay/native.mp4` in a `<video>`. Readiness is
+  read from `/rec/replay/state` → `native_mp4` (`none|building|ready|failed`) + `native_mp4_pct`
+  — the console does **not** probe the endpoint. **Auto-native:** the moment the recorder
+  reports the HD mp4 `ready` (already built / cached), the console switches to it once and
+  streams it — no rebuild, no tapping NATIVE. A not-yet-built movie **stays on DISPLAY and
+  never auto-builds**; the operator triggers a build explicitly (the card's **Convert to HD**
+  button, or the NATIVE toggle). While building, a **"PREPARING NATIVE 60 fps · N%"** badge
+  shows over the paced MJPEG. The `<video>` plays on its **own decode clock**, corrected to the
+  transport clock only on a **big (>0.3 s) drift**; scrubbing seeks it directly per drag.
+  (Hard-setting `currentTime` every poll — the old behaviour — turned playback/scrub into
+  constant seeking that reset to frame 0.) If the mp4 can't decode it falls back to MJPEG.
+- **Replay radar + detections push over SSE** — `/rec/replay/radar/stream` and
   `/rec/replay/det/stream`, each paced to the playback clock (honours pause/seek/rate) so the
-  scope and boxes track smoothly. Each keeps its poll (`/rec/replay/radar`, `/rec/replay/det`)
-  as a fallback that starts only if the SSE 404s or is silent.
+  scope (~26 Hz) and boxes track smoothly. `closeReplay` closes both on EXIT (not on next-open).
+- **Connection budget.** A browser allows only ~6 HTTP/1.1 sockets per host, so the console
+  minimises long-lived streams: the **library list holds ZERO** (video/radar/det are closed on
+  library-open), and a **replay holds few** (the mp4 `<video>` + the two overlay SSE, all closed
+  on EXIT). This is why "can't open a recording after 3-4 cycles" and the FIN-WAIT socket pileup
+  are gone. An in-flight open is generation-guarded (`replayGen`) so exiting to live mid-open
+  can't flip `replaying=true` over the live view (which used to dead-lock REC + LIGHT).
 - **Self-heal.** If the recorder has no open session (it restarted, or a reboot) but the
-  console still thinks it's replaying, every `/rec/replay/*` poll 404-floods and library card
-  taps do nothing. `pollReplayState` detects `open:false` (after a few consecutive polls) and
-  resets to live automatically — no need to leave the library/app.
-- **Live sensors are frozen while reviewing.** Entering the LIBRARY calls the launcher
-  `:8088/suspend` (STOPs eo_pipeline/radar/detector) so the native-mp4 transcode + playback
-  get the whole box (avoids overloading/brown-out); EXIT-to-live (lib-close) calls `/resume`
-  (relaunches them). Page-hide also resumes so a closed tab can't leave them down.
+  console still thinks it's replaying, `pollReplayState` detects `open:false` (after a few
+  consecutive polls, once the session was actually seen open) and resets to live automatically.
+- **Live sensors stay UP during review** — they are **not** stopped while browsing/replaying.
+  (An earlier "suspend the producers in the library" feature was **removed**: stopping and
+  restarting eo_pipeline/radar/detector thrashed the box — the camera re-init + detector engine
+  reload pegged the CPU and wedged the camera after a few enter/exit cycles, unrecoverable
+  without a reboot. The recorder no longer transcodes-on-open, so keeping the stack live costs
+  nothing.) A live-view backstop still re-runs the launcher `/resume` if EO is genuinely down
+  (a crashed producer) for ~2.5 s.
 
 ## Zoom + ROI
 - **EO zoom ±** — live: forwards `zoom=` to the EO feed (source crop). Replay: a client-side
@@ -143,17 +155,27 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   (a recorder-only restart does NOT re-bind and can orphan a working attach), (3) polls
   `/rec/stats` until taps re-bind, then starts recording; else toasts "press START".
 - **LIBRARY** — session cards (thumbnails or a radar-only placeholder, size badges, tags,
-  the note), a disk bar. Click a card → replay it. Each card's name row has **✎ EDIT**
-  (reopens the save dialog pre-filled with name/tags/note — incl. custom tags — SAVE updates
-  the metadata via `/rec/ctl?save=`, DISCARD hidden so an edit can't delete) and **⧉ COPY**
-  (copies the name; uses an http-safe clipboard fallback since the LAN/AP isn't a secure
-  context). **Filtering:** the text search hits the recorder (`/rec/library?q=`) but **tag
-  filtering is client-side** (AND-match each card's `tags`) so it can't be broken by query
-  encoding — that was why filtering appeared to "lose" all annotations. **DELETE (n)**
-  selected, **DELETE ALL** (double verify: confirm + type `DELETE`), **FREE — drop raw** per
-  session (`purge_native`), **OFFLOAD ALL / OFFLOAD (n)** → `.tar` via `/rec/export`.
-- Caveat: a plain-HTTP page can't pick a save folder, so an offload `.tar` lands in the
-  browser's Downloads. For a named folder use `recorder/tools/airpoc-offload.ps1 -Dest …`.
+  the note), a disk bar. Click a card → replay it. The card layout wraps the thumbnail in an
+  aspect-ratio box so the name row isn't clipped in the CSS grid. Each card's name row has
+  **✎ EDIT** (reopens the save dialog pre-filled with name/tags/note — incl. custom tags —
+  SAVE updates the metadata via `/rec/ctl?save=`, DISCARD hidden so an edit can't delete),
+  **⧉ COPY** (copies the name; http-safe clipboard fallback since the LAN/AP isn't a secure
+  context), and a **Convert to HD** button: **⬆ HD** starts the recorder's background 60 fps
+  transcode (`/rec/replay/transcode?sid=`, one at a time, cached, survives navigation), showing
+  a live **HD N%** as it builds and **HD ✓** when ready. ✓ shows **only** for sessions whose
+  HD mp4 is actually built — it reads the recorder's per-session `hd` status when present (and
+  remembers ones converted this session); it is **not** keyed off `bytes.native`, which is the
+  *raw* recording (present on ~every session). **Filtering:** the text search hits the recorder
+  (`/rec/library?q=`) but **tag filtering is client-side** (AND-match each card's `tags`) so it
+  can't be broken by query encoding — that was why filtering appeared to "lose" all annotations.
+  **DELETE (n)** selected, **DELETE ALL** (double verify: confirm + type `DELETE`),
+  **FREE — drop raw** per session (`purge_native`), **OFFLOAD ALL / OFFLOAD (n)** → `.tar` via
+  `/rec/export`.
+- The offload link is marked as a **download** (not a tab navigation) so it saves via the
+  browser's download bar rather than dumping the tab on an error page if the tar build is slow.
+  A plain-HTTP page can't open a folder-picker (that needs HTTPS/localhost), so it lands in
+  Downloads — turn on **Chrome ▸ Settings ▸ Downloads ▸ "Ask where to save each file"** to get
+  a Save-As folder window on every offload.
 
 ## DEV panel
 - **STREAM** — QUALITY presets `PANIC / FAST / DEFAULT / NATIVE` + FPS CAP (forwarded to
@@ -165,29 +187,36 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   probes back up after ~20 s clean, never above the operator's chosen QUALITY (the
   ceiling); MANUAL (default) never touches settings.
 - **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
+  The console pushes its chosen default on load: **MEDIAN off**.
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
 - **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM (client-side only; see *Radar → EO overlay*).
 - **DETECTOR** — MARK box/seeker (display-only), CONF (min confidence, default 0.5),
   NMS (box-merge overlap threshold, default 0.45 — lower merges duplicates harder),
   CADENCE (model runs every Nth frame, measured rate shown beside it), MOTION on/off
-  (the dashed-mover safety net — **default OFF**: it floods while the camera moves,
-  until ego-motion compensation exists), MAX DETS, MOT SENS (`mot_k`), MOT HOLD
-  (`mot_persist`). All except MARK forwarded namespaced `det_<key>=` → detection daemon
-  `/ctl`; readback from `/dstats` (values under `knobs`).
-- **RADAR** — the daemon's **nine** tracker knobs: FOV ± (default **60°**), MIN SNR,
+  (the dashed-mover safety net — **default ON** by operator request; it can flood while the
+  camera itself moves until ego-motion compensation exists), MAX DETS, MOT SENS (`mot_k`),
+  MOT HOLD (`mot_persist`, 1–5 — confirmation strength: how much of the last ~1 s a mover must
+  persist), **MOT MEM** (`mot_window_s`, 1–60 s step 0.5, default 15 — the motion
+  rolling-background window: how far back the static scene is modelled; shorter adapts faster,
+  longer forgets a stopped object slower). All except MARK forwarded namespaced `det_<key>=` →
+  detection daemon `/ctl`; readback from `/dstats` (values under `knobs`). The console pushes
+  **MOTION on** as its load default.
+- **RADAR** — the daemon's **ten** tracker knobs: FOV ± (azimuth gate), **EL ±** (`elmax` —
+  elevation gate, 5–90°, the antenna's physical elevation beam edge; 90 = off), MIN SNR,
   MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
-  merge radius for co-located boxes), MIN PTS, CONFIRM (M-of-N hits before a track
-  appears, 1–6), COAST (seconds a track survives a dropout, 0–3), PARK HOLD (seconds a
-  stopped mover is held, 0–60). All forward to the **daemon** namespaced `radar_<key>=`
-  (the app strips the prefix → daemon `/ctl`); sliders read back the **applied (clamped)**
-  value from the daemon's `/stats` (`confirm`/`coast_s`/`park_s`).
+  merge radius for co-located boxes), MIN PTS, CONFIRM (M-of-N hits before a track appears,
+  1–6), COAST (seconds a track survives a dropout, 0–3), PARK HOLD (seconds a stopped mover is
+  held, 0–60). All forward to the **daemon** namespaced `radar_<key>=` (the app strips the
+  prefix → daemon `/ctl`); sliders read back the **applied (clamped)** value from the daemon's
+  `/stats`. The console pushes **no** radar control on load (it used to force `radar_fov=60`,
+  which overrode the daemon during radar testing — removed).
 - **SYSTEM** — Jetson **TEMP** (junction/`tj` thermal zone), **CPU %** (aggregate, plus
   core-equivalents `x/N`), **GPU %** (Tegra load). RETURN TO CONTROL → the launcher (`:8088`).
 
 ## HTTP endpoints (the app)
 | Path | Purpose |
 |---|---|
-| `/` · `/app.css` · `/app.js` | the embedded page (served `no-cache`) |
+| `/` · `/app.css` · `/app.js` | the embedded page (served **`no-store`** — never cached, so a deploy's new UI shows on the next reload without a hard-refresh) |
 | `/stream` | EO module's JPEG frames **relayed** as MJPEG multipart, fanned to every screen |
 | `/radar` | the radar daemon's latest frame **verbatim** (one-shot poll; used in replay) |
 | `/radar/stream` | **SSE** push of each radar frame at native rate (`data: {…}`); the live path |
@@ -197,9 +226,12 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 | `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |
 | `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/res`) → the EO feed |
-| `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export`, `/rec/replay/*` |
+| `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export` (offload `.tar`), `/rec/replay/*` (incl. `/rec/replay/state` with `native_mp4` status, `/rec/replay/{radar,det}/stream` SSE, `/rec/replay/transcode?sid=` HD build) |
 
-`/stats` top-level: `eo_connected`, `mbps`, `tx_fps`, `link_type`, `rssi_dbm`, `link_mbps`,
+The `/rec/*` proxy sets a **180 s** upstream read timeout (a slow `/rec/export` tar build can
+take a while before the first byte) and detects client-disconnect on write.
+
+`/stats` top-level: `eo_connected`, `mbps`, `tx_fps`, `link_type`, `rssi_dbm`, `link_total_mbps`,
 `cpu_c` (Jetson junction °C), `cpu_pct`, `gpu_pct`, `ncpu`, `track`, `engage`, `tracks`;
 reserved `null`: `batt`, `alt`, `brg`, `rng`; plus **`eo`** — the EO feed's `/stats` object
 (`fps`, `sfps`, `hfov`, `vfov`, `zoom`, `laser`, `lpower`, `lfov`, `lpresent`, `gain`,

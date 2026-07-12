@@ -36,11 +36,12 @@ up. Reachable from any phone/laptop/tablet on the network — no install, no SSH
   calls it when a feed is live but its tap is down, running the same ordered `start.sh` heal
   (a recorder-only restart doesn't re-bind and can orphan a working attach).
 - **`/suspend` / `/resume`** stop / relaunch the live producers (eo_pipeline, radar_preview,
-  detectiond). The console calls these when you **enter / leave the LIBRARY**, so reviewing
-  recordings (and the on-demand native-mp4 transcode) gets the whole box instead of
-  overloading it. Clean SIGTERM + relaunch, **not** SIGSTOP — freezing a live camera/USB
-  process corrupts its device state (it dies on resume) and a frozen socket fools the health
-  check, so a missed resume can never be recovered; clean-down + START always relaunches.
+  detectiond) — clean SIGTERM + `start.sh`, **not** SIGSTOP (a frozen camera/USB process
+  corrupts its device state and dies on resume). **The console no longer drives these** — an
+  earlier "suspend the box while reviewing recordings" feature was removed because restarting
+  the camera + detector on every library visit thrashed the box (CPU pegged, camera wedged
+  after a few enter/exit cycles). The endpoints remain for manual use / crash recovery; the
+  console's live-view backstop calls `/resume` only if EO is genuinely down.
 - **SHUTDOWN JETSON** → `/shutdown` → `sudo -n systemctl poweroff` (a scoped NOPASSWD rule
   installed by `install.sh`). Confirms first.
 
