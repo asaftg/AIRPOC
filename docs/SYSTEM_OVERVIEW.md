@@ -57,7 +57,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
 | Operator console (`app/`) | — | 🟡 thin proxy console: consumes the EO + radar feeds, forwards controls, adds the radar scope + EO overlays + tracking + day/night. No capture/ISP/AE/encode. EO video proxy pending on-Jetson validation | [`app/`](../app/README.md) |
 | Radar | — | ✅ HW-verified: C daemon + PPI previewer, 26 Hz / 0 drops, SNR live, class-less boxes, GUI-consumed. Box/angle optimization for standalone guidance = future work | [`radar/`](../radar/README.md) |
-| Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full resolution, smooth, radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: EO/radar/detection recording verified, native replay smooth, wired into the console replay view; browse/tag/offload included. Next: console record-button polish + field offload | [`recorder/`](../recorder/README.md) |
+| Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + CPU motion safety-net, one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Stateless — temporal/tracking is the EO tracker's | [`detection/`](../detection/README.md) |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -132,11 +132,14 @@ native + the display view), radar, detections, and metadata, and replay
 end-to-end today. Replay re-serves recorded data through the same endpoint shapes
 the console polls (any channel mix; a video-less session replays scope + stats),
 with play/pause/0.5–4×/seek/frame-step; native full-resolution replay is a
-bitrate-capped H.264 the console plays as a `<video>`, with the radar scope and
-detection boxes clocked to the same timeline. Remaining: console record-button
-polish and field offload; a few recent recorder fixes (native-replay decode
-conformance, save-time movie pre-build) are pushed and awaiting the next on-device
-deploy. Detail: [`recorder/`](../recorder/README.md).
+bitrate-capped, keyframed, **grain-denoised** H.264 the console plays as a
+`<video>` (seekable past 2 GB), with the radar scope and detection boxes streamed
+at the recorded rate on the same timeline. Sessions can be **converted to a
+shareable HD movie** on demand (persistent background encode, one at a time; a
+per-session `hd` flag drives the console badge) and **offloaded** as a streaming
+`.tar`. Remaining: console-side polish — native `<video>` playback and consuming
+the live-rate radar/detection replay streams. Detail:
+[`recorder/`](../recorder/README.md).
 
 ### Detection (`detection/`) — EO object detector, running on a placeholder model
 On-device detector (`detectiond`, `:8094`) that reads the EO camera tap

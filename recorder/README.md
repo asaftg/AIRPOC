@@ -22,7 +22,10 @@ any session through the operator console exactly as it looked live.
 - HTTP on **:8093** — recording control, library, replay
   ([docs/REPLAY.md](docs/REPLAY.md), GUI handoff in
   [docs/GUI_INTEGRATION.md](docs/GUI_INTEGRATION.md)). The console proxies it
-  as `/rec/<path>`.
+  as `/rec/<path>`. Replay serves the recorded channels at their live rates
+  (radar/detections over SSE), a denoised + seekable **H.264 native movie** per
+  session (on-demand HD convert, version-stamped), and a streaming `.tar`
+  **offload** ([docs/OFFLOAD.md](docs/OFFLOAD.md)).
 
 ## Layout
 

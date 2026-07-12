@@ -47,6 +47,13 @@ relays the replay MJPEG stream). On connect failure: `502` with
   date from `t0`, `MM:SS` from `dur_ms`, size badge (display+meta bold,
   `+ raw NN GB` dimmed when `bytes.native > 0`), tag chips, PENDING ribbon
   when `state != "saved"`.
+- **HD badge** — each session carries `"hd": "ready" | "building" | "none"`:
+  `ready` = a **current-encoder** `native.mp4` is cached (open auto-streams it,
+  no rebuild) → show **HD ✓**; `none` = no current mp4 (missing, or a superseded
+  older encode) → show **⬆ HD** (per-card Convert, below); `building` → live %
+  ring. Note `bytes.native` is the *raw* recording, not the movie — key the badge
+  off `hd`, not bytes. (After an encoder-version bump, previously-built movies flip
+  to `none` so operators can re-render them to the fixed encode.)
 - Filter bar: tag multiselect + text box → refetch `/rec/library?tags=&q=`
   (or client-side filter; both work).
 - Selection mode: checkboxes → `DELETE (n)` (confirm →

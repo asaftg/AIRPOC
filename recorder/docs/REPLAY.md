@@ -51,27 +51,45 @@ Three layers, so a divergence can never pass unnoticed:
    native-vs-display comparison offline across many frames — run it in
    EO/recorder acceptance whenever the tone map is touched.
 
-**Smooth full-quality native play over WiFi — cached H.264.** Native
-JPEG-per-frame is ~12-24 MB/s, more than WiFi carries. So the recorder transcodes
-the session's native replay into one H.264 MP4 (`transcode.c` → ffmpeg libx264 at
-the true recorded frame rate, the exact tone map, `nice -n 15 ionice -c3` so it
-never touches the live pipeline), cached in the session dir. The encoder caps the bitrate (VBV
-`-maxrate`) so the stream stays within its declared H.264 level — an uncapped
-encode ran ~118 Mbit/s past a Level-4.2 stream and stalled browser decoders
-mid-playback. It is **pre-built at save time** (right after thumbnails) so opening
-a native replay is instant and no transcode CPU spike ever lands while an operator
-is live; a replay open still builds it on demand if missing. Each mp4 is stamped
-with an encoder version (`native.mp4.ver`); when the version bumps, already-cached
-mp4s are treated as stale and rebuilt on open, so **older recordings pick up encode
-fixes too** rather than keeping a superseded file. A stale mp4 is **served
-immediately** while the capped rebuild runs in the background (never hidden behind
-the slow re-encode); the next open gets the upgraded file. The browser plays it with
-`<video src=/replay/native.mp4?sid=…>` — buffered, smooth, full quality, instant
-seek, and ~400× smaller on the wire than raw frames.
+**Smooth, seekable native play — cached H.264.** Native JPEG-per-frame is too
+heavy to stream, so the recorder transcodes the session's native replay into one
+H.264 MP4 (`transcode.c` → ffmpeg libx264 at the true recorded frame rate, the
+exact tone map, `nice -n 15 ionice -c3` so it never touches the live pipeline),
+cached in the session dir. Encode settings, and why:
+- **Bitrate cap** (`-crf 18 -maxrate 50M -bufsize 72M`): an uncapped encode ran
+  ~118 Mbit/s, past the ~62.5 Mbit/s ceiling of the H.264 High L4.2 level it
+  declares — a level violation that stalled browser decoders mid-playback. 50
+  Mbit/s is high quality and stays conformant.
+- **Keyframe every ~1 s** (`-g 60`): scrub/seek is smooth (a seek only decodes
+  back to the nearest keyframe).
+- **Denoise** (`-vf hqdn3d`): night sensor grain is temporal; H.264 turns it into
+  frame-to-frame *shimmer* the raw live view doesn't have, and wastes bits
+  fighting it. Denoising removes the shimmer and the freed bits sharpen real
+  detail. Full unfiltered detail is always on the raw frames at pause/step.
+
+Each mp4 is stamped with an **encoder version** (`native.mp4.ver`); when the
+version bumps (a fix to any of the above), already-cached mp4s are stale so
+**older recordings pick up encode fixes** on their next build.
+
+**When it's built** — never eagerly on replay-open (that leaked a ~2-core encode
+per open and pegged the box): pre-built at **save time** (after thumbnails); on an
+explicit **"Convert to native"** (`/replay/transcode`, a persistent background
+build that *survives navigation*); or on demand the first time native is
+requested. **At most one** encode runs at a time (further requests queue 1-deep);
+it is cancelled only by an explicit stop, not by leaving the movie screen. A
+recorder *service* restart does interrupt an in-flight build (it must be re-kicked).
+
+The browser plays it with `<video src=/replay/native.mp4?sid=…>` — buffered,
+smooth, full quality, instant seek.
 - `GET /replay/native.mp4?sid=<sid>` — the cached MP4 with HTTP Range (206) for
-  `<video>` seeking; `202 {building,pct}` while it encodes.
-- `/replay/state` reports `native_mp4` (`none|building|ready|failed`) +
-  `native_mp4_pct`. Encoding is kicked on open, so it's usually ready by play.
+  `<video>` seeking (64-bit offsets → >2 GB files seek correctly). Serves any
+  existing mp4 (even an older-version one) immediately so native is never hidden;
+  `202 {building,pct}` only when nothing is on disk yet.
+- `GET /replay/transcode?sid=<sid>` — start/track a background convert; returns
+  `{state:"ready|building|failed", pct}`.
+- `/replay/state` reports `native_mp4` (`none|building|ready|failed`) + pct;
+  `/library` reports per-session `hd` (`ready|building|none`) for the HD badge —
+  `ready` = a **current-encoder** mp4 is cached (opens instantly, no rebuild).
 - Still-frame paths (`/replay/frame`, pause/step) serve full-q native JPEGs
   directly — exact detail when inspecting.
 - Fallbacks: the paced MJPEG `/replay/stream` (native emitted at `play_q`/
@@ -136,7 +154,8 @@ Replay:
 | `GET /replay/stats` | `{replay:true, replay_state:{sid,name,t_ms,dur_ms,playing,rate,t_wall_ms,frame_i,frames}, eo:<recorded>, app:<recorded>}` |
 | `GET /replay/state` | just `replay_state` — the 150 ms transport-bar poll |
 | `GET /replay/frame?t=<ms>` | single JPEG at ≤ t (timeline hover preview) |
-| `GET /replay/native.mp4?sid=<sid>` | cached H.264 of the native replay (HTTP Range/206 for `<video>` seek); `202 {building,pct}` while encoding |
+| `GET /replay/native.mp4?sid=<sid>` | cached H.264 of the native replay (HTTP Range/206 for `<video>` seek, 64-bit offsets); serves any existing mp4 immediately, `202 {building,pct}` only when none on disk |
+| `GET /replay/transcode?sid=<sid>` | start/track a persistent background native encode (survives navigation, one at a time); `{state:"ready\|building\|failed",pct}` |
 
 > Pitfall: replay of the session currently being recorded is refused by design
 > — stop first. Replaying any *other* session while recording is fine.

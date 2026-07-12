@@ -15,7 +15,8 @@ crash-safe by construction, ~300 lines of dependency-free C. An offline
   <channel>/data.NNNNN.airec       segments (heavy: fallocate 256 MiB, O_DIRECT)
   <channel>/index.bin              append-only 32 B rows
   thumbs/0..7.jpg                  written at save
-  native.mp4                       cached H.264 of native replay (built on demand)
+  native.mp4                       cached H.264 of native replay (see REPLAY.md)
+  native.mp4.ver                   encoder version stamp (bump => rebuild)
 ```
 
 Channels today: `eo_y10` `eo_jpeg` `radar_raw` `radar_wire` `det_wire` `events`.
