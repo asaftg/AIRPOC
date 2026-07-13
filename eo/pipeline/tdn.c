@@ -36,12 +36,13 @@ static volatile double g_ms = 0.0;
 static struct {
     int      w, h, bw, bh;
     uint16_t *acc;         /* Q10.5 accumulator                                   */
-    uint8_t  *err;         /* error-feedback residue (per pixel)                  */
+    int8_t   *err;         /* error-feedback residue (per pixel, SIGNED)          */
     uint8_t  *alpha;       /* per-block alpha this frame (Q8: 16..255)            */
     uint8_t  *moving;      /* per-block moving flag, previous frame (row-offset mask) */
     uint8_t  *score;       /* per-block raw motion score before dilation          */
     uint32_t *sy, *sa;     /* per-block-column strip sums (y', acc)               */
     int16_t  *rowoff;      /* per-row offset, Q10.5                               */
+    int16_t  *offema;      /* slow per-row EMA of the offset (the DC part)        */
     /* empirical noise scale per intensity bin: EMA of mean |block diff| (Q10.5)  */
     uint32_t  nscale[TDN_NBINS];
     int       seeded, gate, gate_run, settle;
@@ -70,9 +71,11 @@ static int tdn_alloc(int w, int h)
     T.sy     = malloc((size_t)T.bw * 4);
     T.sa     = malloc((size_t)T.bw * 4);
     T.rowoff = malloc((size_t)h * 2);
+    T.offema = calloc((size_t)h, 2);
     for (int i = 0; i < TDN_NBINS; i++) T.nscale[i] = 2 << 5;  /* seed ~2 LSB */
     T.seeded = 0; T.gate = 0; T.gate_run = 0; T.settle = 0; T.prod = 0.0;
-    return T.acc && T.err && T.alpha && T.moving && T.score && T.sy && T.sa && T.rowoff;
+    return T.acc && T.err && T.alpha && T.moving && T.score && T.sy && T.sa
+        && T.rowoff && T.offema;
 }
 
 /* seed the accumulator from the current frame (gate engage / first frame) */
@@ -86,6 +89,7 @@ static void tdn_seed(const uint8_t *y10, int bpl)
     }
     memset(T.err, 0, (size_t)T.w * T.h);
     memset(T.moving, 0, (size_t)T.bw * T.bh);
+    memset(T.offema, 0, (size_t)T.h * 2);
     T.seeded = 1;
 }
 
@@ -95,7 +99,7 @@ int tdn_process(const uint8_t *y10, int bpl, int w, int h,
     if (!g_on || w < 64 || h < 64) { g_active = 0; return 0; }
     if (T.w != w || T.h != h) {
         free(T.acc); free(T.err); free(T.alpha); free(T.moving);
-        free(T.score); free(T.sy); free(T.sa); free(T.rowoff);
+        free(T.score); free(T.sy); free(T.sa); free(T.rowoff); free(T.offema);
         if (!tdn_alloc(w, h)) { g_active = 0; return 0; }
     }
     double t0 = now_ms();
@@ -156,6 +160,14 @@ int tdn_process(const uint8_t *y10, int bpl, int w, int h,
                 off = (int)(sum / cnt);
                 if (off >  TDN_ROWOFF_MAX) off =  TDN_ROWOFF_MAX;
                 if (off < -TDN_ROWOFF_MAX) off = -TDN_ROWOFF_MAX;
+                /* subtract the offset's own slow EMA: row noise is temporally WHITE,
+                 * while a persistent (y - acc) row component is the accumulator's own
+                 * DC error — that part must flow through to the IIR so it mean-reverts
+                 * (correcting it here would cancel it out of d and let acc random-walk) */
+                int oe = T.offema[y];
+                oe += (off - oe) / 32;
+                T.offema[y] = (int16_t)oe;
+                off -= oe;
             }                               /* too few static px -> ZERO, never
                                              * a neighbor's offset (uncorrelated) */
             T.rowoff[y] = (int16_t)off;
@@ -182,9 +194,16 @@ int tdn_process(const uint8_t *y10, int bpl, int w, int h,
             /* score in 1/16ths of the noise scale, saturated */
             uint32_t sc = (uint32_t)d * 16 / ns;
             srow[bx] = sc > 255 ? 255 : (uint8_t)sc;
-            /* empirical noise EMA from sub-threshold blocks (skip during settle) */
-            if (sc < TDN_K1_Q4 && T.settle == 0)
-                T.nscale[bin] += ((uint32_t)d * 5 / 4 - T.nscale[bin]) / 64;
+            /* empirical noise EMA from sub-threshold blocks (skip during settle).
+             * SIGNED update (the unsigned form underflows when the target drops
+             * below the current scale) + a floor so the scale can never collapse
+             * to ~0 and blow every score to saturation. */
+            if (sc < TDN_K1_Q4 && T.settle == 0) {
+                int32_t cur = (int32_t)T.nscale[bin];
+                cur += ((int32_t)((uint32_t)d * 5 / 4) - cur) / 64;
+                if (cur < 4) cur = 4;                  /* 0.125 LSB floor */
+                T.nscale[bin] = (uint32_t)cur;
+            }
         }
     }
     if (T.settle > 0) T.settle--;
@@ -233,7 +252,7 @@ int tdn_process(const uint8_t *y10, int bpl, int w, int h,
     for (int y = 0; y < h; y++) {
         const uint8_t *row = y10 + (size_t)y * bpl;
         uint16_t *arow = T.acc + (size_t)y * w;
-        uint8_t  *erow = T.err + (size_t)y * w;
+        int8_t   *erow = T.err + (size_t)y * w;
         uint16_t *orow = out + (size_t)y * w;
         const uint8_t *alr = T.alpha + (size_t)(y / TDN_BLK) * bw;
         int off = T.rowoff[y];
@@ -242,11 +261,12 @@ int tdn_process(const uint8_t *y10, int bpl, int w, int h,
             int32_t yv = ((((row[2*x] | (row[2*x+1] << 8)) >> 6) << 5) - off);
             if (yv < 0) yv = 0;
             int32_t d = yv - (int32_t)arow[x];
-            /* error feedback: carry the truncated remainder so sub-LSB residuals
-             * converge instead of sticking (Q10.5 dead-band -> banding after 6x) */
-            int32_t t = a * d + (d >= 0 ? (int32_t)erow[x] : -(int32_t)erow[x]);
-            int32_t inc = t >> 8;
-            erow[x] = (uint8_t)((t >= 0 ? t : -t) & 255);
+            /* error feedback: carry the SIGNED quantization residual so sub-LSB
+             * residuals converge instead of sticking (Q10.5 dead-band) — and without
+             * the sign-magnitude bias that drags the accumulator down on negative d */
+            int32_t t = a * d + (int32_t)erow[x];
+            int32_t inc = (t + 128) >> 8;              /* round to nearest */
+            erow[x] = (int8_t)(t - (inc << 8));        /* residual in [-128,127] */
             int32_t v = (int32_t)arow[x] + inc;
             if (v < 0) v = 0;
             if (v > 32736) v = 32736;
