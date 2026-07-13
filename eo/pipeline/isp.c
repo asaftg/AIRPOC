@@ -10,17 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static uint8_t g_lut[256];
-static int     g_lut_ready = 0;
-static void lut_init(void)
-{
-    for (int i = 0; i < 256; i++) {
-        double v = pow(i / 255.0, 1.0 / EO_GAMMA) * 255.0;
-        g_lut[i] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
-    }
-    g_lut_ready = 1;
-}
-
 static inline int y10_at(const uint8_t *y10, int bpl, int x, int y)
 {
     const uint8_t *p = y10 + (size_t)y * bpl + (size_t)x * 2;
@@ -51,13 +40,25 @@ double isp_sharpness(const uint8_t *y10, int bpl, int w, int h)
     return n ? (double)sum / n : 0.0;
 }
 
+/* 8x8 ordered (Bayer) dither, 0..15 after >>2 — STATIC pattern, temporally stable
+ * (a per-frame random dither shimmers at 60 Hz and inflates the MJPEG bitrate). */
+static const uint8_t g_bayer8[64] = {
+     0,32, 8,40, 2,34,10,42,  48,16,56,24,50,18,58,26,
+    12,44, 4,36,14,46, 6,38,  60,28,52,20,62,30,54,22,
+     3,35,11,43, 1,33, 9,41,  51,19,59,27,49,17,57,25,
+    15,47, 7,39,13,45, 5,37,  63,31,55,23,61,29,53,21,
+};
+
 /* Crop (cx,cy,cw,ch) of the Y10 frame, box-average downscale to ow*oh, then
  * black-level + adaptive-white tone map + gamma -> 8-bit. The crop is the digital
- * zoom; box-average anti-aliases the downscale. One pass, small output. */
+ * zoom; box-average anti-aliases the downscale. One pass, small output.
+ * in_q5: 0 = raw packed Y10 (10-bit in bits [15:6]); 1 = denoised Q10.5 (bits [15:1]).
+ * Internally everything is Q10.5, and the 8-bit quantization is LUT-interpolated +
+ * ordered-dithered — post-denoise the temporal noise no longer self-dithers, and a
+ * ~6x night stretch of clean data contours visibly if simply truncated. */
 void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
-                       uint8_t *out8, int ow, int oh)
+                       uint8_t *out8, int ow, int oh, int in_q5)
 {
-    if (!g_lut_ready) lut_init();
     int npx = ow * oh;
     /* hot path (60 fps): cached work buffers, no per-frame malloc; the column map is
      * precomputed once per frame — the naive form costs a per-PIXEL integer division
@@ -68,6 +69,7 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
     if (ow + 1 > xs_cap) { free(xs); xs = malloc((size_t)(ow + 1) * sizeof(int)); xs_cap = xs ? ow + 1 : 0; }
     if (!sm || !xs) return;
     for (int ox = 0; ox <= ow; ox++) xs[ox] = cx + ox * cw / ow;   /* once, not per pixel */
+    int shr = in_q5 ? 1 : 6, shl = in_q5 ? 0 : 5;      /* load as Q10.5 either way */
     for (int oy = 0; oy < oh; oy++) {
         int sy0 = cy + oy * ch / oh, sy1 = cy + (oy + 1) * ch / oh; if (sy1 <= sy0) sy1 = sy0 + 1;
         uint16_t *orow = sm + (size_t)oy * ow;
@@ -76,17 +78,18 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
             unsigned acc = 0, cnt = 0;
             for (int sy = sy0; sy < sy1; sy++) {
                 const uint8_t *row = y10 + (size_t)sy * bpl;
-                for (int sx = sx0; sx < sx1; sx++) { acc += (row[2*sx] | (row[2*sx+1] << 8)) >> 6; cnt++; }
+                for (int sx = sx0; sx < sx1; sx++)
+                    { acc += (unsigned)(((row[2*sx] | (row[2*sx+1] << 8)) >> shr) << shl); cnt++; }
             }
             orow[ox] = (uint16_t)(cnt ? acc / cnt : 0);
         }
     }
-    /* p1/p99 percentile endpoints on the raw 10-bit. p99 (not max/99.5%) ignores a
+    /* p1/p99 percentile endpoints on the 10-bit values. p99 (not max/99.5%) ignores a
      * small blown streetlight; p1 sets a real black. Endpoints are EMA-smoothed across
      * frames so the mapping doesn't wobble frame-to-frame (the "breathing"), and the
      * span is floored so a flat/dim scene isn't blown up to full range (6x noise gain).*/
     int hist[1024] = {0}, nh = 0;
-    for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* subsample: percentiles don't need every px */
+    for (int i = 0; i < npx; i += 4) { hist[sm[i] >> 5]++; nh++; }   /* subsample */
     int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
     int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
     for (int v = 0; v < 1024; v++) {
@@ -101,15 +104,27 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
     double lo = s_lo, hi = s_hi;
     if (hi - lo < EO_MIN_SPAN) hi = lo + EO_MIN_SPAN;
     double scale = 255.0 / (hi - lo);
-    /* 10-bit -> 8-bit via a per-frame 1024-entry LUT (folds the stretch + gamma into
-     * one table lookup per pixel instead of float math per pixel). */
-    uint8_t map[1024];
-    for (int v = 0; v < 1024; v++) {
+    /* stretch + gamma folded into a per-frame LUT in Q4 (4 fractional output bits);
+     * per pixel: interpolate between LUT entries with the Q10.5 fraction, add the
+     * ordered dither, quantize. Sub-LSB detail survives to 8-bit instead of banding. */
+    uint16_t map16[1025];
+    for (int v = 0; v <= 1024; v++) {
         double s = (v - lo) * scale;
-        int q = (int)(s < 0 ? 0 : s > 255 ? 255 : s);
-        map[v] = g_lut[q];
+        if (s < 0) s = 0;
+        if (s > 255) s = 255;
+        map16[v] = (uint16_t)lround(pow(s / 255.0, 1.0 / EO_GAMMA) * 255.0 * 16.0);
     }
-    for (int i = 0; i < npx; i++) out8[i] = map[sm[i]];
+    for (int oy = 0; oy < oh; oy++) {
+        const uint16_t *srow = sm + (size_t)oy * ow;
+        uint8_t *drow = out8 + (size_t)oy * ow;
+        const uint8_t *brow = g_bayer8 + (oy & 7) * 8;
+        for (int ox = 0; ox < ow; ox++) {
+            int v5 = srow[ox], v = v5 >> 5, f = v5 & 31;
+            int m = map16[v] + (((map16[v + 1] - map16[v]) * f) >> 5);
+            int q = (m + (brow[ox & 7] >> 2)) >> 4;
+            drow[ox] = (uint8_t)(q > 255 ? 255 : q);
+        }
+    }
 }
 
 /* 3x3 median (Devillard's optimal 9-element sorting network), edge-preserving grain

@@ -66,11 +66,22 @@ static void consume_frame(const uint8_t *y10, int bpl, int w, int h)
 }
 
 /* ---- capture thread: sensor rate, native Y10 -> tap slot (or fallback buffer) ---- */
+/* Applied-AE model: a REGHOLD write during frame n latches at the next VSYNC and the
+ * first frame EXPOSED with the new settings arrives ~2 frames later. The display
+ * denoiser scales its temporal accumulator by the applied brightness ratio, so it
+ * needs the exposure/gain that actually exposed each frame — not what was just
+ * commanded (the verify-config-is-applied lesson, in-process). */
+static struct { unsigned long at; int exp, gain; } g_pend[4];
+static int g_npend = 0;
+static int g_app_exp = 725, g_app_gain = 0;    /* under F.lock once published */
+
 static void *cap_thread(void *arg)
 {
     (void)arg;
     unsigned long n = 0;
     uint32_t prev_seq = 0; int have_prev = 0;
+    int last_cmd_exp = -1, last_cmd_gain = -1;
+    int app_exp = g_app_exp, app_gain = g_app_gain;
     while (g_run) {
         /* destination for this frame: a tap slot (zero-copy publish) or a fallback
          * heap buffer that isn't the published front / the one a consumer holds */
@@ -110,6 +121,17 @@ static void *cap_thread(void *arg)
             }
             sensor_apply(&g_sensor, g_ae.exp_lines, g_ae.gain, g_ae.vmax);
             g_focus = isp_sharpness(dst, bpl, w, h);
+            if (g_ae.exp_lines != last_cmd_exp || g_ae.gain != last_cmd_gain) {
+                last_cmd_exp = g_ae.exp_lines; last_cmd_gain = g_ae.gain;
+                if (g_npend == 4) { memmove(g_pend, g_pend + 1, 3 * sizeof g_pend[0]); g_npend = 3; }
+                g_pend[g_npend++] = (typeof(g_pend[0])){ n + 2, g_ae.exp_lines, g_ae.gain };
+            }
+        }
+        /* retire pendings that have landed: their values exposed THIS frame */
+        while (g_npend > 0 && g_pend[0].at <= n) {
+            app_exp = g_pend[0].exp; app_gain = g_pend[0].gain;
+            memmove(g_pend, g_pend + 1, (size_t)(g_npend - 1) * sizeof g_pend[0]);
+            g_npend--;
         }
 
         /* commit AFTER the AE step so the recorded meta is frame-current */
@@ -132,11 +154,21 @@ static void *cap_thread(void *arg)
 
         pthread_mutex_lock(&F.lock);
         F.ptr = dst; F.w = w; F.h = h; F.stride = bpl;
+        g_app_exp = app_exp; g_app_gain = app_gain;   /* AE state that exposed F.ptr */
         if (wi >= 0) F.front = wi;
         F.seq++;
         pthread_mutex_unlock(&F.lock);
     }
     return NULL;
+}
+
+/* bench API: the APPLIED exposure/gain of the most recent eo_latest frame */
+void eo_frame_ae(int *exp_lines, int *gain)
+{
+    pthread_mutex_lock(&F.lock);
+    if (exp_lines) *exp_lines = g_app_exp;
+    if (gain)      *gain      = g_app_gain;
+    pthread_mutex_unlock(&F.lock);
 }
 
 /* ---- frozen API ---- */

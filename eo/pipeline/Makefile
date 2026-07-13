@@ -15,14 +15,19 @@ LIBEO_SRC = libeo.c capture.c sensor.c ae.c isp.c
 LIBEO_OBJ = $(LIBEO_SRC:.c=.o)
 LIBEO     = libeo.a
 
-# preview/bench tool: consumes libeo, adds MJPEG server + illuminator controls.
-APP_SRC = main.c mjpeg.c illum.c
+# preview/bench tool: consumes libeo, adds MJPEG server + illuminator + night denoise.
+APP_SRC = main.c mjpeg.c illum.c tdn.c
 APP_OBJ = $(APP_SRC:.c=.o) sg_ir850.o
 BIN     = eo_pipeline
 
-HDRS = eo.h eo_bench.h pipeline.h illum.h $(ILLUM)/sg_ir850.h
+HDRS = eo.h eo_bench.h pipeline.h illum.h tdn.h $(ILLUM)/sg_ir850.h
 
 all: $(LIBEO) $(BIN)
+
+# offline validation harness: replays a recorded eo_y10 AIREC channel through the
+# EXACT shipped tdn+tonemap code, writes metrics + PGM frames. Bench only.
+tdn_bench: tools/tdn_bench.c tdn.o isp.o
+	$(CC) $(CFLAGS) -o $@ $^ -lm
 
 $(LIBEO): $(LIBEO_OBJ)
 	ar rcs $@ $^

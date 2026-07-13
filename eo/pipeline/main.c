@@ -11,6 +11,7 @@
 #include "eo_bench.h"
 #include "pipeline.h"
 #include "illum.h"
+#include "tdn.h"
 #include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
@@ -52,8 +53,9 @@ int main(int argc, char **argv)
     mjpeg_start(port);
     fprintf(stderr, "eo_pipeline: libeo v%d up  preview http://0.0.0.0:%d/\n", EO_API_VERSION, port);
 
-    uint8_t *disp = NULL;
-    int dw = 0, dh = 0;
+    uint8_t  *disp = NULL;
+    uint16_t *dn   = NULL;                     /* denoised native frame (Q10.5, tdn.c) */
+    int dw = 0, dh = 0, dnw = 0, dnh = 0;
     uint64_t last = 0;
 
     while (g_run) {
@@ -63,12 +65,18 @@ int main(int argc, char **argv)
             int tw, th; mjpeg_res_dims(&tw, &th);          /* operator-selected display size */
             if (!disp || tw != dw || th != dh) { free(disp); disp = malloc((size_t)tw * th); dw = tw; dh = th; }
             if (disp) {
-                /* crop(zoom, 4:3) + downscale + tone-map the RAW straight to display res —
-                 * one pass, no full-native intermediate. Median + JPEG happen in the
+                /* P0 night denoise (tdn.c) on the RAW native frame, then crop(zoom, 4:3)
+                 * + downscale + tone-map straight to display res. DISPLAY-ONLY: the
+                 * detector keeps the raw tap. Gated off (day / knob) it costs nothing
+                 * and the path is byte-identical to before. Median + JPEG happen in the
                  * encode worker pool (mjpeg.c), so this loop always holds the frame rate. */
+                if (!dn || w != dnw || h != dnh) { free(dn); dn = malloc((size_t)w * h * 2); dnw = w; dnh = h; }
+                int exp_lines, gain; eo_frame_ae(&exp_lines, &gain);
+                int q5 = dn && tdn_process(buf, stride, w, h, dn, exp_lines, gain);
                 int cx, cy, cw, ch;
                 zoom_crop_43(w, h, mjpeg_zoom(), dw, dh, &cx, &cy, &cw, &ch);
-                isp_scale_tonemap(buf, stride, cx, cy, cw, ch, disp, dw, dh);
+                isp_scale_tonemap(q5 ? (const uint8_t *)dn : buf, q5 ? w * 2 : stride,
+                                  cx, cy, cw, ch, disp, dw, dh, q5);
                 mjpeg_publish(disp, dw, dh);
             }
         } else {
@@ -79,5 +87,6 @@ int main(int argc, char **argv)
     fprintf(stderr, "eo_pipeline: shutting down\n");
     eo_stop();
     free(disp);
+    free(dn);
     return 0;
 }

@@ -108,6 +108,7 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?expms=` | ms | manual exposure (capped by fps) |
 | `?gaincap=` | 0…480 | AE gain ceiling |
 | `?median=` | 0/1 | 3×3 denoise |
+| `?denoise=` | 0/1 | **night temporal denoiser** (display-only; default 1). The knob ENABLES it; it actually runs only when the night gate engages (high applied gain, hysteresis) — `/stats.dn_active` says so. Turn OFF to reclaim its CPU (~0.5 core at night); day cost is zero either way. Detector is unaffected (raw tap) |
 | `?zoom=` | 1/2/4/8 | digital zoom |
 | `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
 
@@ -120,10 +121,19 @@ guess), **`prod, drop, pub`** (raw pipeline counters: frames produced / skipped
 pool-full / published — diff two polls to localize any stall), `res, dw, dh` (display
 size), **`eff_w, eff_h`** (real detail = `min(res, sensor-crop)` — equals `dw×dh` at 1×,
 collapses to the crop at high zoom), `mean, exp_ms, duty_pct, gain, gaincap, ae, median,
-zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`.
+zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`, and the denoiser
+state: **`denoise`** (the knob), **`dn_active`** (night gate actually running this
+frame), **`dn_ms`** (measured cost/frame — the GUI can surface it next to the toggle).
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.
+
+> **Recorder/replay note (tonemap v2):** the display tonemap now quantizes 10→8 via an
+> interpolated LUT + static ordered dither, and at night the frame it maps is the
+> temporally-denoised one (`tdn.c`, when `dn_active=1`). The recorder's byte-identical
+> replay copy (`recorder/src/eo_tonemap.c`) will report `tonemap_vs_eo: drift` on new
+> recordings until it vendored the v2 path — its drift guard working as designed, not
+> data loss (`eo_y10` raw is unchanged; `eo_jpeg` stays byte-verbatim).
 
 ## Recorder taps (module outputs)
 

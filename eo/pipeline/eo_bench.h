@@ -33,5 +33,9 @@ void    eo_set_gaincap(int cap);      /* AE gain ceiling                    */
 void    eo_set_median(int on);
 int     eo_median_on(void);           /* current median flag (applied on the display frame) */
 void    eo_set_fps(double fps);       /* FIXED operating fps -> caps exposure; AE never changes it */
+void    eo_frame_ae(int *exp_lines, int *gain);  /* APPLIED (not commanded) AE of the
+                                       * latest eo_latest frame — registers land ~2
+                                       * frames after the write; the display denoiser
+                                       * scales its accumulator by this ratio */
 
 #endif /* AIRPOC_EO_BENCH_H */

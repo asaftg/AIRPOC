@@ -110,8 +110,10 @@ double isp_sharpness(const uint8_t *y10, int bpl, int w, int h);
  * (crop = digital zoom; ow=cw/oh=ch keeps full resolution, no downscale). The tone
  * map is a temporally-smoothed p1/p99 stretch on the raw 10-bit (kills the blown-
  * highlight + frame-to-frame breathing the per-frame 99.5%-white version caused). */
+/* in_q5: 0 = raw packed Y10 (bits [15:6]); 1 = denoised Q10.5 (bits [15:1], tdn.c).
+ * The 10->8 quantization is LUT-interpolated + ordered-dithered (see isp.c). */
 void   isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
-                         uint8_t *out8, int ow, int oh);
+                         uint8_t *out8, int ow, int oh, int in_q5);
 /* In-place edge-preserving 3x3 median on an 8-bit plane — cheap low-light grain filter. */
 void   isp_median3(uint8_t *img, int w, int h);
 

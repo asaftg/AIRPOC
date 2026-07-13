@@ -6,6 +6,7 @@
 #include "pipeline.h"
 #include "eo.h"
 #include "eo_bench.h"
+#include "tdn.h"
 #include "airpoc_tap.h"     /* recorder tap (vendored; protocol v1) */
 #include "illum.h"
 #include <arpa/inet.h>
@@ -112,6 +113,7 @@ static const char *PAGE =
 "&nbsp;exp <button onclick=E(0.77)>exp-</button><button onclick=E(1.3)>exp+</button>"
 "&nbsp;auto-cap <button onclick=C(-20)>cap-</button><button onclick=C(20)>cap+</button>"
 "&nbsp;<button onclick=M() id=mdb>median</button>"
+"<button onclick=DN() id=dnb>denoise</button>"
 "&nbsp;&nbsp;quality <button onclick=R('low') id=rlow>320</button>"
 "<button onclick=R('med') id=rmed>480</button><button onclick=R('high') id=rhigh>640</button>"
 "<button onclick=R('native') id=rnative>1440</button></div>"
@@ -124,6 +126,7 @@ static const char *PAGE =
 "function E(f){fetch('/ctl?expms='+Math.max(0.1,(S.exp_ms||16)*f).toFixed(2))}"
 "function C(d){fetch('/ctl?gaincap='+Math.max(0,Math.min(480,(S.gaincap||120)+d)))}"
 "function M(){fetch('/ctl?median='+(S.median?0:1))}"
+"function DN(){fetch('/ctl?denoise='+(S.denoise?0:1))}"
 "function FP(d){var f=[12,15,20,24,30,48,60],c=Math.round(S.sfps||60);"
 "var i=f.reduce((b,v,k)=>Math.abs(v-c)<Math.abs(f[b]-c)?k:b,0);"
 "i=Math.max(0,Math.min(f.length-1,i+d));fetch('/ctl?fps='+f[i])}"
@@ -152,6 +155,8 @@ static const char *PAGE =
 "document.getElementById('aeb').textContent=d.ae?'AUTO':'MANUAL';"
 "document.getElementById('aeb').className=d.ae?'on':'';"
 "document.getElementById('mdb').className=d.median?'on':'';"
+"document.getElementById('dnb').className=d.denoise?(d.dn_active?'on':'hot'):'';"
+"document.getElementById('dnb').textContent=d.denoise?(d.dn_active?'denoise •':'denoise'):'denoise';"
 "['low','med','high','native'].forEach(r=>document.getElementById('r'+r).className=r==d.res?'on':'')}catch(e){}}"
 "setInterval(t,150);t();</script></body></html>";
 
@@ -292,20 +297,22 @@ static void *client(void *arg)
         pthread_mutex_lock(&g_lock);
         double wfps = g_wire_fps; uint64_t c_pub = g_seq;
         pthread_mutex_unlock(&g_lock);
-        char body[760];
+        char body[880];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
             "\"prod\":%llu,\"drop\":%llu,\"pub\":%llu,"
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
-            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,\"connected\":%d,"
+            "\"ae\":%d,\"gaincap\":%d,\"median\":%d,"
+            "\"denoise\":%d,\"dn_active\":%d,\"dn_ms\":%.2f,\"connected\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             wfps, st.mean, st.exp_ms, st.duty_pct, st.gain,
             st.sfps, st.sfps,
             (unsigned long long)c_prod, (unsigned long long)c_drop, (unsigned long long)c_pub,
             z, hf, vf, st.focus,
-            st.ae_on, st.gaincap, st.median, st.connected,
+            st.ae_on, st.gaincap, st.median,
+            tdn_enabled(), tdn_active(), tdn_last_ms(), st.connected,
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
@@ -335,6 +342,7 @@ static void *client(void *arg)
         if ((q = strstr(req, "expms=")))   eo_set_expms(atof(q + 6));
         if ((q = strstr(req, "gaincap="))) eo_set_gaincap(atoi(q + 8));
         if ((q = strstr(req, "median=")))  eo_set_median(atoi(q + 7));
+        if ((q = strstr(req, "denoise="))) tdn_set_enabled(atoi(q + 8));
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }

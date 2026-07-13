@@ -69,8 +69,33 @@ The night-grain fix and a hard operator requirement, both live here:
 
 `isp_scale_tonemap` builds the finished 8-bit frame from the raw Y10 with a
 **temporally-EMA-smoothed p1/p99 stretch** (p99 ignores a blown streetlight; smoothing
-kills frame-to-frame "breathing") + gamma, and `isp_median3` is a cheap 3×3 median grain
-filter. The **detector always gets the raw linear frame**, never this tone-mapped one.
+kills frame-to-frame "breathing") + gamma; the 10→8 quantization is LUT-interpolated +
+**ordered-dithered** (a ~6× night stretch of clean data contours if truncated), and
+`isp_median3` is a cheap 3×3 median grain filter. The **detector always gets the raw
+linear frame**, never this tone-mapped one.
+
+## Night temporal denoiser (`tdn.c`) — display-only
+
+Night frames are read-noise-limited (gain rails; ~0.7 LSB temporal noise gets stretched
+~6× into grain + row banding). `tdn.c` runs a **motion-adaptive temporal IIR on the raw
+native Y10 before the tonemap** — measured ~3.3× noise cut and the banding averages out.
+Design points (each red-team-mandated; rationale in [`../docs/NIGHT_IQ.md`](../docs/NIGHT_IQ.md)):
+- **4×4 block-pooled motion test** so a faint coherent mover trips the test and stays
+  crisp (a per-pixel diff is provably blind to a far slow walker);
+- AE steps **scale** the accumulator by the applied exposure×gain ratio (never reset),
+  using the +2-frame register-landing model (`eo_frame_ae`);
+- empirical per-intensity-bin noise scale (tracks read+shot noise at the applied gain);
+- error-feedback accumulation (no fixed-point dead-band), row offsets against the
+  accumulator reference (rows without static pixels get **zero** correction);
+- global-motion guard (slew ⇒ pass-through + reseed) — a **static-mount instrument**,
+  interim by contract until a warp-accumulation design exists for the tracking gimbal;
+- **night-gated with hysteresis** on applied gain: day = zero cost, byte-identical path.
+
+**Display-only by verdict:** temporal denoise attenuates exactly the faint slow movers
+the detector exists to catch, so the detector keeps the raw tap and its own median-
+background mover head — this block never feeds detection. Operator knob:
+`/ctl?denoise=0|1` (`/stats`: `denoise`, `dn_active`, `dn_ms`). Offline validation:
+`make tdn_bench` replays a recorded `eo_y10` channel through the exact shipped code.
 
 ## Two taps, one guarantee
 
