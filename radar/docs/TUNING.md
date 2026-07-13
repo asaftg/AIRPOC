@@ -101,6 +101,32 @@ coverage V2DAY 0.949 unchanged, T7 0.594→0.570 (chaos flips of two marginal
 junk-mixed return-leg fragments — killed by the *consistency* guard, not the
 walk guard); T7 turnaround segment identical, zero human kills.
 
+## LLR track score (fixed, `LLR_*` in `src/cluster.c`)
+
+A sequential **log-likelihood track score** runs beside the M-of-N
+confirmation: hit adds `log(P_D · N(innovation) / λ_c)`, miss adds
+`log(1 − P_D)`. `N` is the 2-D gaussian innovation density in (range, cross)
+space with SNR-quality-weighted sigmas; `λ_c` is an **online clutter rate** —
+an EWMA of unclaimed moving-point density per 50 m range annulus (10 annuli,
+gain 0.02 after a 50-frame warmup, floored at 2e-4 /m²).
+
+Confirmation = the existing fast (M-of-N) and slow (8-of-12) paths — both
+**unchanged**, they remain the floor — OR `L ≥ 5.5` with the jitter gate and a
+*reduced* moving-rate floor (`ST_MV_LO` 0.35, ~3 frames to build, vs
+`MV_RATE_MIN`'s ~6; the full floor, not M-of-N, was the real latency binder).
+Two robustness caps: per-hit increment clamped to [−2, +1.5] (an empty
+annulus must not let one bright multipath coincidence confirm in two hits —
+the AGV1 garage case), total score clamped to [−10, +30].
+
+Calibration (2026-07-13, threshold scan 3.5–6.5 at zero emitted tracks on
+c16/c3/AGV1/T6): **5.5**. Results: T7 far-human corridor confirm latency
+17.0 → 12.3 frames (−28 %), corridor coverage 0.570 → 0.590, id switches
+14 → 12; V2DAY human unchanged (day-close target already confirms at the
+fast-path floor); zero emitted tracks on all four noise fixtures (AGV1/T6
+bit-identical); confirmed-junk (never-emitted) population +10 %/+12 % on
+c16/c3 — the score competes against the honest local clutter rate, so a
+16 dB carpet stays hard to confirm from position alone by design.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,
