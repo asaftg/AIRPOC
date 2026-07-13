@@ -19,8 +19,11 @@ chip CFAR → point cloud (+per-point SNR)
 ```
 
 Velocity comes from a least-squares fit of each track's own position history
-(range-rate + angle-rate), **never** from the ambiguous Doppler — that is the
-core design choice that makes the tracker class-agnostic.
+(range-rate + angle-rate). Since 2026-07-13 the claimed doppler (sign-verified
+= direct range-rate on this fw) is a SECOND, fold-aware velocity identity: it
+gates association (`DN_*`), verifies motion (walk guard), and feeds the wire's
+range-rate (output filter) — but the fitted history velocity remains the
+prediction backbone, so the tracker stays class-agnostic.
 
 ## Where each parameter lives
 
@@ -126,6 +129,30 @@ fast-path floor); zero emitted tracks on all four noise fixtures (AGV1/T6
 bit-identical); confirmed-junk (never-emitted) population +10 %/+12 % on
 c16/c3 — the score competes against the honest local clutter rate, so a
 16 dB carpet stays hard to confirm from position alone by design.
+
+## Doppler-native association (fixed, `DN_*` in `src/cluster.c`)
+
+MOVING points are claimed in a **3-D gate** (range, azimuth, doppler): a point
+must also tell the track's velocity story. `dr = |r_i − (r_t + vr_eff·dt)|/4 m`,
+`da = |az_i − az_pred|/4°`, `dd = min_k |dop_i − dop_med + k·2·v_fold|/1.5 m/s`
+(fold-aware, k ∈ {−1,0,1}, `V_FOLD_MPS` 41.45 from the A/G chirp timing —
+matches the measured corpus max |doppler| 41.416); claim iff all three < 1 and
+the sum < 2.5. `vr_eff` (range prediction) blends the claimed-doppler EWMA
+with the fitted range-rate (young/incoherent tracks: claimed only); the `dd`
+identity test is **claim-to-claim** (`dop_med`), never the blend — fast
+vehicles on this DDMA fw carry a systematic claimed-doppler bias (T5 receding
+car claims +11.5 m/s while moving ~18 m/s radially) and must match their own
+claim. Static-channel points keep the old spatial gate; miss-growth still
+widens dr/da (never dd).
+
+Corpus (2026-07-13, vs the LLR-commit baseline): T7 human corridor coverage
+0.590 → 0.777, id switches 12 → 3, off-corridor emitted share 0.175 → 0.120;
+T2 night-walk segments merge (82 s continuous 165–283 m); T4 far human = one
+track 87–203 m; T5 junction holds 2.5× more emitted frames; V2DAY human = one
+139 s track to ~200 m, coverage 0.949 → 0.960; c16 confirmed junk 160 → 0,
+c3 238 → 27; zero emitted tracks on all noise fixtures. Known cost: unclaimed
+carpet points now seed short-lived tentative blips (max concurrent tracks 61
+of 128 on the busiest fixture — no table pressure).
 
 ## Re-tuning (as we get more recordings)
 
