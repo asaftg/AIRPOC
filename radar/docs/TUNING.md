@@ -63,6 +63,21 @@ are the "why 8-of-12 and not 8-of-20" answers.
 | Emit range / FOV | 500 m / the FOV knob | full radar coverage — no artificial clamp. |
 | Frame rate assumption | 26 Hz (`TRK_FPS`) | converts the coast/park **seconds** knobs to frames; matches the A/G profile. |
 
+## Guidance output filter (fixed, `OUTF_*` in `src/cluster.c`)
+
+What the **wire reports** for each target is a smoothed output filter, not the
+raw per-frame cluster median. Output-only: association, gating and lifecycle
+never see it (validated — confirmed-track lifecycles are bit-identical across
+the whole fixture corpus with the filter on).
+
+| Number | Value | Why |
+|---|---|---|
+| Angle smoother | alpha-beta on (az, az-rate) + (el, el-rate), Benedict-Bordner beta = a²/(2−a) | steady angles for the gimbal; rate state gives lag-free following of a constant-rate crosser. |
+| Alpha tiers | 0.35 / 0.20 / 0.12 at <20 hits / ≥20 / ≥60 hits + peak SNR ≥21 dB | a young or faint track follows its measurements; an established bright one smooths hard. Far-segment az step-std ~3× lower at tier 1 (T7). |
+| Range/vr filter | same alpha-beta + claimed-doppler median as a **direct** range-rate measurement (gain 0.35, gate 3 m/s) | doppler sign verified on this fw = range-rate (outbound walker claims +1.8 m/s); the gate rejects folded/soup doppler (a spur streak's claimed doppler is ~16–19 m/s off its real motion). |
+| Coast / park | rates held through misses; park-held track bleeds rates ×0.5/frame | coasting continues the trajectory; a parked box must not drift on a stale rate. |
+| Re-acquire slew | output angles converge ≤3°/s + track rate after a coast (`OUTF_SLEW_DPS`) | the gimbal never sees a re-latch teleport; normal tracking follows the filter exactly (no cap). |
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,
