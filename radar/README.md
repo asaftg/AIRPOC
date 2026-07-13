@@ -47,12 +47,22 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
   num_points, num_targets,
   points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
-  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
+  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,mv_class,class}, ...] }
 ```
 Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres (`z` carries
 elevation). `snr` is the per-point SNR in dB (live; `null` only if a firmware
 without SideInfo is flashed). `class` is always `radar_detection`. `tid` is a
 stable per-target id.
+
+`mv_class` is the **walk guard's** live motion-verification class per target:
+`0` = UNVERIFIED_SLOW (radially quiet / not decidable this window — still a
+real emitted track, just not yet motion-proven; a verified target that slows
+or turns around drops back to 0), `1` = VERIFIED_MOVER (integrated claimed
+doppler matches its measured range displacement over the trailing 5 s, or
+coherent cross-range motion with a sane radial story), `2` = SUSPECT (claimed
+motion contradicted by displacement; the track is accumulating strikes and
+will be killed if never verified). Consumers should treat 0 and 1 as
+trustworthy and may de-prioritise 2.
 
 Target `x,y,z` / `vx,vy` are the tracker's **guidance output filter** state
 (alpha-beta smoothed angles + doppler-aided range-rate, slew-limited on

@@ -76,17 +76,19 @@ int main(int argc, char **argv)
         {
             const char *tw = getenv("REPLAY_TRACE_TID");
             if (tw) {
-                double d7[7];
-                if (cluster_track_detail(c, atoi(tw), d7))
-                    printf("T %.2f %.2f snrp %.1f pass %.0f ever %.0f streak %.0f bad %.0f\n",
-                           d7[0], d7[1], d7[2], d7[3], d7[4], d7[5], d7[6]);
+                double d12[12];
+                if (cluster_track_detail(c, atoi(tw), d12))
+                    printf("T %.2f %.2f snrp %.1f pass %.0f ever %.0f streak %.0f bad %.0f"
+                           " wD %.2f wdR %.2f wmed %.2f wbad %.0f mv %.0f\n",
+                           d12[0], d12[1], d12[2], d12[3], d12[4], d12[5], d12[6],
+                           d12[7], d12[8], d12[9], d12[10], d12[11]);
             }
         }
         for (int i = 0; i < nc; i++)
             printf("C %d %.6f %.6f\n", ctid[i], crr[i], caz[i]);
         for (int i = 0; i < nt; i++) {
             double r = hypot(tg[i].x, tg[i].y), az = atan2(tg[i].x, tg[i].y) / DEG;
-            printf("E %d %.6f %.6f\n", tg[i].tid, r, az);
+            printf("E %d %.6f %.6f %d\n", tg[i].tid, r, az, tg[i].mv_class);
         }
         frame++;
     }

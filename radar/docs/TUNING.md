@@ -78,6 +78,29 @@ the whole fixture corpus with the filter on).
 | Coast / park | rates held through misses; park-held track bleeds rates ×0.5/frame | coasting continues the trajectory; a parked box must not drift on a stale rate. |
 | Re-acquire slew | output angles converge ≤3°/s + track rate after a coast (`OUTF_SLEW_DPS`) | the gimbal never sees a re-latch teleport; normal tracking follows the filter exactly (no cap). |
 
+## Walk guard (fixed, `WALK_*` in `src/cluster.c`)
+
+Anti-breather **motion verification** on confirmed tracks: a real mover's
+claimed doppler integrates to its actual range displacement; a multipath
+breather claims doppler its position never delivers. Emits `mv_class` per
+target on the wire (0 = UNVERIFIED_SLOW, 1 = VERIFIED_MOVER, 2 = SUSPECT) and
+kills only on a sustained, decidable contradiction — a slow or tangential
+target is *never* judged, only classed.
+
+| Number | Value | Why |
+|---|---|---|
+| Window / decidability | 5 s; median \|claimed dop\| ≥ 1.2 m/s AND \|∫dop\| ≥ 3 m AND ≥ 1.5 s covered | below these the doppler story is too weak to judge — class 0, never kill. |
+| Robust integration | per-frame claimed dop clamped to 3× window median; per-pair range step winsorized to 3×claim+0.5 m/s; gaps > 0.5 s not integrated; D and dR compared over the SAME covered pairs | one 30 m/s noise-point median on a 1.8 m/s walker must not race D ahead (T7 @ 188 m); a re-latch jump (+6 m in one gap, T2 @ 217 m) is artifact, not motion; a flickery far track must not fail by construction. |
+| Pass tolerance | \|dR − D\| ≤ max(1.5 m + 0.01·r, 0.3·\|D\|) | endpoint noise grows with range (range-aware like every guard threshold). Pass ⇒ VERIFIED, latched (`mv_ever`, graveyard-inheritable); a latched track is never walk-killed (protects the T7 walker reversing at 306 m). |
+| Cross-domain verify | coherent az net ≥ max(3 m, 2×2.5°·r), net/path ≥ 0.40, AND radial story sane | a tangential crosser is radially silent but really moving. Radial sanity required: the garage wanderer slides coherently in az while its range teleports +56 m vs claimed ~0 — cross evidence without radial sanity blocks the kill but earns no latch. |
+| Kill | 13 consecutive decidable fails, evidence frames only, r ≥ 20 m, never-verified tracks only | ~0.5 s of contradicted measurements; below 20 m claimed doppler is near-field soup (T7 walker at 5–13 m claims +7.6 m/s) — near range belongs to the flood logic + consistency guard. |
+
+Corpus validation 2026-07-13: T1/T3/T4/T5/T6/garage/c16/c3 bit-identical to
+pre-walk-guard; T2/V2DAY emitted-track counts unchanged; human-corridor
+coverage V2DAY 0.949 unchanged, T7 0.594→0.570 (chaos flips of two marginal
+junk-mixed return-leg fragments — killed by the *consistency* guard, not the
+walk guard); T7 turnaround segment identical, zero human kills.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,
