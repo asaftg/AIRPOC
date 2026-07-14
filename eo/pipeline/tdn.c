@@ -96,11 +96,11 @@ static void tdn_seed(const uint8_t *y10, int bpl)
 int tdn_process(const uint8_t *y10, int bpl, int w, int h,
                 uint16_t *out, int exp_lines, int gain)
 {
-    if (!g_on || w < 64 || h < 64) { g_active = 0; return 0; }
+    if (!g_on || w < 64 || h < 64) { g_active = 0; g_ms = 0.0; return 0; }
     if (T.w != w || T.h != h) {
         free(T.acc); free(T.err); free(T.alpha); free(T.moving);
         free(T.score); free(T.sy); free(T.sa); free(T.rowoff); free(T.offema);
-        if (!tdn_alloc(w, h)) { g_active = 0; return 0; }
+        if (!tdn_alloc(w, h)) { g_active = 0; g_ms = 0.0; return 0; }
     }
     double t0 = now_ms();
 
@@ -112,7 +112,7 @@ int tdn_process(const uint8_t *y10, int bpl, int w, int h,
     if (want != T.gate) {
         if (++T.gate_run >= TDN_GATE_FRAMES) { T.gate = want; T.gate_run = 0; }
     } else T.gate_run = 0;
-    if (!T.gate) { g_active = 0; T.seeded = 0; return 0; }
+    if (!T.gate) { g_active = 0; g_ms = 0.0; T.seeded = 0; return 0; }
 
     /* ---- AE handling: scale the accumulator by the APPLIED brightness ratio.
      * Never reset — a reset throws away the integrated SNR and pulses noise. */
