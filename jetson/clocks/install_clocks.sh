@@ -3,7 +3,10 @@
 install -m 0755 /tmp/pin-clocks.sh /usr/local/bin/pin-clocks.sh
 install -m 0644 /tmp/jetson-clocks.service /etc/systemd/system/jetson-clocks.service
 systemctl daemon-reload
-systemctl enable --now jetson-clocks.service
+systemctl enable jetson-clocks.service
+# restart (not just enable --now): a oneshot with RemainAfterExit stays "active (exited)"
+# after its first run, so enable --now would NOT re-execute an updated script.
+systemctl restart jetson-clocks.service
 sleep 3
 echo "=== clocks service ==="; systemctl is-active jetson-clocks.service
 echo "=== nvpmodel ==="; nvpmodel -q 2>/dev/null | grep -iE 'mode|maxn' | head -2
