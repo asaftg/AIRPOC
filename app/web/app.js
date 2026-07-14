@@ -232,6 +232,9 @@
   document.querySelectorAll("#dn-btns [data-dn]").forEach(function (b) {
     b.onclick = function () { setSeg("dn-btns", b); ispTouch = Date.now(); ctl("denoise=" + b.dataset.dn); if (b.dataset.dn === "0") $("o-dn").textContent = ""; };
   });
+  document.querySelectorAll("#disp-btns [data-disp]").forEach(function (b) {
+    b.onclick = function () { setSeg("disp-btns", b); ispTouch = Date.now(); ctl("disp_fps=" + b.dataset.disp); };
+  });
   function setSeg(id, on) { document.querySelectorAll("#" + id + " button").forEach(function (x) { x.classList.remove("on"); }); on.classList.add("on"); }
   /* Each knob is live only in the mode where it means something:
    *  - EXP ms / GAIN: MANUAL only — in AUTO the exposure loop owns them.
@@ -913,6 +916,11 @@
     if (typeof eo.gaincap === "number" && idle($("s-gcap"))) { $("s-gcap").value = eo.gaincap; $("o-gcap").textContent = eo.gaincap; }
     if (typeof eo.median === "number") { var m = document.querySelector('#md-btns [data-md="' + (eo.median ? 1 : 0) + '"]'); if (m) setSeg("md-btns", m); }
     if (typeof eo.denoise === "number" && settled) { var d = document.querySelector('#dn-btns [data-dn="' + (eo.denoise ? 1 : 0) + '"]'); if (d) setSeg("dn-btns", d); }
+    /* DISPLAY 30/60 is gated on the EO feed exposing disp_fps — the row stays hidden until then. */
+    if (typeof eo.disp_fps === "number") {
+      $("dispfps-row").style.display = "";
+      if (settled) { var df = document.querySelector('#disp-btns [data-disp="' + eo.disp_fps + '"]'); if (df) setSeg("disp-btns", df); }
+    }
     /* Live indicator: ● only while the denoiser is actually running (night); its per-frame cost beside it. */
     var dnOn = document.querySelector('#dn-btns button.on');
     if (dnOn && dnOn.dataset.dn === "1" && eo.dn_active)

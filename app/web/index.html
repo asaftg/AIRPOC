@@ -106,6 +106,7 @@
         <button data-res="low">PANIC</button><button data-res="med">FAST</button><button data-res="high" class="on">DEFAULT</button><button data-res="native">NATIVE</button>
       </div></div>
       <div class="srow" title="Most video frames per second sent to this screen. Lower it to ease a weak link."><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
+      <div class="srow" id="dispfps-row" style="display:none" title="Preview smoothness only — how many frames per second reach THIS screen. The detector, tracker and recorder always run on the full sensor rate, so this never touches detection, targeting, or recording. 30 looks smooth; 60 for when you want it."><label>DISPLAY</label><div class="btns" id="disp-btns"><button data-disp="30" class="on">30</button><button data-disp="60">60</button></div></div>
       <div class="srow" title="AUTO: when the link can't carry the video (SAT), step QUALITY down until it flows, and back up when the link recovers — never above the QUALITY you picked. MANUAL: never touch your settings."><label>LINK</label><div class="btns" id="lka-btns"><button data-lka="0" class="on">MANUAL</button><button data-lka="1">AUTO</button></div></div>
 
       <div class="sec">EO SENSOR</div>
