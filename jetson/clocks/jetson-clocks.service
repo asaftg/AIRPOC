@@ -1,0 +1,12 @@
+[Unit]
+Description=Pin Jetson clocks to max (MAXN_SUPER + jetson_clocks + performance governor)
+After=multi-user.target jetson-fan-max.service
+Wants=jetson-fan-max.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/pin-clocks.sh
+
+[Install]
+WantedBy=multi-user.target

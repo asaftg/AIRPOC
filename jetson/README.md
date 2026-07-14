@@ -34,10 +34,15 @@ Two ways. **Use the SD-card image** unless you need to boot from NVMe.
 1. Complete **oem-config** on first boot (create user `asaftg`, locale, network).
    > Pitfall: a headless/serial flash can leave **oem-config** unfinished — the box
    > has no login until you complete it. Attach a display or drive it over serial.
-2. Set max performance (persist across reboots):
+2. Set max performance. `jetson_clocks` does **not** persist across reboots, so this is
+   installed as a boot service (like the fan) — the box otherwise comes up on the
+   schedutil governor with the GPU idling at ~half clock, and the detector's bursty
+   inference never sustains load long enough for DVFS to boost (every inference at half
+   clock, jittery p95). From [`clocks/`](clocks/):
    ```bash
-   sudo nvpmodel -m 0        # MAXN_SUPER
-   sudo jetson_clocks
+   sudo ./install_clocks.sh   # installs jetson-clocks.service: nvpmodel -m 0 (MAXN_SUPER)
+                              # + jetson_clocks + CPU governor=performance, enabled at boot
+   cat /sys/class/devfreq/17000000.gpu/cur_freq   # → 1020000000 under load
    ```
 3. Verify the release:
    ```bash
@@ -64,4 +69,5 @@ cat /sys/class/hwmon/hwmon*/pwm1   # → 255
 
 ## Done
 Platform is ready when: `nv_tegra_release` shows R36.4.4, `nvpmodel` is MAXN_SUPER,
-`pwm1` is 255. Proceed to a sensor module (start with [`eo/`](../eo/README.md)).
+`pwm1` is 255, GPU `cur_freq` reaches `1020000000` under load, and the CPU governor is
+`performance`. Proceed to a sensor module (start with [`eo/`](../eo/README.md)).
