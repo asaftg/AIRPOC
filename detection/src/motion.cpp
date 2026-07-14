@@ -196,7 +196,10 @@ extern "C" int motion_process(MotionWorker *m, const uint8_t *y10, int w, int h,
         float bhei = stats.at<int>(i, cv::CC_STAT_HEIGHT) * scale;
         float cx = (float)centroids.at<double>(i, 0) * scale;
         float cy = (float)centroids.at<double>(i, 1) * scale;
-        float gate = std::max(20.0f, 0.5f * std::max(bwid, bhei));
+        /* per-frame association gate. The 20 px base is a max target speed at 60 fps;
+         * scale it by 60/fps so the SAME real speed is tracked at any process rate
+         * (at 15 fps a target moves ~4x more between frames). */
+        float gate = std::max(20.0f * (60.0f / (float)fps), 0.5f * std::max(bwid, bhei));
 
         int best = -1; float bestd = gate;
         for (size_t k = 0; k < m->tracks.size(); k++) {

@@ -9,7 +9,7 @@
 #ifndef DET_CONFIG_H
 #define DET_CONFIG_H
 
-#define DET_VERSION       "0.3.0"          /* model (TRT) + rolling-background motion + contract */
+#define DET_VERSION       "0.4.0"          /* native rolling-background motion @ mot_fps + contract */
 
 /* IMX296 native frame delivered on airpoc.eo_y10 (Y10 in 16-bit LE words). */
 #define EO_IMG_W          1440
@@ -69,6 +69,19 @@
                                           is reported (rejects sparkle/twinkle) */
 #define DET_MOT_PERSIST_MIN    1
 #define DET_MOT_PERSIST_MAX    5
+#define DET_MOT_DOWN_DEFAULT   1       /* motion spatial downscale: 1 = NATIVE (resolves the far/
+                                          small movers the net exists to catch). Higher = cheaper
+                                          but blinds small targets — 4 collapses a far human to
+                                          ~3 px. Trade CPU with mot_fps, not by throwing away pixels. */
+#define DET_MOT_DOWN_MIN       1
+#define DET_MOT_DOWN_MAX       4
+#define DET_MOT_FPS_DEFAULT    15      /* motion process rate (Hz). Motion detects far/small = SLOW-
+                                          in-pixels targets, which don't need 60 Hz; running slower is
+                                          what makes NATIVE affordable. Fast close crossers are big
+                                          (model/lower-res catch them) and get the higher rate as the
+                                          detector cadence ramps in. */
+#define DET_MOT_FPS_MIN        5
+#define DET_MOT_FPS_MAX        60
 
 /* --- EO tap meta[] layout (published by eo/pipeline/libeo.c) --- */
 /* meta[0]=v4l2_seq  meta[1]=exp_lines  meta[2]=gain  meta[3]=vmax

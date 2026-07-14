@@ -59,13 +59,13 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
 
 ## Output — `GET /stats`
 ```json
-{"version":"0.3.0","ifov_urad":287.5,"img":{"w":1440,"h":1088},
+{"version":"0.4.0","ifov_urad":287.5,"img":{"w":1440,"h":1088},
  "tap":{"connected":true,"fps":60.0,"gaps":0,"drops_cum":0,"frame_id":184223},
  "det":{"active":false,"fps":0.0,"model":"none","precision":"",
         "infer_ms":{"p50":0,"p95":0},"e2e_ms":{"p50":0,"p95":0}},
  "motion":{"active":false,"fps":0.0,"stab_fail_pct":0.0,"candidates":0},
  "knobs":{"conf":0.35,"cadence":4,"motion":1,"max_dets":128,
-          "mot_k":6.0,"mot_window_s":15.0,"mot_persist":3}}
+          "mot_k":6.0,"mot_window_s":15.0,"mot_persist":3,"mot_down":1,"mot_fps":15}}
 ```
 `det.active` is true once an engine is loaded (`-e`); `motion.active` is true once
 the motion thread has processed a frame. `candidates` is the raw mover count
@@ -85,6 +85,8 @@ replies `ok`.
 | `mot_k` | 1–30 | motion MAD threshold multiplier (noise floor above the median diff) |
 | `mot_window_s` | 1–60 s | rolling-background window: how far back "normal scene" is modelled. Short adapts fast & is cleaner in a changing scene; long is smoother but slower to forget a stopped object. **GUI slider.** |
 | `mot_persist` | 1–5 | confirmation strength = fraction of the ~1 s M-of-N tracker window a mover must hit before it's reported (rejects sparkle/twinkle) |
+| `mot_down` | 1–4 | motion spatial downscale. **1 = native** (resolves the far/small movers the net exists for); higher is cheaper but blinds small targets (÷4 collapses a far human to ~3 px). Changing it rebuilds the worker (background re-warms). |
+| `mot_fps` | 5–60 Hz | rate the motion worker processes at. Far/small movers are slow in pixels and don't need 60 Hz — running slower is what makes **native affordable**. The tracker's association gate scales with this automatically. |
 
 Raise `cadence` toward 1 as a target closes — a fast crosser up close needs the
 higher rate; searching at range can run slower to save GPU.

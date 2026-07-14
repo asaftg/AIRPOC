@@ -63,20 +63,27 @@ static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
     fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d motion=%d max_dets=%d "
-            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d\n",
+            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d mot_down=%d mot_fps=%d\n",
             k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k,
-            k->mot_window_s, k->mot_persist);
+            k->mot_window_s, k->mot_persist, k->mot_down, k->mot_fps);
 }
 
 static void *motion_thread(void *arg)
 {
     MotionArgs *ma = arg;
-    MotionWorker *mw = motion_new(EO_IMG_W, EO_IMG_H, 4, ma->use_ecc);
     FrameSource *src = tap_source_open(ma->tap_name);
-    if (!mw || !src) { fprintf(stderr, "detectiond: motion thread init failed\n"); return NULL; }
+    if (!src) { fprintf(stderr, "detectiond: motion thread init failed\n"); return NULL; }
 
+    /* The worker is built lazily and rebuilt when mot_down changes (the downscale is
+     * fixed at construction). Motion runs at mot_fps (not the full camera rate): far/
+     * small movers are slow in pixels, so a lower rate is what makes native affordable;
+     * we process every step-th captured frame and pass the effective rate on. */
+    MotionWorker *mw = NULL;
+    int cur_down = -1;
     Mover local[MAX_MOV_CAP];
-    uint64_t last_t = 0; double fps = 0;
+    uint64_t last_t = 0, last_proc_t = 0;
+    double fps = 0, proc_fps = 0;
+    long fno = 0;
     DetFrame f;
     while (g_run) {
         if (src->next(src, &f) != 1) { usleep(2000); continue; }
@@ -85,22 +92,47 @@ static void *motion_thread(void *arg)
             fps = fps > 0 ? 0.9 * fps + 0.1 * inst : inst;
         }
         last_t = f.t_src_ns;
+        fno++;
 
         DetKnobs k; http_get_knobs(&k);
-        int nmov = 0, sf = 0;
-        if (k.motion) {
-            MotionParams mp = { .k_mad = k.mot_k, .window_s = k.mot_window_s,
-                                .fps = fps > 1.0 ? fps : 60.0, .persist = k.mot_persist };
-            nmov = motion_process(mw, f.y10, f.w, f.h, &mp, local, MAX_MOV_CAP, &sf);
+        if (!k.motion) {
+            pthread_mutex_lock(&g_mov_lock);
+            g_nmov = 0; g_stab_fail = 0; g_motion_fps = 0;
+            pthread_mutex_unlock(&g_mov_lock);
+            continue;
         }
+
+        if (k.mot_down != cur_down) {          /* (re)build worker on downscale change */
+            if (mw) motion_free(mw);
+            cur_down = k.mot_down > 0 ? k.mot_down : 1;
+            mw = motion_new(EO_IMG_W, EO_IMG_H, cur_down, ma->use_ecc);
+            if (!mw) { fprintf(stderr, "detectiond: motion_new(down=%d) failed\n", cur_down); usleep(100000); continue; }
+        }
+
+        double cap_fps = fps > 1.0 ? fps : 60.0;
+        int step = (int)lround(cap_fps / (k.mot_fps > 0 ? k.mot_fps : 15));
+        if (step < 1) step = 1;
+        if (fno % step != 0) continue;         /* rate-limit to ~mot_fps */
+
+        int nmov = 0, sf = 0;
+        MotionParams mp = { .k_mad = k.mot_k, .window_s = k.mot_window_s,
+                            .fps = cap_fps / step, .persist = k.mot_persist };
+        nmov = motion_process(mw, f.y10, f.w, f.h, &mp, local, MAX_MOV_CAP, &sf);
+
+        uint64_t now = tap_now_ns();
+        if (last_proc_t) {
+            double inst = 1e9 / (double)(now - last_proc_t);
+            proc_fps = proc_fps > 0 ? 0.9 * proc_fps + 0.1 * inst : inst;
+        }
+        last_proc_t = now;
 
         pthread_mutex_lock(&g_mov_lock);
         memcpy(g_movers, local, (size_t)nmov * sizeof(Mover));
-        g_nmov = nmov; g_stab_fail = sf; g_motion_fps = fps;
+        g_nmov = nmov; g_stab_fail = sf; g_motion_fps = proc_fps;
         pthread_mutex_unlock(&g_mov_lock);
     }
     src->close(src);
-    motion_free(mw);
+    if (mw) motion_free(mw);
     return NULL;
 }
 

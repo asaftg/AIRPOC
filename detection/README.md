@@ -34,8 +34,14 @@ Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRAT
   human that the appearance model drops. **Off by default** — the background is
   built in the current frame, so on a *moving* camera it needs ego-motion alignment
   (IMU/VIO, or the `-E` ECC stabilizer) behind `stabilize()` first. Safe on a
-  static/holding mount; enable via `/ctl`. Window length is the `mot_window_s`
-  knob (1–60 s, default 15).
+  static/holding mount; enable via `/ctl`. Runs at **native resolution** (`mot_down`=1)
+  and a **low process rate** (`mot_fps`, default 15 Hz) — small far movers are slow in
+  pixels, so a low rate keeps native affordable; downscaling would blind exactly the
+  targets this net exists to catch. Window length is the `mot_window_s` knob (1–60 s,
+  default 15). Knobs: `mot_down`, `mot_fps`, `mot_window_s`, `mot_k`, `mot_persist`.
+  > Pitfall: at native the worker floods on wind-blown foliage in daytime — genuine
+  > motion, not noise, so it's rejected downstream by the EO tracker (foliage
+  > oscillates in place; a real target translates), not by a detector threshold.
 - **Contract + recorder tap live;** the app/console already consumes `:8094`.
 
 ### Latency (measured on-device, hot GPU, native resolution)
@@ -89,7 +95,7 @@ detection/
        source.h tap_source.c  frame source (live tap; replay sources land next)
        preproc.cu/.h          Y10 -> normalized model input (CUDA)
        infer.cpp/.h           TensorRT engine + raw-head decode + NMS
-       motion.cpp/.h          motion worker (OpenCV, down-res rolling-background)
+       motion.cpp/.h          motion worker (OpenCV, native rolling-background @ mot_fps)
        stab.h stab_identity.c stab_ecc.cpp   frame-alignment interface + impls
        http.h http.c          /stream + /stats + /ctl
        emit.h emit.c          detection-message JSON + pixel->angle mapping
