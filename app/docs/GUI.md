@@ -186,8 +186,11 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   produced — the "frozen EO" symptom), AUTO steps QUALITY down a rung after ~2 s and
   probes back up after ~20 s clean, never above the operator's chosen QUALITY (the
   ceiling); MANUAL (default) never touches settings.
-- **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN (→ EO feed `/ctl`).
-  The console pushes its chosen default on load: **MEDIAN off**.
+- **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN, DENOISE (→ EO feed `/ctl`).
+  The console pushes its chosen default on load: **MEDIAN off**. **DENOISE** is a display-only
+  night denoiser owned by the EO feed (defaults **on**; the console doesn't override it): the
+  toggle reflects `denoise`, and beside it a **●** + live per-frame `dn_ms` show only while it's
+  actually running (`dn_active` — it self-gates to high-gain night, dormant at zero cost in day).
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
 - **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM (client-side only; see *Radar → EO overlay*).
 - **DETECTOR** — MARK box/seeker (display-only), CONF (min confidence, default 0.5),
@@ -225,7 +228,7 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 | `/dstats` | the detector's `/stats` (health + `knobs`) for slider init |
 | `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |
-| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/fps/res`) → the EO feed |
+| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/denoise/fps/res`) → the EO feed |
 | `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export` (offload `.tar`), `/rec/replay/*` (incl. `/rec/replay/state` with `native_mp4` status, `/rec/replay/{radar,det}/stream` SSE, `/rec/replay/transcode?sid=` HD build) |
 
 The `/rec/*` proxy sets a **180 s** upstream read timeout (a slow `/rec/export` tar build can
