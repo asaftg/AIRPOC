@@ -129,6 +129,8 @@ int  mjpeg_start(int port);                  /* spawns the HTTP server thread   
 int  mjpeg_zoom(void);                       /* current digital zoom (1/2/4/8)   */
 void mjpeg_res_dims(int *w, int *h);         /* operator-selected display size (4:3) */
 const char *mjpeg_res_name(void);            /* "low"/"med"/"high"/"native"      */
+int  mjpeg_disp_fps(void);                   /* display-only rate cap (12..60)   */
+int  mjpeg_stream_clients(void);             /* live /stream HTTP clients        */
 void mjpeg_publish(const uint8_t *gray, int w, int h);   /* newest finished frame */
 
 #endif /* AIRPOC_EO_PIPELINE_H */

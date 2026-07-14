@@ -80,9 +80,18 @@ static const struct { const char *name; int w, h; } RES[4] = {
 };
 static volatile int g_res = 2;             /* boot at high (640x480) — light by default */
 
+/* Display-only frame-rate cap (GUI "DISPLAY 30/60"). The producer decimates the display
+ * chain (tdn + tonemap + encode) to this rate; the sensor, AE, and the detector's native
+ * Y10 tap stay at the full operating fps. g_clients = live /stream HTTP clients (the
+ * producer skips the whole display chain when nobody is watching — no frames for nobody).*/
+static volatile int g_disp_fps = 30;       /* default 30, range 12..60 */
+static int g_clients = 0;                  /* atomic: active /stream clients */
+
 int mjpeg_zoom(void) { return g_zoom; }
 void mjpeg_res_dims(int *w, int *h) { int r = g_res; if (w) *w = RES[r].w; if (h) *h = RES[r].h; }
 const char *mjpeg_res_name(void) { return RES[g_res].name; }
+int mjpeg_disp_fps(void) { return g_disp_fps; }
+int mjpeg_stream_clients(void) { return __atomic_load_n(&g_clients, __ATOMIC_RELAXED); }
 
 /* Full-screen video with a live stats overlay (polled from /stats) + zoom buttons. */
 static const char *PAGE =
@@ -297,7 +306,7 @@ static void *client(void *arg)
         pthread_mutex_lock(&g_lock);
         double wfps = g_wire_fps; uint64_t c_pub = g_seq;
         pthread_mutex_unlock(&g_lock);
-        char body[880];
+        char body[940];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
@@ -305,6 +314,7 @@ static void *client(void *arg)
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,"
             "\"denoise\":%d,\"dn_active\":%d,\"dn_ms\":%.2f,\"connected\":%d,"
+            "\"disp_fps\":%d,\"clients\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             wfps, st.mean, st.exp_ms, st.duty_pct, st.gain,
@@ -313,6 +323,7 @@ static void *client(void *arg)
             z, hf, vf, st.focus,
             st.ae_on, st.gaincap, st.median,
             tdn_enabled(), tdn_active(), tdn_last_ms(), st.connected,
+            g_disp_fps, mjpeg_stream_clients(),
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
@@ -343,6 +354,8 @@ static void *client(void *arg)
         if ((q = strstr(req, "gaincap="))) eo_set_gaincap(atoi(q + 8));
         if ((q = strstr(req, "median=")))  eo_set_median(atoi(q + 7));
         if ((q = strstr(req, "denoise="))) tdn_set_enabled(atoi(q + 8));
+        if ((q = strstr(req, "disp_fps="))) { int v = atoi(q + 9);
+            g_disp_fps = v < 12 ? 12 : v > 60 ? 60 : v; }   /* display-only rate cap */
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }
@@ -353,10 +366,12 @@ static void *client(void *arg)
         close(fd); return NULL;
     }
 
-    /* /stream: MJPEG multipart */
+    /* /stream: MJPEG multipart. Count this client so the producer knows someone's
+     * watching (it skips the display chain when g_clients==0). */
     const char *hdr = "HTTP/1.0 200 OK\r\n"
                       "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
     if (write(fd, hdr, strlen(hdr)) < 0) { close(fd); return NULL; }
+    __atomic_add_fetch(&g_clients, 1, __ATOMIC_RELAXED);
 
     /* Event-driven: woken by the publish broadcast, so EVERY published frame is sent.
      * (The old 2 ms poll + latest-wins silently skipped frames when the encode workers
@@ -381,6 +396,7 @@ static void *client(void *arg)
         }
         free(copy);
     }
+    __atomic_sub_fetch(&g_clients, 1, __ATOMIC_RELAXED);
     close(fd);
     return NULL;
 }

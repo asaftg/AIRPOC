@@ -109,8 +109,17 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?gaincap=` | 0…480 | AE gain ceiling |
 | `?median=` | 0/1 | 3×3 denoise |
 | `?denoise=` | 0/1 | **night temporal denoiser** (display-only; default 1). The knob ENABLES it; it actually runs only when the night gate engages (high applied gain, hysteresis) — `/stats.dn_active` says so. Turn OFF to reclaim its CPU (~0.5 core at night); day cost is zero either way. Detector is unaffected (raw tap) |
+| `?disp_fps=` | 12…60 | **display-only frame-rate cap** (default 30). Decimates the display chain (denoise → tone-map → encode) to `min(sensor_fps, disp_fps)`; the sensor rate, AE, exposure, and the detector's native Y10 tap all stay at full 60 fps. Halves preview CPU at 30. Wire rate of `/stream` = this value. |
 | `?zoom=` | 1/2/4/8 | digital zoom |
 | `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
+
+> **Consumer gate:** the display chain is skipped entirely when **no `/stream` client is
+> connected** (`/stats.clients == 0`) — no frames produced for nobody. In production the
+> console holds a persistent `/stream` client, so this only idles the preview when truly
+> nothing is watching. Consequence: the **`eo_jpeg`** recorder tap follows the served
+> display (it's "the JPEGs the operator saw"), so it pauses when no viewer is connected;
+> the **`eo_y10`** native tap is upstream and always records at full 60 fps, and native
+> replay reconstructs the display from it — so nothing algorithm-facing is lost.
 
 **`/stats`** returns all live values so the GUI renders the current state of every knob:
 `fps` (**the emitted wire rate, count-based** over a ≥0.5 s window — every published
@@ -121,9 +130,11 @@ guess), **`prod, drop, pub`** (raw pipeline counters: frames produced / skipped
 pool-full / published — diff two polls to localize any stall), `res, dw, dh` (display
 size), **`eff_w, eff_h`** (real detail = `min(res, sensor-crop)` — equals `dw×dh` at 1×,
 collapses to the crop at high zoom), `mean, exp_ms, duty_pct, gain, gaincap, ae, median,
-zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`, and the denoiser
+zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`, the denoiser
 state: **`denoise`** (the knob), **`dn_active`** (night gate actually running this
-frame), **`dn_ms`** (measured cost/frame — the GUI can surface it next to the toggle).
+frame), **`dn_ms`** (measured cost/frame — the GUI can surface it next to the toggle),
+and the display-rate state: **`disp_fps`** (applied cap) + **`clients`** (live `/stream`
+clients; 0 = display chain idle).
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.
