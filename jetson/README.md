@@ -40,7 +40,8 @@ Two ways. **Use the SD-card image** unless you need to boot from NVMe.
    inference never sustains load long enough for DVFS to boost (every inference at half
    clock, jittery p95). From [`clocks/`](clocks/):
    ```bash
-   sudo ./install_clocks.sh   # installs jetson-clocks.service: nvpmodel -m 0 (MAXN_SUPER)
+   sudo ./install_clocks.sh   # installs jetson-clocks.service: nvpmodel -m 2 (MAXN_SUPER;
+                              # ID 2 on Orin Nano Super — ID 0 is the 15W mode, don't use it)
                               # + jetson_clocks + CPU governor=performance, enabled at boot
    cat /sys/class/devfreq/17000000.gpu/cur_freq   # → 1020000000 under load
    ```

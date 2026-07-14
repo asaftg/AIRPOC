@@ -12,5 +12,7 @@ echo "cur=$(cat /sys/class/devfreq/17000000.gpu/cur_freq 2>/dev/null)  max=$(cat
 echo "=== CPU governor (expect performance) ==="
 cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 echo "=== thermal zones (junction temps, C) ==="
-for t in /sys/class/thermal/thermal_zone*/temp; do d=${t%/temp}; echo "  $(cat $d/type)=$(( $(cat $t)/1000 ))C"; done
+for t in /sys/class/thermal/thermal_zone*/temp; do
+    d=${t%/temp}; v=$(cat "$t" 2>/dev/null); [ -n "$v" ] && echo "  $(cat $d/type)=$(( v/1000 ))C"
+done
 echo CLOCKS_DONE

@@ -9,7 +9,10 @@
 # Coexists with jetson-fan-max.service — pinning raises idle power/heat; the fan is
 # already held at 100% (see fan/), so thermal is covered on the gimbal head.
 set -e
-nvpmodel -m 0 </dev/null      # MAXN_SUPER (no reboot needed for MAXN modes)
+# MAXN_SUPER is ID 2 on the Orin Nano Super (VERIFIED on-box in /etc/nvpmodel.conf).
+# ID 0 is the 15W restricted mode, ID 1 is 25W, ID 3 is 7W — do NOT use -m 0 (it caps
+# the GPU at 612 MHz). The old docs/agent note that said "-m 0 = MAXN_SUPER" was wrong.
+nvpmodel -m 2 </dev/null      # MAXN_SUPER (no reboot needed for MAXN modes)
 jetson_clocks                 # lock CPU/GPU/EMC to max, disable DVFS
 # Belt-and-suspenders: force the CPU governor to performance (explicit + idempotent).
 for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
