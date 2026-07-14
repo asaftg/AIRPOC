@@ -47,7 +47,7 @@ static void unpack_y10p(const uint8_t *in, int stride, uint8_t *out)
 /* Laplacian MAD in a centre patch + row-banding std, on 10-bit values */
 static void noise_metrics(const uint16_t *img, int q5, double *lap_mad, double *row_std)
 {
-    int shr = q5 ? 5 : 6;                       /* -> 10-bit ints */
+    int shr = 6; (void)q5;                     /* raw and Q10.5<<1 output both hold 10-bit in [15:6] */
     int x0 = W/2 - 100, y0 = H/2 - 100, n = 0;
     static float lap[198 * 198];
     for (int y = 1; y < 199; y++)
