@@ -347,7 +347,9 @@ static void *client(void *arg)
         if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
         /* exposure/gain override -> libeo bench API. fps is the FIXED operating rate
          * that caps exposure (AE never changes it); a manual gain/exp drops to manual. */
-        if ((q = strstr(req, "fps=")))     eo_set_fps(atof(q + 4));
+        /* boundary-checked so "fps=" does NOT match the tail of "disp_fps=" */
+        if ((q = strstr(req, "fps=")) && (q == req || q[-1] == '?' || q[-1] == '&'))
+            eo_set_fps(atof(q + 4));
         if ((q = strstr(req, "ae=")))      eo_set_ae(atoi(q + 3));
         if ((q = strstr(req, "gain=")))    eo_set_gain(atoi(q + 5));
         if ((q = strstr(req, "expms=")))   eo_set_expms(atof(q + 6));
