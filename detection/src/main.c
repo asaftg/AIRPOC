@@ -63,9 +63,9 @@ static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
     fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d motion=%d max_dets=%d "
-            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d mot_down=%d mot_fps=%d\n",
+            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d mot_down=%d\n",
             k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k,
-            k->mot_window_s, k->mot_persist, k->mot_down, k->mot_fps);
+            k->mot_window_s, k->mot_persist, k->mot_down);
 }
 
 static void *motion_thread(void *arg)
@@ -75,15 +75,14 @@ static void *motion_thread(void *arg)
     if (!src) { fprintf(stderr, "detectiond: motion thread init failed\n"); return NULL; }
 
     /* The worker is built lazily and rebuilt when mot_down changes (the downscale is
-     * fixed at construction). Motion runs at mot_fps (not the full camera rate): far/
-     * small movers are slow in pixels, so a lower rate is what makes native affordable;
-     * we process every step-th captured frame and pass the effective rate on. */
+     * fixed at construction). Motion runs on the same `cadence` tick as the appearance
+     * model (one rate for both): far/small movers are slow in pixels and don't need the
+     * full camera rate, and the lower rate is what makes native resolution affordable. */
     MotionWorker *mw = NULL;
     int cur_down = -1;
     Mover local[MAX_MOV_CAP];
     uint64_t last_t = 0, last_proc_t = 0;
     double fps = 0, proc_fps = 0;
-    long fno = 0;
     DetFrame f;
     while (g_run) {
         if (src->next(src, &f) != 1) { usleep(2000); continue; }
@@ -92,7 +91,6 @@ static void *motion_thread(void *arg)
             fps = fps > 0 ? 0.9 * fps + 0.1 * inst : inst;
         }
         last_t = f.t_src_ns;
-        fno++;
 
         DetKnobs k; http_get_knobs(&k);
         if (!k.motion) {
@@ -109,14 +107,14 @@ static void *motion_thread(void *arg)
             if (!mw) { fprintf(stderr, "detectiond: motion_new(down=%d) failed\n", cur_down); usleep(100000); continue; }
         }
 
-        double cap_fps = fps > 1.0 ? fps : 60.0;
-        int step = (int)lround(cap_fps / (k.mot_fps > 0 ? k.mot_fps : 15));
-        if (step < 1) step = 1;
-        if (fno % step != 0) continue;         /* rate-limit to ~mot_fps */
+        /* run on the same cadence tick as the appearance model (one rate for both) */
+        int cadence = k.cadence > 0 ? k.cadence : 1;
+        if ((f.meta[EO_META_V4L2SEQ] % (uint32_t)cadence) != 0) continue;
 
+        double cap_fps = fps > 1.0 ? fps : 60.0;
         int nmov = 0, sf = 0;
         MotionParams mp = { .k_mad = k.mot_k, .window_s = k.mot_window_s,
-                            .fps = cap_fps / step, .persist = k.mot_persist };
+                            .fps = cap_fps / cadence, .persist = k.mot_persist };
         nmov = motion_process(mw, f.y10, f.w, f.h, &mp, local, MAX_MOV_CAP, &sf);
 
         uint64_t now = tap_now_ns();
