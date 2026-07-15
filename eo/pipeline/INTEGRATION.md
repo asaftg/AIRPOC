@@ -109,6 +109,7 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?gaincap=` | 0…480 | AE gain ceiling |
 | `?median=` | 0/1 | 3×3 denoise |
 | `?denoise=` | 0/1 | **night temporal denoiser** (display-only; default 1). The knob ENABLES it; it actually runs only when the night gate engages (high applied gain, hysteresis) — `/stats.dn_active` says so. Turn OFF to reclaim its CPU (~0.5 core at night); day cost is zero either way. Detector is unaffected (raw tap) |
+| `?spot_ae=` | 0/1 | **illuminated-region AE** (default 1). When the illuminator is ON, the AE meters the beam region (auto-located; median of lit pixels, robust to blown road signs) instead of the whole frame — exposes the lit SUBJECT to mid-gray + cuts gain (less grain) instead of over-exposing it to lift a black background. Gated on illuminator-on + enough lit content, so daytime / far-dark falls back to whole-frame. `/stats.spot_active` says when it's running; `spot_cx/cy` = the beam-window center. Affects the whole pipeline (it's real exposure), so the detector benefits too |
 | `?disp_fps=` | 12…60 | **display-only frame-rate cap** (default 30). Decimates the display chain (denoise → tone-map → encode) to `min(sensor_fps, disp_fps)`; the sensor rate, AE, exposure, and the detector's native Y10 tap all stay at full 60 fps. Halves preview CPU at 30. Wire rate of `/stream` = this value. |
 | `?zoom=` | 1/2/4/8 | digital zoom |
 | `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
@@ -133,8 +134,10 @@ collapses to the crop at high zoom), `mean, exp_ms, duty_pct, gain, gaincap, ae,
 zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`, the denoiser
 state: **`denoise`** (the knob), **`dn_active`** (night gate actually running this
 frame), **`dn_ms`** (measured cost/frame — the GUI can surface it next to the toggle),
-and the display-rate state: **`disp_fps`** (applied cap) + **`clients`** (live `/stream`
-clients; 0 = display chain idle).
+the display-rate state: **`disp_fps`** (applied cap) + **`clients`** (live `/stream`
+clients; 0 = display chain idle), and the spot-AE state: **`spot_ae`** (the knob),
+**`spot_active`** (metering the beam this tick), **`spot_cx/spot_cy`** (auto-located beam
+window center, native px; −1 = not yet located).
 
 > Codec note: `/stream` is MJPEG (LAN/bench). For the RF datalink the same `res`/`fps`
 > knobs apply to an H.264/RTSP output — added when the datalink is locked.

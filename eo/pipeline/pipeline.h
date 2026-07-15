@@ -104,6 +104,10 @@ void cap_requeue(Capture *c, int index);
 /* ---- ISP (Y10 stride = bytesperline) ---- */
 /* AE metric: mean of an 8x8 subsample, 10-bit scale. */
 double isp_mean10(const uint8_t *y10, int bpl, int w, int h);
+/* Spot AE (active illumination): median of lit pixels in a circular beam window; -1 if
+ * too dark. isp_lit_centroid finds the beam center (capped-weight centroid). */
+double isp_meter_spot(const uint8_t *y10, int bpl, int w, int h, int cx, int cy, int rad);
+int    isp_lit_centroid(const uint8_t *y10, int bpl, int w, int h, double *cx, double *cy);
 /* Focus metric: Tenengrad over the native center ROI, on 10-bit values. */
 double isp_sharpness(const uint8_t *y10, int bpl, int w, int h);
 /* Wire feed: crop(cx,cy,cw,ch) of the Y10 frame -> tone map -> 8-bit, native pixels

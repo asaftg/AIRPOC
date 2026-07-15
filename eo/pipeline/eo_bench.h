@@ -32,6 +32,9 @@ void    eo_set_expms(double ms);      /* manual exposure, capped by the fps */
 void    eo_set_gaincap(int cap);      /* AE gain ceiling                    */
 void    eo_set_median(int on);
 int     eo_median_on(void);           /* current median flag (applied on the display frame) */
+void    eo_set_spot_ae(int on);       /* meter the illuminated beam region (not whole frame) */
+int     eo_spot_ae(void);             /* under illumination; auto-locates the beam            */
+void    eo_spot_state(int *active, int *cx, int *cy);  /* is spot running + beam-window center */
 void    eo_set_fps(double fps);       /* FIXED operating fps -> caps exposure; AE never changes it */
 void    eo_frame_ae(int *exp_lines, int *gain);  /* APPLIED (not commanded) AE of the
                                        * latest eo_latest frame — registers land ~2

@@ -25,6 +25,54 @@ double isp_mean10(const uint8_t *y10, int bpl, int w, int h)
     return n ? (double)sum / n : 0.0;
 }
 
+/* Spot AE metering for active illumination: the MEDIAN of the LIT pixels (above the
+ * black level) inside a circular window on the beam. Median is robust to blown
+ * retroreflectors (a road sign is the top tail, not the median) and skips the unlit
+ * gaps inside the window; targeting it to EO_AE_TARGET exposes the illuminated SURFACE
+ * to mid-gray instead of over-exposing it to lift a black-dominated whole-frame average.
+ * Returns -1 when too little lit content is in the window (caller falls back to
+ * whole-frame metering — the far/dark regime where spot can't help anyway). */
+double isp_meter_spot(const uint8_t *y10, int bpl, int w, int h, int cx, int cy, int rad)
+{
+    int hist[1024]; memset(hist, 0, sizeof hist);
+    long n = 0, r2 = (long)rad * rad;
+    int lit = (int)EO_BLACK + 8;
+    for (int y = cy - rad; y <= cy + rad; y += 2) {
+        if (y < 0 || y >= h) continue;
+        for (int x = cx - rad; x <= cx + rad; x += 2) {
+            if (x < 0 || x >= w) continue;
+            long dx = x - cx, dy = y - cy;
+            if (dx*dx + dy*dy > r2) continue;
+            int v = y10_at(y10, bpl, x, y);
+            if (v > lit) { hist[v]++; n++; }
+        }
+    }
+    if (n < 64) return -1.0;                       /* too dark -> caller falls back */
+    long acc = 0;
+    for (int v = 0; v < 1024; v++) { acc += hist[v]; if (acc >= n / 2) return v; }
+    return -1.0;
+}
+
+/* Auto-find where the beam lands: brightness-weighted centroid over the frame, with the
+ * per-pixel weight CAPPED so a blown retroreflector can't drag the center to itself. The
+ * beam pointing is fixed (mechanical boresight offset), so a slow EMA of this in the
+ * caller settles on the true beam center — no manual calibration. Returns 0 if the frame
+ * has no lit content. */
+int isp_lit_centroid(const uint8_t *y10, int bpl, int w, int h, double *ocx, double *ocy)
+{
+    double sx = 0, sy = 0, sw = 0;
+    for (int y = 0; y < h; y += 8)
+        for (int x = 0; x < w; x += 8) {
+            int v = y10_at(y10, bpl, x, y) - (int)EO_BLACK;
+            if (v <= 8) continue;
+            if (v > 300) v = 300;                  /* cap: speculars don't dominate */
+            sx += (double)x * v; sy += (double)y * v; sw += v;
+        }
+    if (sw < 1) return 0;
+    *ocx = sx / sw; *ocy = sy / sw;
+    return 1;
+}
+
 /* Focus-assist sharpness (Tenengrad) over the native center ROI, on the 10-bit
  * values — no tone-map needed. Higher = sharper; the UI shows it as % of peak. */
 double isp_sharpness(const uint8_t *y10, int bpl, int w, int h)

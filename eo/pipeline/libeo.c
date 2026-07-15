@@ -10,6 +10,7 @@
 #include "pipeline.h"
 #include "airpoc_tap.h"     /* vendored copy of recorder/tap/airpoc_tap.h (protocol v1) */
 #include "illum.h"          /* illum_snapshot() for the per-frame illuminator stamp     */
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,13 @@ static volatile int g_man_vmax = EO_VMAX_MIN;        /* 60 fps   */
 static volatile int g_gaincap  = EO_GAIN_CAP;
 static volatile int g_median   = 1;   /* ON by default (operator requirement). Runs inside the
                                        * encode workers, so it parallelizes — 60 fps holds. */
+/* Spot AE: meter the illuminated beam region (not the whole frame) when the illuminator
+ * is on, so the AE exposes the LIT subject to mid-gray instead of over-exposing it +
+ * railing gain to lift a black-dominated average. Auto-locates the beam (EMA centroid);
+ * gated on illuminator-on + enough lit content, so day/no-illum is whole-frame as before. */
+static volatile int g_spot_ae   = 1;   /* on by default (only engages under illumination) */
+static volatile int g_spot_active = 0; /* did spot metering actually run last AE tick     */
+static double g_spot_cx = -1.0, g_spot_cy = -1.0;   /* EMA beam center (px)                */
 static double       g_focus    = 0.0;
 
 /* Recorder tap (airpoc.eo_y10): the raw pre-ISP native stream. Zero added copies —
@@ -110,7 +118,31 @@ static void *cap_thread(void *arg)
         consume_frame(dst, bpl, w, h);        /* detector, raw Y10 (cached copy) */
 
         if (++n % 4 == 0) {                          /* AE + focus @ ~15 Hz */
-            double mean = isp_mean10(dst, bpl, w, h);
+            /* Metering value: spot (illuminated beam window) when the illuminator is on
+             * and there's lit content, else whole-frame. Spot exposes the LIT subject to
+             * target instead of over-exposing it to lift a black background. */
+            double mean;
+            int lon_m, lpw_m, lpr_m; double lfov_m;
+            illum_snapshot(&lon_m, &lpw_m, &lfov_m, &lpr_m);
+            g_spot_active = 0;
+            if (g_spot_ae && lon_m) {
+                double ccx, ccy;
+                if (isp_lit_centroid(dst, bpl, w, h, &ccx, &ccy)) {
+                    if (g_spot_cx < 0) { g_spot_cx = ccx; g_spot_cy = ccy; }
+                    g_spot_cx = 0.9 * g_spot_cx + 0.1 * ccx;   /* slow EMA -> beam center */
+                    g_spot_cy = 0.9 * g_spot_cy + 0.1 * ccy;
+                }
+                double eo_fov = 2.0 * atan(EO_WIDTH * EO_PIX_UM / 1000.0 / 2.0 / EO_FOCAL_MM)
+                              * 180.0 / M_PI;                  /* ~23.4 deg horizontal */
+                int rad = (int)(lfov_m * 0.5 / (eo_fov / EO_WIDTH) * 0.7); /* inner cone */
+                if (rad < 60) rad = 60;
+                if (rad > w / 2) rad = w / 2;
+                double sv = isp_meter_spot(dst, bpl, w, h, (int)g_spot_cx, (int)g_spot_cy, rad);
+                if (sv > 0) { mean = sv; g_spot_active = 1; }
+                else        mean = isp_mean10(dst, bpl, w, h);  /* too dark -> whole-frame */
+            } else {
+                mean = isp_mean10(dst, bpl, w, h);
+            }
             g_ae.vmax = g_man_vmax;                   /* fixed operating fps (never auto-changed) */
             if (g_ae_on) {
                 ae_update(&g_ae, mean, g_gaincap);
@@ -252,6 +284,15 @@ void eo_set_gain(int g)      { g_man_gain = clampi(g, 0, EO_GAIN_MAX); g_ae_on =
 void eo_set_gaincap(int c)   { g_gaincap = clampi(c, 0, EO_GAIN_MAX); }
 void eo_set_median(int on)   { g_median = on ? 1 : 0; }
 int  eo_median_on(void)      { return g_median; }
+void eo_set_spot_ae(int on)  { g_spot_ae = on ? 1 : 0; }
+int  eo_spot_ae(void)        { return g_spot_ae; }
+/* observability: is spot metering running now, and where the beam window is centered */
+void eo_spot_state(int *active, int *cx, int *cy)
+{
+    if (active) *active = g_spot_active;
+    if (cx)     *cx     = g_spot_cx < 0 ? -1 : (int)g_spot_cx;
+    if (cy)     *cy     = g_spot_cy < 0 ? -1 : (int)g_spot_cy;
+}
 
 /* Operating frame rate — the FIXED fps that caps exposure. The AE never changes it;
  * lowering it is how the operator buys exposure headroom for dark scenes. The sensor

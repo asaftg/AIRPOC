@@ -123,6 +123,7 @@ static const char *PAGE =
 "&nbsp;auto-cap <button onclick=C(-20)>cap-</button><button onclick=C(20)>cap+</button>"
 "&nbsp;<button onclick=M() id=mdb>median</button>"
 "<button onclick=DN() id=dnb>denoise</button>"
+"<button onclick=SA() id=sab>spot-ae</button>"
 "&nbsp;&nbsp;quality <button onclick=R('low') id=rlow>320</button>"
 "<button onclick=R('med') id=rmed>480</button><button onclick=R('high') id=rhigh>640</button>"
 "<button onclick=R('native') id=rnative>1440</button></div>"
@@ -136,6 +137,7 @@ static const char *PAGE =
 "function C(d){fetch('/ctl?gaincap='+Math.max(0,Math.min(480,(S.gaincap||120)+d)))}"
 "function M(){fetch('/ctl?median='+(S.median?0:1))}"
 "function DN(){fetch('/ctl?denoise='+(S.denoise?0:1))}"
+"function SA(){fetch('/ctl?spot_ae='+(S.spot_ae?0:1))}"
 "function FP(d){var f=[12,15,20,24,30,48,60],c=Math.round(S.sfps||60);"
 "var i=f.reduce((b,v,k)=>Math.abs(v-c)<Math.abs(f[b]-c)?k:b,0);"
 "i=Math.max(0,Math.min(f.length-1,i+d));fetch('/ctl?fps='+f[i])}"
@@ -165,6 +167,8 @@ static const char *PAGE =
 "document.getElementById('aeb').className=d.ae?'on':'';"
 "document.getElementById('mdb').className=d.median?'on':'';"
 "document.getElementById('dnb').className=d.denoise?(d.dn_active?'on':'hot'):'';"
+"document.getElementById('sab').className=d.spot_ae?(d.spot_active?'on':'hot'):'';"
+"document.getElementById('sab').textContent=d.spot_active?'spot-ae \\u2022':'spot-ae';"
 "document.getElementById('dnb').textContent=d.denoise?(d.dn_active?'denoise •':'denoise'):'denoise';"
 "['low','med','high','native'].forEach(r=>document.getElementById('r'+r).className=r==d.res?'on':'')}catch(e){}}"
 "setInterval(t,150);t();</script></body></html>";
@@ -293,6 +297,8 @@ static void *client(void *arg)
         double vf = 2 * atan((EO_HEIGHT * pum / 1000.0 / z) / (2 * fmm)) * 180.0 / M_PI;
         int lon, lpw, lpr; double lfov;      /* cached illuminator state (no serial here) */
         illum_snapshot(&lon, &lpw, &lfov, &lpr);
+        int spot_ae = eo_spot_ae(), spot_active, spot_cx, spot_cy;
+        eo_spot_state(&spot_active, &spot_cx, &spot_cy);
         int dw, dh; mjpeg_res_dims(&dw, &dh);
         /* Effective resolution = the REAL detail the operator sees = min(display size,
          * sensor crop). Zoom crops the native sensor to 1440/z wide (1080/z high, 4:3),
@@ -306,7 +312,7 @@ static void *client(void *arg)
         pthread_mutex_lock(&g_lock);
         double wfps = g_wire_fps; uint64_t c_pub = g_seq;
         pthread_mutex_unlock(&g_lock);
-        char body[940];
+        char body[1024];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"mean\":%.0f,\"exp_ms\":%.2f,\"duty_pct\":%.0f,\"gain\":%d,"
             "\"sfps\":%.1f,\"fps_cap\":%.0f,"
@@ -315,6 +321,7 @@ static void *client(void *arg)
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,"
             "\"denoise\":%d,\"dn_active\":%d,\"dn_ms\":%.2f,\"connected\":%d,"
             "\"disp_fps\":%d,\"clients\":%d,"
+            "\"spot_ae\":%d,\"spot_active\":%d,\"spot_cx\":%d,\"spot_cy\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
             wfps, st.mean, st.exp_ms, st.duty_pct, st.gain,
@@ -324,6 +331,7 @@ static void *client(void *arg)
             st.ae_on, st.gaincap, st.median,
             tdn_enabled(), tdn_active(), tdn_last_ms(), st.connected,
             g_disp_fps, mjpeg_stream_clients(),
+            spot_ae, spot_active, spot_cx, spot_cy,
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
@@ -356,6 +364,7 @@ static void *client(void *arg)
         if ((q = strstr(req, "gaincap="))) eo_set_gaincap(atoi(q + 8));
         if ((q = strstr(req, "median=")))  eo_set_median(atoi(q + 7));
         if ((q = strstr(req, "denoise="))) tdn_set_enabled(atoi(q + 8));
+        if ((q = strstr(req, "spot_ae="))) eo_set_spot_ae(atoi(q + 8));
         if ((q = strstr(req, "disp_fps="))) { int v = atoi(q + 9);
             g_disp_fps = v < 12 ? 12 : v > 60 ? 60 : v; }   /* display-only rate cap */
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
