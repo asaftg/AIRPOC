@@ -54,12 +54,6 @@ elevation). `snr` is the per-point SNR in dB (live; `null` only if a firmware
 without SideInfo is flashed). `class` is always `radar_detection`. `tid` is a
 stable per-target id.
 
-Target `x,y,z` / `vx,vy` are the tracker's **guidance output filter** state
-(alpha-beta smoothed angles + doppler-aided range-rate, slew-limited on
-re-acquire so a coasted track never teleports) — the wire is what a gimbal
-should steer on. Raw per-frame cluster medians stay internal; association and
-lifecycle are unchanged by the filter. Points (`points[]`) are raw as before.
-
 > Note: azimuth/elevation are the radar's own frame — the radar↔EO calibration
 > offsets are applied by the GUI/fusion, not baked into the wire.
 
