@@ -105,3 +105,13 @@ first read — say what the thing does and why it matters, not the bit-level how
 No hyper-deep jargon walls; if a sentence needs a glossary, rewrite it.
 Jargon-heavy internals (register maps, struct layouts, algorithm math) belong in
 code comments next to the code they describe, not in the docs.
+
+## 9. AI agents: never assume — read the real code first
+
+For AI agents writing code: **don't ever assume stuff — read the real code before
+making assumptions.** Open the actual source, config, and live state and confirm
+what is true *right now*; do not answer, edit, or explain from memory, from an
+earlier check, or from what the code "probably" does. If a claim depends on a
+value, a field, an endpoint, or a device's current state, go measure it — read the
+file, dump the struct, curl the endpoint, check the wire — before you say it. A
+stale assumption stated as fact wastes everyone's time and erodes trust.
