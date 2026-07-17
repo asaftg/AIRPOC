@@ -29,11 +29,6 @@ void http_set_stats(double fps, unsigned long drops, int n_points,
 void http_set_timing(double dsp_proc_us, double dsp_margin_us,
                      double active_cpu_pct, double interframe_cpu_pct);
 
-/* Publish the tracker's patience-chain counters for /stats (observe-style
- * live verification of the far-range chain detector; there is no knob). */
-void http_set_chain_stats(int chains_active,
-                          unsigned long chains_confirmed_total);
-
 /* Register the handler for
  * GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&elmax=&doppler=&confirm=&coast=&park=.
  * Called with the parsed values on each /ctl hit; `user` passed back verbatim. */

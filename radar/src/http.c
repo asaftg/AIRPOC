@@ -44,9 +44,6 @@ static struct {
     /* chip-reported per-frame DSP timing (TLV 6); have_timing=0 until seen */
     double dsp_proc_us, dsp_margin_us, active_cpu_pct, interframe_cpu_pct;
     int have_timing;
-    /* tracker patience-chain counters (far-range chain detector) */
-    int chains_active;
-    unsigned long chains_total;
 } g_stat;
 
 void http_publish(const char *json, size_t len) {
@@ -88,14 +85,6 @@ void http_set_timing(double dsp_proc_us, double dsp_margin_us,
     pthread_mutex_unlock(&g_lock);
 }
 
-void http_set_chain_stats(int chains_active,
-                          unsigned long chains_confirmed_total) {
-    pthread_mutex_lock(&g_lock);
-    g_stat.chains_active = chains_active;
-    g_stat.chains_total = chains_confirmed_total;
-    pthread_mutex_unlock(&g_lock);
-}
-
 static const char *ctype(const char *path) {
     const char *dot = strrchr(path, '.');
     if (!dot) return "application/octet-stream";
@@ -131,7 +120,7 @@ static void *client(void *arg) {
 
     if (!strncmp(req, "GET /stats", 10)) {
         pthread_mutex_lock(&g_lock);
-        char body[1024];
+        char body[768];
         int bl = snprintf(body, sizeof(body),
             "{\"fps\":%.1f,\"drops\":%lu,\"num_points\":%d,\"num_targets\":%d,"
             "\"connected\":%s,\"profile\":\"%s\",\"max_range_m\":%.1f,"
@@ -140,8 +129,7 @@ static void *client(void *arg) {
             "\"fov_half_deg\":%.1f,\"el_max_deg\":%.1f,\"doppler_gate_mps\":%.2f,"
             "\"confirm\":%d,\"coast_s\":%.2f,\"park_s\":%.1f,"
             "\"dsp_valid\":%s,\"dsp_proc_ms\":%.3f,\"dsp_margin_ms\":%.3f,"
-            "\"active_cpu_pct\":%.0f,\"interframe_cpu_pct\":%.0f,"
-            "\"chains_active\":%d,\"chains_confirmed_total\":%lu}\n",
+            "\"active_cpu_pct\":%.0f,\"interframe_cpu_pct\":%.0f}\n",
             g_stat.fps, g_stat.drops, g_stat.n_points, g_stat.n_targets,
             g_stat.connected ? "true" : "false", g_stat.profile,
             g_stat.max_range_m, g_eps, g_minpts,
@@ -149,8 +137,7 @@ static void *client(void *arg) {
             g_confirm, g_coast, g_park,
             g_stat.have_timing ? "true" : "false",
             g_stat.dsp_proc_us / 1000.0, g_stat.dsp_margin_us / 1000.0,
-            g_stat.active_cpu_pct, g_stat.interframe_cpu_pct,
-            g_stat.chains_active, g_stat.chains_total);
+            g_stat.active_cpu_pct, g_stat.interframe_cpu_pct);
         pthread_mutex_unlock(&g_lock);
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);

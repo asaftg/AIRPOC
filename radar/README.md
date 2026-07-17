@@ -21,13 +21,7 @@ done here — that is the fusion module's job.
 - `GET /stats` → fps, drops, counts, connected, profile, max_range, plus the
   ten live control values (`cluster_eps_m`, `cluster_min_pts`, `speed_min_mps`,
   `snr_min_db`, `fov_half_deg`, `el_max_deg`, `doppler_gate_mps`, `confirm`,
-  `coast_s`, `park_s`), plus two read-only patience-chain counters:
-  `chains_active` (live tracks currently confirmed on chain credentials) and
-  `chains_confirmed_total` (chain detections acted on since start). There is
-  deliberately **no** `/ctl` knob for the patience detector — its constants
-  are evidence-tied (see `docs/TUNING.md`); the counters exist so a live
-  bench session can verify the chain path fires (observe-style, like the
-  radar firmware bring-ups).
+  `coast_s`, `park_s`).
 - `GET /ctl?eps=&minpts=&speed=&snrmin=&fov=&elmax=&doppler=&confirm=&coast=&park=` →
   set the live tracker knobs (`200 ok`; absent params keep their value). Meanings
   (see [`docs/TUNING.md`](docs/TUNING.md) for ranges/defaults):
