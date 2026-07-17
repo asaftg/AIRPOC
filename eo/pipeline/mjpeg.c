@@ -281,6 +281,22 @@ static void *enc_worker(void *arg)
     return NULL;
 }
 
+/* Match a query parameter by its WHOLE name: the key (which includes the '=') must
+ * sit at the start of the query or immediately after '?' or '&' — never as the tail
+ * of a longer name (so "ae=" can't match inside "spot_ae="). Returns a pointer to the
+ * value (just past the '='), or NULL. Fixes the strstr-substring class for EVERY knob,
+ * not just the one that bit us. */
+static char *qparam(const char *req, const char *key)
+{
+    size_t kl = strlen(key);
+    const char *p = req;
+    while ((p = strstr(p, key))) {
+        if (p == req || p[-1] == '?' || p[-1] == '&') return (char *)(p + kl);
+        p += kl;
+    }
+    return NULL;
+}
+
 static void *client(void *arg)
 {
     int fd = (int)(long)arg;
@@ -342,30 +358,29 @@ static void *client(void *arg)
 
     if (strncmp(req, "GET /ctl", 8) == 0) {
         char *q;
-        if ((q = strstr(req, "zoom="))) { int v = atoi(q + 5); if (v==1||v==2||v==4||v==8) g_zoom = v; }
-        if ((q = strstr(req, "res="))) {                                 /* display size */
-            char *r = q + 4;
-            if (!strncmp(r, "low", 3))         g_res = 0;
-            else if (!strncmp(r, "med", 3))    g_res = 1;
-            else if (!strncmp(r, "high", 4))   g_res = 2;
-            else if (!strncmp(r, "native", 6)) g_res = 3;
+        /* Every knob is matched by WHOLE name via qparam() — no strstr-substring
+         * collisions (e.g. spot_ae= vs ae=, disp_fps= vs fps=, gaincap= vs gain=). */
+        if ((q = qparam(req, "zoom="))) { int v = atoi(q); if (v==1||v==2||v==4||v==8) g_zoom = v; }
+        if ((q = qparam(req, "res="))) {                                 /* display size */
+            if (!strncmp(q, "low", 3))         g_res = 0;
+            else if (!strncmp(q, "med", 3))    g_res = 1;
+            else if (!strncmp(q, "high", 4))   g_res = 2;
+            else if (!strncmp(q, "native", 6)) g_res = 3;
         }
-        if ((q = strstr(req, "laser=")))  illum_set_on(atoi(q + 6));      /* 0/1        */
-        if ((q = strstr(req, "power=")))  illum_set_power(atoi(q + 6));   /* 0..255     */
-        if ((q = strstr(req, "fov=")))    illum_set_fov(atof(q + 4));     /* 1.96..70   */
+        if ((q = qparam(req, "laser=")))  illum_set_on(atoi(q));      /* 0/1        */
+        if ((q = qparam(req, "power=")))  illum_set_power(atoi(q));   /* 0..255     */
+        if ((q = qparam(req, "fov=")))    illum_set_fov(atof(q));     /* 1.96..70   */
         /* exposure/gain override -> libeo bench API. fps is the FIXED operating rate
          * that caps exposure (AE never changes it); a manual gain/exp drops to manual. */
-        /* boundary-checked so "fps=" does NOT match the tail of "disp_fps=" */
-        if ((q = strstr(req, "fps=")) && (q == req || q[-1] == '?' || q[-1] == '&'))
-            eo_set_fps(atof(q + 4));
-        if ((q = strstr(req, "ae=")))      eo_set_ae(atoi(q + 3));
-        if ((q = strstr(req, "gain=")))    eo_set_gain(atoi(q + 5));
-        if ((q = strstr(req, "expms=")))   eo_set_expms(atof(q + 6));
-        if ((q = strstr(req, "gaincap="))) eo_set_gaincap(atoi(q + 8));
-        if ((q = strstr(req, "median=")))  eo_set_median(atoi(q + 7));
-        if ((q = strstr(req, "denoise="))) tdn_set_enabled(atoi(q + 8));
-        if ((q = strstr(req, "spot_ae="))) eo_set_spot_ae(atoi(q + 8));
-        if ((q = strstr(req, "disp_fps="))) { int v = atoi(q + 9);
+        if ((q = qparam(req, "fps=")))     eo_set_fps(atof(q));
+        if ((q = qparam(req, "ae=")))      eo_set_ae(atoi(q));
+        if ((q = qparam(req, "gain=")))    eo_set_gain(atoi(q));
+        if ((q = qparam(req, "expms=")))   eo_set_expms(atof(q));
+        if ((q = qparam(req, "gaincap="))) eo_set_gaincap(atoi(q));
+        if ((q = qparam(req, "median=")))  eo_set_median(atoi(q));
+        if ((q = qparam(req, "denoise="))) tdn_set_enabled(atoi(q));
+        if ((q = qparam(req, "spot_ae="))) eo_set_spot_ae(atoi(q));
+        if ((q = qparam(req, "disp_fps="))) { int v = atoi(q);
             g_disp_fps = v < 12 ? 12 : v > 60 ? 60 : v; }   /* display-only rate cap */
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
