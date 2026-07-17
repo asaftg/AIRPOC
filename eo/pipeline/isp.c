@@ -108,7 +108,12 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
                        uint8_t *out8, int ow, int oh, int in_q5)
 {
     int npx = ow * oh;
-    /* hot path (60 fps): cached work buffers, no per-frame malloc; the column map is
+    /* SINGLE-CALLER: this runs ONLY on the producer thread (main.c display path), never
+     * from the encode workers. Its static scratch (sm/xs) AND the p1/p99 EMA state below
+     * (s_lo/s_hi) are deliberately cross-frame-persistent and are NOT thread-safe — do
+     * not call isp_scale_tonemap concurrently. (isp_median3, which the workers DO share,
+     * uses __thread scratch instead.)
+     * hot path (60 fps): cached work buffers, no per-frame malloc; the column map is
      * precomputed once per frame — the naive form costs a per-PIXEL integer division
      * (~1.5M/frame at native), which was exactly the producer's frame-budget overrun. */
     static uint16_t *sm = NULL;  static int sm_cap = 0;
@@ -190,7 +195,12 @@ void isp_scale_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int 
 void isp_median3(uint8_t *img, int w, int h)
 {
     if (w < 3 || h < 3) return;
-    static uint8_t *src = NULL; static int cap = 0;      /* hot path: no per-frame malloc */
+    /* PER-THREAD scratch: isp_median3 runs concurrently in all 3 encode workers
+     * (mjpeg.c enc_worker calls it outside E.lock). A shared static buffer let two
+     * frames memcpy over each other, and a resolution change free()'d it under another
+     * worker's read (UAF crash). __thread gives each worker its own buffer — race gone,
+     * and the no-per-frame-malloc hot path is preserved (one alloc per thread per size). */
+    static __thread uint8_t *src = NULL; static __thread int cap = 0;
     if (w * h > cap) { free(src); src = malloc((size_t)w * h); cap = src ? w * h : 0; }
     if (!src) return;
     memcpy(src, img, (size_t)w * h);
