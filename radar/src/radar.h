@@ -38,11 +38,6 @@ typedef struct {
     float sx, sy, sz;             /* half-extents, m */
     float conf;                   /* 0..1 */
     int   num_points;             /* hits accumulated */
-    int   mv_class;               /* walk-guard motion class: 0 = UNVERIFIED_SLOW
-                                     (radially quiet, not judged), 1 = VERIFIED_MOVER
-                                     (claimed doppler matches displacement, or
-                                     coherent cross motion), 2 = SUSPECT (claimed
-                                     motion contradicted; on the way out) */
 } RadarTarget;
 
 /* Per-frame timing the chip measures and reports in the stats TLV (type 6,

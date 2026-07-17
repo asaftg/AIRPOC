@@ -46,10 +46,9 @@ int wire_frame_json(char *buf, size_t cap, const RadarFrame *f,
            "%s{\"tid\":%d,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
            "\"vx\":%.3f,\"vy\":%.3f,\"vz\":%.3f,"
            "\"sx\":%.3f,\"sy\":%.3f,\"sz\":%.3f,"
-           "\"conf\":%.3f,\"np\":%d,\"mv_class\":%d,"
-           "\"class\":\"radar_detection\"}",
+           "\"conf\":%.3f,\"np\":%d,\"class\":\"radar_detection\"}",
            i ? "," : "", t->tid, t->x, t->y, t->z, t->vx, t->vy, t->vz,
-           t->sx, t->sy, t->sz, t->conf, t->num_points, t->mv_class);
+           t->sx, t->sy, t->sz, t->conf, t->num_points);
     }
     ap(buf, cap, &off, "]}");
     return (int)off;
