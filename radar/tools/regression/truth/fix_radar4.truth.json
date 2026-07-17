@@ -1,0 +1,22 @@
+{
+  "fixture": "fix_radar4.bin",
+  "session": "20260714T033841Z",
+  "truth_complete": true,
+  "notes": [
+    "One walker plus far-clutter ghost sources (diffuse 100..180 m bands). The far clutter is deliberately NOT truth - emissions there must show up as ghosts.",
+    "All times are seconds from the first frame of the fixture.",
+    "Leg 1: walker approaches 69->30 m, stop-and-go, az drifts +3..-16 deg so no gating az.",
+    "Quiet gap t=46..49 (turnaround).",
+    "Leg 2: walker recedes 40->52 m at az ~ -38 deg (gating az, +/-6 window covers the measured -34..-41 drift)."
+  ],
+  "real_targets": [
+    {
+      "name": "walker",
+      "kind": "mover",
+      "segments": [
+        { "t0": 1.0,  "t1": 46.0, "r0": 69.0, "r1": 30.0, "az_hint": 2 },
+        { "t0": 49.0, "t1": 63.0, "r0": 40.0, "r1": 52.0, "az": -38.0 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+ "created": "2026-07-17T04:18:19Z",
+ "tracker_git_sha": "40f767f2662085f6cc9a4b345b2325eaf84bc4b2",
+ "binary_sha256": "f7b80e65c700d80884519d49e52382fd4befb052a0cdfa69a12dfdf9698ba977",
+ "knob_vector": "eps=4.500 minpts=2 speed=0.700 snrmin=16.000 fov=90.000 elmax=20.000 doppler=1.200 confirm=3 coast=0.400 park=15.000",
+ "fixtures": {
+  "T1": {
+   "frames": 5709,
+   "e_total": 16442,
+   "e_fr": 2.88,
+   "tids": 45,
+   "occ": 0.9865,
+   "fixture_sha256": "e80f6a45eb86e562e25f14f4b7fe0a4db2ee758046988f0f748843ebb61a242d"
+  },
+  "T2": {
+   "frames": 10179,
+   "e_total": 11721,
+   "e_fr": 1.1515,
+   "tids": 22,
+   "occ": 0.8471,
+   "fixture_sha256": "cd740b8275161d06cc82919a50cfae429f9bc7e5c72da2b6fe0af5549cd0179a"
+  },
+  "T3": {
+   "frames": 664,
+   "e_total": 7,
+   "e_fr": 0.0105,
+   "tids": 1,
+   "occ": 0.0105,
+   "fixture_sha256": "d7645f3f52e84759ef1a36e57676e7b20d3cf935597cf0a7446875d4a529e99c"
+  },
+  "T4": {
+   "frames": 691,
+   "e_total": 513,
+   "e_fr": 0.7424,
+   "tids": 2,
+   "occ": 0.7424,
+   "fixture_sha256": "3d3b94996639f0aaf19239e2c16178110c9d304b85f404e367ea1a036f7a2058"
+  },
+  "T5": {
+   "frames": 2384,
+   "e_total": 454,
+   "e_fr": 0.1904,
+   "tids": 7,
+   "occ": 0.1904,
+   "fixture_sha256": "12dfa95b29d8196db4d5b3eff1112b1d432c114f5ca7839296836812eb8969c5"
+  },
+  "T6": {
+   "frames": 613,
+   "e_total": 0,
+   "e_fr": 0.0,
+   "tids": 0,
+   "occ": 0.0,
+   "ghosts_fr": 0.0,
+   "mirror_fr": 0.0,
+   "truth_complete": true,
+   "truth": {},
+   "fixture_sha256": "50776dcdc7b66d07d2dd2e9fb4c8349f65992288496b2a3e194fa15163488522"
+  },
+  "T7": {
+   "frames": 9347,
+   "e_total": 6588,
+   "e_fr": 0.7048,
+   "tids": 17,
+   "occ": 0.6611,
+   "ghosts_fr": 0.1157,
+   "mirror_fr": 0.0,
+   "truth_complete": false,
+   "truth": {
+    "walker": {
+     "coverage": 0.5996,
+     "frag": 15,
+     "first_emit": 26
+    }
+   },
+   "fixture_sha256": "5fc2dbd8ba54b83fe1b92332ef1967915e595a480814938a115d1b27a2b7f5b1"
+  },
+  "AGV1_garage": {
+   "frames": 4869,
+   "e_total": 0,
+   "e_fr": 0.0,
+   "tids": 0,
+   "occ": 0.0,
+   "ghosts_fr": 0.0,
+   "mirror_fr": 0.0,
+   "truth_complete": true,
+   "truth": {},
+   "fixture_sha256": "8d6edd835f11d90f6d0fe9cc999536b35af73599862dfceaad8c00ded322baef"
+  },
+  "c16": {
+   "frames": 4869,
+   "e_total": 0,
+   "e_fr": 0.0,
+   "tids": 0,
+   "occ": 0.0,
+   "ghosts_fr": 0.0,
+   "mirror_fr": 0.0,
+   "truth_complete": true,
+   "truth": {},
+   "fixture_sha256": "c10348be11c5a5e719aa0bbfd05e56b5a9f6ed22bb5c0f116e067712eacce8b1"
+  },
+  "c3": {
+   "frames": 4870,
+   "e_total": 0,
+   "e_fr": 0.0,
+   "tids": 0,
+   "occ": 0.0,
+   "ghosts_fr": 0.0,
+   "mirror_fr": 0.0,
+   "truth_complete": true,
+   "truth": {},
+   "fixture_sha256": "c691cb81b9bb9b172374f03ebffc8063edcb8e89980af22a1dbb0337d260fffd"
+  },
+  "V2DAY": {
+   "frames": 14354,
+   "e_total": 17802,
+   "e_fr": 1.2402,
+   "tids": 52,
+   "occ": 0.8071,
+   "ghosts_fr": 1.0377,
+   "mirror_fr": 0.0069,
+   "truth_complete": false,
+   "truth": {
+    "walker": {
+     "coverage": 0.5678,
+     "frag": 7,
+     "first_emit": 195
+    }
+   },
+   "fixture_sha256": "9977c583b824d25e99bf4f631d99dfaa2a9ed3fd31da26507678253eed7b26c8"
+  },
+  "fix_radar4": {
+   "frames": 2017,
+   "e_total": 1834,
+   "e_fr": 0.9093,
+   "tids": 8,
+   "occ": 0.7343,
+   "ghosts_fr": 0.3109,
+   "mirror_fr": 0.0,
+   "truth_complete": true,
+   "truth": {
+    "walker": {
+     "coverage": 0.7777,
+     "frag": 3,
+     "first_emit": 79
+    }
+   },
+   "fixture_sha256": "568a215b69df02abefe07b610db324dc22177f080e31f843a0072843660fdc42"
+  },
+  "fix_radar5": {
+   "frames": 796,
+   "e_total": 1344,
+   "e_fr": 1.6884,
+   "tids": 11,
+   "occ": 0.9221,
+   "ghosts_fr": 0.0427,
+   "mirror_fr": 0.5565,
+   "truth_complete": false,
+   "truth": {
+    "walker": {
+     "coverage": 0.9221,
+     "frag": 10,
+     "first_emit": 48
+    },
+    "outbound_mover": {
+     "coverage": 0.3452,
+     "frag": 1,
+     "first_emit": 110
+    }
+   },
+   "fixture_sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac"
+  }
+ }
+}

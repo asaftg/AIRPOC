@@ -1,0 +1,38 @@
+{
+  "fixture": "fix_radar5.bin",
+  "session": "20260714T034025Z",
+  "truth_complete": false,
+  "notes": [
+    "THE ghost scene: one walker, one parked car (engine idling part of the time), and multipath reflection ghosts.",
+    "All times are seconds from the first frame of the fixture.",
+    "Walker r(t) segments are measured from the strong-mover point band in the fixture (dop ~ -1 m/s, walking speed); residual vs the linear hint is well under the 15 m match window.",
+    "The walker has NO gating azimuth (az_hint is informational only) - its az wanders 0..26 deg as it nears.",
+    "outbound_mover: a real fast outbound object t=2..9.5, az 0..9, r 52->115 visible (~12 m/s, vehicle-like). Operator scene notes describe an outbound-then-return leg r 56->145; the fixture window shows this outbound part. Kept as truth so its emissions do not count as ghosts.",
+    "truth_complete=false: ghost counts on this fixture are upper bounds."
+  ],
+  "real_targets": [
+    {
+      "name": "walker",
+      "kind": "mover",
+      "segments": [
+        { "t0": 0.0,  "t1": 10.0, "r0": 68.0, "r1": 62.0, "az_hint": 5 },
+        { "t0": 10.0, "t1": 25.0, "r0": 62.0, "r1": 41.0, "az_hint": 5 },
+        { "t0": 25.0, "t1": 30.5, "r0": 41.0, "r1": 28.0 }
+      ]
+    },
+    {
+      "name": "outbound_mover",
+      "kind": "mover",
+      "segments": [
+        { "t0": 2.0, "t1": 9.5, "r0": 50.0, "r1": 115.0, "az": 4.0 }
+      ]
+    },
+    {
+      "name": "parked_car",
+      "kind": "static",
+      "segments": [
+        { "t0": 0.0, "t1": 30.5, "rmin": 52.0, "rmax": 68.0, "azmin": 35.0, "azmax": 80.0 }
+      ]
+    }
+  ]
+}

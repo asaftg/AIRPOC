@@ -1,0 +1,10 @@
+{
+  "fixture": "c16_check.bin",
+  "truth_complete": true,
+  "notes": [
+    "Static garage, 16 dB chip cfg (junk-flood kill-side). Nothing real moves.",
+    "SSE capture 2026-07-10; do NOT regenerate - the committed sha pins the exact bytes.",
+    "Any emission on this fixture is a ghost; the gate is exact zero."
+  ],
+  "real_targets": []
+}

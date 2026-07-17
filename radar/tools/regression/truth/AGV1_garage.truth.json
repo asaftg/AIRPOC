@@ -1,0 +1,9 @@
+{
+  "fixture": "AGV1_garage.bin",
+  "truth_complete": true,
+  "notes": [
+    "Static garage scene captured on the agv1 firmware. Nothing real moves.",
+    "Any emission on this fixture is a ghost; the gate is exact zero."
+  ],
+  "real_targets": []
+}

@@ -1,0 +1,10 @@
+{
+  "fixture": "T6_wander_garage.bin",
+  "session": "20260709T010421Z",
+  "truth_complete": true,
+  "notes": [
+    "Garage clutter scene that produced the immortal wandering-track bug. Nothing real moves.",
+    "Any emission on this fixture is a ghost; the gate is exact zero."
+  ],
+  "real_targets": []
+}

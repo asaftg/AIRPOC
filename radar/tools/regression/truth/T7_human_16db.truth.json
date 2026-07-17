@@ -1,0 +1,21 @@
+{
+  "fixture": "T7_human_16db.bin",
+  "session": "20260711T051011Z",
+  "truth_complete": false,
+  "notes": [
+    "Night radial walk, 16 dB chip cfg: outbound 5->306 m t=4..180 (turnaround at 306 m), return 306->9 m for the rest of the recording.",
+    "All times are seconds from the first frame of the fixture.",
+    "NO azimuth truth - the walk is near boresight but az was not marked.",
+    "truth_complete=false: other real objects appear (e.g. a near mover at high az around t=110..140), so ghost counts are upper bounds."
+  ],
+  "real_targets": [
+    {
+      "name": "walker",
+      "kind": "mover",
+      "segments": [
+        { "t0": 4.0,   "t1": 180.0, "r0": 5.0,   "r1": 306.0 },
+        { "t0": 180.0, "t1": 353.0, "r0": 306.0, "r1": 9.0 }
+      ]
+    }
+  ]
+}

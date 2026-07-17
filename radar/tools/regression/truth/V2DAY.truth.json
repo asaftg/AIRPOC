@@ -1,0 +1,19 @@
+{
+  "fixture": "V2DAY.bin",
+  "truth_complete": false,
+  "notes": [
+    "Day, busy street, with a scripted walker leaving on the boresight corridor.",
+    "All times are seconds from the first frame of the fixture.",
+    "Walker trajectory r = -13.8 + 1.635*t (m), az 0..3 deg; truth segment covers t=10..195 (r 2.6->305).",
+    "truth_complete=false: the street is full of real vehicles and pedestrians that are NOT in truth - ghost counts on this fixture are upper bounds, only walker coverage is meaningful."
+  ],
+  "real_targets": [
+    {
+      "name": "walker",
+      "kind": "mover",
+      "segments": [
+        { "t0": 10.0, "t1": 195.0, "r0": 2.6, "r1": 305.0, "az": 1.5 }
+      ]
+    }
+  ]
+}
