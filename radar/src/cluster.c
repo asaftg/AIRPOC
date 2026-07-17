@@ -377,6 +377,127 @@
 #define OUTF_PARK_BLEED 0.5  /*      rate bleed per frame while park-held */
 #define OUTF_SLEW_DPS 3.0    /* deg/s re-acquire output slew cap (+track rate) */
 #define OUTF_REACQ_MISS 2    /*      miss streak that arms the slew limiter */
+/* ---- far-range PATIENCE detector (2026-07-16): the trail confirms ----
+ * Beyond ~200 m a walking person's echoes are too weak to confirm through
+ * the normal path: measured at 285-295 m the tracker covers him 12% of the
+ * time, and of 546 tentative tracks near the real T7 human only 5 ever
+ * confirmed — the binder is the CONFIRMATION floors (M-of-N hit rate,
+ * mv_ewma), not association. But a real person leaves a CONSISTENT TRAIL:
+ * over 5 seconds his blips line up on one distance-line that moves exactly
+ * at his measured (claimed-doppler) speed. Random noise mathematically
+ * cannot fake that trail — the ~185 junk-points/frame carpet produced ZERO
+ * qualifying trails in every recording of the corpus (best chain 6 of the
+ * 13 required).
+ *   buffer — ring of the last PAT_WIN_S (PAT_FRAMES frames) of gate-passing
+ *            MOVING points with r >= PAT_R_MIN: (t, r, az, dop, snr).
+ *            Range-binned per frame for cheap lookup; fixed arrays, no
+ *            hot-path malloc.
+ *   chain  — per current-frame far mover not owned by a confirmed track
+ *            (the ANCHOR), a buffered point j at age dt chains iff
+ *              |r_anchor - (r_j + dop_j*dt)| <= PAT_CHAIN_DR   (the line)
+ *              |az_anchor - az_j|           <= PAT_CHAIN_DAZ
+ *              |dop_anchor - dop_j|         <= PAT_CHAIN_DDOP
+ *            (claimed doppler = range-rate on this fw, sign verified on
+ *            T7). At most ONE chained point per buffered frame (the best
+ *            residual) — a single dense noise frame must not buy 6 links.
+ *            DETECT at >= PAT_NEED chained points spanning >= PAT_SPAN_S.
+ *            Constants are FIXED — never miss-grown, never widened by
+ *            track state.
+ *   act    — if a tentative/confirmed track covers the anchor, upgrade it
+ *            (confirm + guard_pass); else seed a new confirmed track from
+ *            the chain's newest point. dop_err seeds from the chain's
+ *            doppler residual, snr_peak from the chain max.
+ * THREE SAFEGUARDS (each closes a measured hole):
+ *   (1) copy suppression at CHAIN level: a chain co-ranged with a stronger
+ *       existing track or stronger same-frame chain (|dr| < PAT_COPY_DR)
+ *       with matching SIGNED doppler (+-PAT_COPY_DV, fold-aware
+ *       +-2*V_FOLD_MPS) at a different azimuth (> PAT_COPY_DAZ) is dropped
+ *       — the reflection-copy mechanism (REFL_* above) generalized to any
+ *       range, applied before a mirror can be born.
+ *   (2) static-complex veto by LINE CONTRAST: in the frames that light the
+ *       chain's tube (anchor az +- PAT_CHAIN_DAZ, PAT_TUBE_K x the range
+ *       window around the anchor's own motion line), at least half must
+ *       actually chain. A range-extended static complex can lend a point
+ *       to ANY line in ANY frame (when the range floor was experimentally
+ *       lowered into the fixture clutter band at 130-155 m, 353 false
+ *       chains appeared there) — but precisely because it is a BAND, most
+ *       of its near-line points fail the chain gates, and the contrast
+ *       collapses. A real trail IS most of its own tube. This replaced a
+ *       plain occ[][]-threshold veto, which was measured killing every
+ *       legitimate walker chain on the longnight fixture: that scene's
+ *       boresight corridor holds a persistent noise ridge at occ
+ *       0.33-0.88, indistinguishable by occupancy from a true static
+ *       complex, while line contrast separates them cleanly.
+ *   (3) reduced credentials: a chain-detected track is confirmed and
+ *       emission-eligible (guard_pass) but NOT graveyard-eligible and NOT
+ *       deep_pass-latched until it independently earns the normal guard
+ *       streak (chain_cred flag) — an injected mistake must not found a
+ *       lineage of inherited credentials.
+ * PAT_R_MIN is a DOCUMENTED INVARIANT, not a tunable: 190 m is where the
+ * measured fixture corpus is free of static-complex clutter dense enough
+ * to sustain accidental chains (the 130-155 m band fails, see (2)). Do not
+ * lower it without replay evidence on the full corpus. */
+#ifndef PAT_R_MIN
+#define PAT_R_MIN 190.0      /* m    range floor — evidence-tied INVARIANT
+                              *      (overridable only so the bench can
+                              *      re-run the lowered-floor experiment) */
+#endif
+#define PAT_WIN_S 5.0        /* s    trail window */
+#define PAT_FRAMES 130       /*      ring depth (5 s at 26 Hz) */
+#define PAT_MAX_PF 64        /*      buffered far movers per frame (first-come;
+                              *      measured far-band carpet is well under) */
+#define PAT_CHAIN_DR 1.5     /* m    |r_anchor - (r_j + dop_j*dt)| */
+#define PAT_CHAIN_DAZ 1.5    /* deg  |az_anchor - az_j| */
+#define PAT_CHAIN_DDOP 0.5   /* m/s  |dop_anchor - dop_j| */
+#define PAT_NEED 13          /*      chained points to DETECT ... */
+#define PAT_SPAN_S 3.0       /* s    ... spanning at least this */
+#define PAT_COPY_DR 5.0      /* m    copy suppression: co-range gate */
+#define PAT_COPY_DV 1.0      /* m/s  ... SIGNED doppler match (fold-aware) */
+#define PAT_COPY_DAZ 10.0    /* deg  ... at a different azimuth */
+#ifndef PAT_EMIT_WARM
+#define PAT_EMIT_WARM 8      /*      frames a NEVER-wired chain grant must
+                              *      survive before it may emit — the same
+                              *      debounce idea the validation bench
+                              *      applies to first-emit. Measured: grant
+                              *      heads that die in 3-6 frames (killed or
+                              *      merged into the elder track) each burned
+                              *      a wire tid for a 0.2 s flicker. A track
+                              *      that has emitted before re-latches with
+                              *      no delay. */
+#endif
+#define PAT_TUBE_K 5.0       /*      tube half-width = K x PAT_CHAIN_DR */
+#define PAT_CONTRAST 0.5     /*      links / tube-lit frames floor (veto) */
+#define PAT_DOP_MAX 3.0      /* m/s  anchor speed cap: patience exists for the
+                              *      weak-SLOW class the confirmation floors
+                              *      starve; a fast target at the same range
+                              *      is bright (RCS + R^4) and doppler-clean
+                              *      and the normal path confirms it
+                              *      (measured: chains past this cap were
+                              *      vehicles at 10-15 m/s the tracker
+                              *      already handles, and they burned the
+                              *      V2DAY emission budget for nothing) */
+#define PAT_WARM_OCC 4       /*      probation multiplier for chain grants
+                              *      anchored in high-occupancy cells (3x3
+                              *      occ[][] >= OCC_FREE): static history
+                              *      halves trust, the grant waits 4x the
+                              *      debounce before wiring. THIS IS THE
+                              *      T7 EMISSION RATIONER, and it is a
+                              *      measured TRADE, not a free win: without
+                              *      it the detector holds the T7 walker at
+                              *      band coverage 1.00 across 225-300 m —
+                              *      and busts T7's frozen never-exceed
+                              *      emission gate at 0.97/fr vs 0.811,
+                              *      because full far coverage plus the
+                              *      scene's real second mover simply is
+                              *      more emission than the baseline era
+                              *      ever produced (7393 covered frames +
+                              *      779 real-second-mover frames > the
+                              *      7580-frame budget). Until that gate is
+                              *      re-based against a patience-era
+                              *      baseline, high-occ grants must die
+                              *      young unless they prove out. */
+#define PAT_BIN_M 4.0        /* m    lookup bin width */
+#define PAT_BINS 78          /*      ceil((OUT_R_MAX - PAT_R_MIN)/PAT_BIN_M) */
 
 typedef struct {
     int used, tid;
@@ -394,6 +515,20 @@ typedef struct {
     /* consistency guard */
     int guard_bad, ok_streak, guard_pass, ever_passed, coh_bad;
     int jit_ctr, deep_pass;  /* soft-trouble counter; held a FULL streak once */
+    int chain_cred;          /* confirmed by the patience chain, credentials
+                                REDUCED (no graveyard) until the normal guard
+                                streak is earned independently (see PAT_*) */
+    double chain_t;          /* time of the last LIVE qualifying trail (0 =
+                                never chained): while fresh the guard may
+                                unlatch this track but not kill it */
+    double dop_last;         /* last measured claimed-doppler median — the
+                                chain-credential association vet compares
+                                candidate points against this, never against
+                                the fitted vr (fit error is 5-15 m/s on the
+                                genuine far human; the claim stream is tight) */
+    int chain_warm;          /* emit debounce countdown after a chain grant
+                                on a never-wired track (PAT_EMIT_WARM) */
+    int wired;               /* has reached the wire at least once */
     double pass_r;           /* range where the latch was last held */
     double dop_err;          /* EWMA |median claimed doppler - fitted vr| */
     int liar_evid, liar_bad; /* liar latch: fresh-doppler flag, strike counter */
@@ -423,6 +558,17 @@ typedef struct {
 
 typedef struct { double t, r, az, snr_peak; int mv_ever; } Grave;
 
+/* One buffered frame of far movers for the patience detector (see PAT_*).
+ * Points are stored grouped by range bin (counting sort at insert), bin0[]
+ * is the prefix index — a chain lookup touches only the few bins its
+ * predicted-range window overlaps, never the whole frame. */
+typedef struct {
+    double t;
+    int    n;
+    int    bin0[PAT_BINS + 1];
+    float  r[PAT_MAX_PF], az[PAT_MAX_PF], dop[PAT_MAX_PF], snr[PAT_MAX_PF];
+} PatFrame;
+
 struct RadarClusterer {
     Track tracks[MAX_TRK];
     int   ord[MAX_TRK];  /* live slots in python-list order (assoc/merge/emit) */
@@ -434,6 +580,11 @@ struct RadarClusterer {
     float lam[LLR_NLAM];     /* clutter density EWMA per range annulus (1/m^2) */
     int   lam_n;             /* frames folded into lam (warmup gain switch) */
     Grave grave[GRAVE_MAX]; int ngrave;
+    /* patience detector (see PAT_*) */
+    PatFrame pat[PAT_FRAMES];
+    int   pat_head, pat_n;
+    int   chains_active;         /* live tracks still on chain credentials */
+    unsigned long chains_total;  /* chain detections acted on (upgrades+seeds) */
     /* live knobs */
     float dedup_cross;   /* eps knob   */
     int   min_pts;       /* min_pts    */
@@ -757,6 +908,131 @@ static int cluster_pts(const double *r, const double *az, int n,
 static double snr_req(double r){
     return clampd(SNR_EVID_HI - SNR_EVID_SLOPE*r, SNR_EVID_LO, SNR_EVID_HI);
 }
+/* ---- patience detector helpers (see PAT_* block) ---- */
+static int pat_bin(double r){
+    int b=(int)((r-PAT_R_MIN)/PAT_BIN_M);
+    return b<0?0:(b>=PAT_BINS?PAT_BINS-1:b);
+}
+/* push this frame's gate-passing far MOVERS into the ring, range-binned
+ * (counting sort — the per-frame cost is one pass over the moving channel) */
+static void pat_push(RadarClusterer *R, double now_t,
+                     const double *rs, const double *azs, const double *dops,
+                     const double *snrs, const int *ismv, int m){
+    PatFrame *f=&R->pat[R->pat_head];
+    R->pat_head=(R->pat_head+1)%PAT_FRAMES;
+    if(R->pat_n<PAT_FRAMES) R->pat_n++;
+    f->t=now_t;
+    static int keep[RADAR_MAX_POINTS]; int nk=0;
+    int cnt[PAT_BINS]; memset(cnt,0,sizeof(cnt));
+    for(int i=0;i<m && nk<PAT_MAX_PF;i++)
+        if(ismv[i] && rs[i]>=PAT_R_MIN && rs[i]<=OUT_R_MAX){
+            keep[nk++]=i; cnt[pat_bin(rs[i])]++;
+        }
+    f->n=nk;
+    f->bin0[0]=0;
+    for(int b=0;b<PAT_BINS;b++) f->bin0[b+1]=f->bin0[b]+cnt[b];
+    int fill[PAT_BINS]; memcpy(fill,f->bin0,sizeof(fill));
+    for(int k=0;k<nk;k++){
+        int i=keep[k], at=fill[pat_bin(rs[i])]++;
+        f->r[at]=(float)rs[i]; f->az[at]=(float)azs[i];
+        f->dop[at]=(float)dops[i]; f->snr[at]=(float)snrs[i];
+    }
+}
+/* chain test for one anchor: walk every buffered frame, take at most the
+ * single best-residual chaining point per frame (a dense noise frame must
+ * not buy several links), and report the trail. Returns the chain length;
+ * outputs the time span (anchor to oldest link), the mean |dop_j - dop_a|
+ * residual, the max linked SNR, and the count of TUBE-LIT frames — frames
+ * holding any buffered point near the anchor's own motion line
+ * (az +- PAT_CHAIN_DAZ, range +- PAT_TUBE_K x PAT_CHAIN_DR, no doppler
+ * gate), for the line-contrast static-complex veto. Chain gates are the
+ * FIXED PAT_CHAIN_*. */
+static int pat_chain(const RadarClusterer *R, double now_t,
+                     double r_a, double az_a, double dop_a,
+                     double *span, double *dop_res, double *snr_max,
+                     int *tube_frames){
+    int nchain=0, ntube=0; double t_old=now_t, res_sum=0.0; *snr_max=-1e9;
+    for(int s=0;s<R->pat_n;s++){
+        const PatFrame *f=&R->pat[(R->pat_head - 1 - s + PAT_FRAMES)%PAT_FRAMES];
+        double dtb=now_t - f->t;
+        if(dtb<=0.0 || dtb>PAT_WIN_S) continue;
+        if(!f->n) continue;
+        /* a chaining point satisfies r_j = r_a - dop_j*dtb (+-DR) with
+         * dop_j within +-DDOP of the anchor; the TUBE is the wide window
+         * around the anchor's own line r_a - dop_a*dtb. Scan the union of
+         * bins both windows can reach (the tube is the wider). */
+        double line=r_a-dop_a*dtb;
+        double rlo=line-(PAT_CHAIN_DDOP*dtb+PAT_TUBE_K*PAT_CHAIN_DR);
+        double rhi=line+(PAT_CHAIN_DDOP*dtb+PAT_TUBE_K*PAT_CHAIN_DR);
+        if(rhi<PAT_R_MIN || rlo>OUT_R_MAX) continue;
+        int b0=pat_bin(rlo), b1=pat_bin(rhi);
+        int best=-1, tube=0; double bestres=1e9;
+        for(int j=f->bin0[b0];j<f->bin0[b1+1];j++){
+            if(fabs(az_a-(double)f->az[j])>PAT_CHAIN_DAZ) continue;
+            /* the tube counts only the anchor's own SPEED CLASS: the
+             * contrast question is "how special is this line among
+             * comparable slow movers" — fast junk can neither chain nor
+             * be confused for the target (measured: a dense fast-noise
+             * carpet in the longnight return corridor lit the raw tube
+             * every frame and blinded the veto against the REAL walker) */
+            if(fabs((double)f->dop[j])<=PAT_DOP_MAX
+               && fabs(line-(double)f->r[j])<=PAT_TUBE_K*PAT_CHAIN_DR) tube=1;
+            if(fabs(dop_a-(double)f->dop[j])>PAT_CHAIN_DDOP) continue;
+            double res=fabs(r_a-((double)f->r[j]+(double)f->dop[j]*dtb));
+            if(res<=PAT_CHAIN_DR && res<bestres){ bestres=res; best=j; }
+        }
+        ntube+=tube;
+        if(best>=0){
+            nchain++;
+            if(f->t<t_old) t_old=f->t;
+            res_sum+=fabs(dop_a-(double)f->dop[best]);
+            if((double)f->snr[best]>*snr_max) *snr_max=(double)f->snr[best];
+        }
+    }
+    *span=now_t-t_old;
+    *dop_res=nchain?res_sum/nchain:0.0;
+    *tube_frames=ntube;
+    return nchain;
+}
+/* signed doppler match, fold-aware (same +-2 fold sweep as the reflection
+ * suppressor) */
+static int pat_dop_match(double va, double vb){
+    for(int k=-2;k<=2;k++)
+        if(fabs(va-vb+2.0*k*V_FOLD_MPS)<PAT_COPY_DV) return 1;
+    return 0;
+}
+/* is the track's chain evidence FRESH — a qualifying trail seen within the
+ * trail window itself (chain acts set it; every hit frame re-proves it) */
+static int pat_fresh(const Track *t, double now){
+    return t->chain_t>0.0 && now - t->chain_t <= PAT_WIN_S;
+}
+/* Can this confirmed track reach the wire RIGHT NOW on its own evidence?
+ * One definition serving the emit stage and the patience anchor skip — if
+ * these drift apart, a dim real target gets a latched track that neither
+ * emits nor lets the chain re-prove it (measured on longnight: the walker's
+ * own track rode him from 220 m to 350 m fully latched and 100% wire-dark,
+ * because its 16-17 dB far peaks never clear the brightness bar and the
+ * anchor skip read "latched" as "healthy").
+ * Brightness relief tiers at range: (1) the lifetime-peak bar itself,
+ * (2) the shipped faint path (FULL streak + doppler self-consistency),
+ * (3) a FRESH patience chain — 13+ doppler-consistent trail points are a
+ *     stronger form of exactly the evidence tier (2) demands, and unlike
+ *     the dop_err EWMA they cannot be inflated by far-range fit noise. */
+static int wire_capable(const Track *t, double now){
+    if(!t->guard_pass || t->liar || t->walk_latch || t->chain_warm>0) return 0;
+    /* once-chained tracks: a full walk-strike load suppresses the wire
+     * REVERSIBLY (a genuinely sane window resets the strikes and the same
+     * tid resumes; a permanent latch here was measured to fragment the
+     * real walker instead: dark patch -> new tid) */
+    if(t->chain_t>0.0 && t->walk_bad>=WALK_KILL) return 0;
+    double req=snr_req(t->r);
+    double ramp=(t->r-FAR_MARGIN_R0)/(FAINT_R-FAR_MARGIN_R0);
+    req+=FAR_MARGIN_DB*clampd(ramp,0.0,1.0);
+    if(t->snr_unknown || t->snr_peak>=req) return 1;
+    if(t->r>=FAINT_R && t->deep_pass && t->dop_err<=DOP_GATE) return 1;
+    if(t->r>=FAINT_R && pat_fresh(t,now)) return 1;
+    return 0;
+}
 static void ord_remove(RadarClusterer *R, int pos){
     R->tracks[R->ord[pos]].used = 0;
     memmove(R->ord+pos, R->ord+pos+1, (size_t)(R->nord-pos-1)*sizeof(int));
@@ -871,6 +1147,24 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             for(int i=0;i<m;i++){
                 if(!tier && tier1[i]) continue;          /* leftovers only */
                 if(!ismv[i] && !st_ok) continue;
+                /* chain-credential claim vet: while a track lives on chain
+                 * credentials its claims must stay doppler-consistent with
+                 * its own measured claim stream (2x the chain gate — one
+                 * fade of pace drift). Junk claims during a far target's
+                 * 5-7 s fades are what poisoned the guard window and killed
+                 * the track (measured: the T7 far-leg churn); vetted, a
+                 * fade is clean MISSES, and the park lease carries the
+                 * track to the target's return under the SAME tid. Vet is
+                 * against dop_last, never fitted vr (fit error 5-15 m/s on
+                 * the genuine far human). It lapses with chain_cred (the
+                 * earned full streak): extending it for the track's whole
+                 * far life was tried and MEASURED WORSE — the vet also
+                 * rejects the co-located near-miss returns that keep a
+                 * sparse far track fed, and the 250-306 m band coverage
+                 * dropped while total emission rose past its gate. Normal
+                 * tracks are untouched. */
+                if(t->chain_t>0.0 && t->r>=PAT_R_MIN && ismv[i]
+                   && fabs(dops[i]-t->dop_last) > 2.0*PAT_CHAIN_DDOP) continue;
                 double dr=fabs(rs[i]-PR[ti])/RG[ti], da=fabs(azs[i]-PAZ[ti])/AZG[ti];
                 if(dr<1.0 && da<1.0){ double d=dr+da; if(d<bestd[i]){ bestd[i]=d; owner[i]=ti; } }
             }
@@ -930,8 +1224,31 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             double vd=0.0;
             if(nmv_hit){                       /* doppler self-consistency */
                 vd=med(gv,nmv_hit);
+                t->dop_last=vd;                /* chain claim-vet reference */
                 double derr=fabs(vd - t->vr);
                 t->dop_err=(1-DOP_ALPHA)*t->dop_err + DOP_ALPHA*derr;
+                /* patience freshness: a chain-credentialed track refreshes
+                 * its clock only by proving its trail STILL qualifies on
+                 * today's measurement — not by having been acted on once.
+                 * (While the track is latched and claiming, no anchor ever
+                 * fires for it, so without this the clock always reads
+                 * stale by the time a fade starts.) The refresh is denied
+                 * to a track in guard or walk trouble and to sub-mover
+                 * claims: a wandering multipath blob can fake the chain
+                 * test on its own edge points, and with an always-open
+                 * refresh it kept its kill deferral alive to guard_bad 72
+                 * (measured, T7 garage field) — an immortal wanderer, the
+                 * exact bug class this tracker buried in 2026-07-11. */
+                if(t->chain_t>0.0 && mr>=PAT_R_MIN
+                   && t->guard_bad==0 && t->walk_bad==0
+                   && fabs(vd)>=R->vmin){
+                    double cs_, cr_, cx_; int ct_;
+                    int cn_=pat_chain(R, now_t, mr, maz, vd,
+                                      &cs_, &cr_, &cx_, &ct_);
+                    if(cn_>=PAT_NEED && cs_>=PAT_SPAN_S
+                       && cn_>=PAT_CONTRAST*ct_)
+                        t->chain_t=now_t;
+                }
             }
             /* half-extents from the frame's points (for the wire box) */
             double mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
@@ -1052,7 +1369,12 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         }
         int need = t->ever_passed ? GUARD_EMIT_RE : GUARD_EMIT;
         if(t->ok_streak>=need){ t->guard_pass=1; t->ever_passed=1; }
-        if(t->ok_streak>=GUARD_EMIT) t->deep_pass=1;
+        if(t->ok_streak>=GUARD_EMIT){
+            t->deep_pass=1;
+            t->chain_cred=0;   /* full streak earned INDEPENDENTLY: the
+                                * patience track now holds normal credentials
+                                * (graveyard-eligible, deep_pass) */
+        }
         if(t->guard_pass) t->pass_r=t->r;
         if(t->guard_bad>=GUARD_UNLATCH || t->jit_ctr>=GUARD_UNLATCH)
             t->guard_pass=0;
@@ -1084,11 +1406,19 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                         && c_path > 0.0 && c_net/c_path >= COH_MIN;
         int decidable = enough && meddop >= WALK_DOP_MIN
                         && fabs(D) >= WALK_D_MIN && tcov >= WALK_COV_MIN_S;
+        /* a conviction is QUASHED by later verification: mv_ever means the
+         * claimed doppler INTEGRATED to the actual displacement over a full
+         * window — physically a real mover, whatever the track's earlier
+         * life claimed. Measured failure this closes: a walk-latched
+         * multipath track sitting at ~150 m captured the REAL T7 return
+         * walker into its gate (tier-1 claim + seed guard) and carried him
+         * wire-dark from 150 m to 0. A breather cannot quash: its claimed
+         * motion never delivers displacement, so radial_sane never holds. */
         if(cross_coh && radial_sane){
-            t->mv_ever=1; t->walk_bad=0; t->mv_class=MV_VERIFIED;
+            t->mv_ever=1; t->walk_bad=0; t->walk_latch=0; t->mv_class=MV_VERIFIED;
         } else if(decidable){
             if(radial_sane){
-                t->mv_ever=1; t->walk_bad=0; t->mv_class=MV_VERIFIED;
+                t->mv_ever=1; t->walk_bad=0; t->walk_latch=0; t->mv_class=MV_VERIFIED;
             } else if(cross_coh || t->r < WALK_R_MIN){
                 /* protected: real cross motion, or near-field soup */
                 t->walk_bad=0; t->mv_class=MV_UNVERIFIED;
@@ -1124,13 +1454,35 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     /* ---- lifecycle + confirmation (python order) ---- */
     for(int oi=0;oi<R->nord;){
         Track *t=&R->tracks[R->ord[oi]];
+        if(t->chain_warm>0) t->chain_warm--;     /* first-wire debounce */
         if(!t->confirmed && t->misses>TENT_MAX_MISS){ ord_remove(R,oi); continue; }
-        if(t->confirmed && t->guard_bad>=GUARD_KILL){ ord_remove(R,oi); continue; }
+        /* guard kill — DEFERRED while the track's chain evidence is fresh:
+         * at a far target's ~12% hit rate the walker fades for 5-7 s at a
+         * time while the dragging gate collects junk, the guard reads that
+         * junk as incoherence and was measured killing the REAL T7
+         * walker's track every few seconds (12 tids across one leg, every
+         * one a guard_bad kill). The freshness window is DERIVED, not
+         * tuned: a returning target needs PAT_SPAN_S of new blips before
+         * a chain can re-form (the buffer forgot the old trail during the
+         * fade), so a track must outlive fade (~PAT_WIN_S) + rebuild
+         * (PAT_SPAN_S) past its last chain act. The guard still UNLATCHES
+         * emission the moment things look wrong — freshness only spares
+         * the track's LIFE, never its wire access. A track that never
+         * chained (chain_t 0) is killed exactly as shipped. */
+        if(t->confirmed && t->guard_bad>=GUARD_KILL
+           && !(t->chain_t>0.0
+                && now_t - t->chain_t <= PAT_WIN_S + PAT_SPAN_S)){
+            ord_remove(R,oi); continue;
+        }
         int moved_recently = t->moved_frames>=MOVE_CONFIRM
                              && (now_t - t->last_moved_t) <= R->park_s;
         if(t->confirmed && t->misses>coast_frames){
             if(!(moved_recently && t->misses<=park_frames)){
-                if(t->guard_pass && !t->liar && !t->walk_latch && R->ngrave<GRAVE_MAX){
+                if(t->guard_pass && !t->liar && !t->walk_latch
+                   && !t->chain_cred            /* reduced credentials: a chain
+                                                 * track wills NOTHING until it
+                                                 * earns the full guard streak */
+                   && R->ngrave<GRAVE_MAX){
                     Grave *g=&R->grave[R->ngrave++];
                     g->t=now_t; g->r=t->r; g->az=t->az; g->snr_peak=t->snr_peak;
                     g->mv_ever=t->mv_ever;
@@ -1219,6 +1571,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 Track *t=&R->tracks[slot]; memset(t,0,sizeof(*t));
                 t->used=1; t->tid=R->next_tid++; t->r=crr; t->az=caz; t->el=cel;
                 t->sx=t->sy=t->sz=MIN_SIZE_M;
+                t->dop_last=cdop;
                 t->last_moved_t=now_t;
                 t->pass_r=crr;
                 t->f_az=caz; t->f_el=cel; t->f_r=crr;   /* output filter seed */
@@ -1244,6 +1597,213 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             }
         }
     }
+    /* ---- far-range patience detector (see PAT_* block): a far mover whose
+     * 5 s trail lines up on one doppler-consistent distance-line is real,
+     * whatever the confirmation floors say. Chains are tested against the
+     * buffer BEFORE this frame is pushed (a point must not chain to its own
+     * frame), and detections pass three safeguards before acting. ---- */
+    {
+        typedef struct { int pt, cover, occ_hi; double span, res, smax; } PatDet;
+        static PatDet det[RADAR_MAX_POINTS]; int ndet=0;
+        for(int i=0;i<m;i++){
+            if(!ismv[i] || rs[i]<PAT_R_MIN || rs[i]>OUT_R_MAX) continue;
+            if(fabs(dops[i])>PAT_DOP_MAX) continue;   /* slow class only */
+            /* anchor = far mover not owned by a WIRE-CAPABLE confirmed
+             * track. A point claimed by a TENTATIVE track still anchors
+             * (the tentative is exactly the track the chain exists to
+             * promote); so does one claimed by a confirmed track that lost
+             * its guard latch (a far track cannot rebuild the 12-frame
+             * streak at a 12% hit rate — the chain is its honest way
+             * back); and so does one claimed by a LATCHED-BUT-DIM track
+             * whose only path to the wire is a fresh chain (longnight:
+             * "guard_pass" alone here kept the walker dark to 350 m). */
+            int own=owner[i];
+            if(own>=0 && R->tracks[own].confirmed
+               && wire_capable(&R->tracks[own], now_t))
+                continue;
+            /* covering track: the claiming tentative, else any track within
+             * the seed guard (a coasting track that missed this frame) */
+            int cover=own;
+            if(cover<0){
+                for(int oi=0;oi<R->nord;oi++){
+                    Track *t=&R->tracks[R->ord[oi]];
+                    if(fabs(t->r-rs[i])<SEED_GUARD_R
+                       && fabs(t->az-azs[i])<SEED_GUARD_AZ){ cover=R->ord[oi]; break; }
+                }
+            }
+            /* a covering track already confirmed AND wire-capable has
+             * nothing to gain — skip the scan (cost, not correctness) */
+            if(cover>=0 && R->tracks[cover].confirmed
+               && wire_capable(&R->tracks[cover], now_t)) continue;
+            double span, res, smax; int tube;
+            int nch=pat_chain(R, now_t, rs[i], azs[i], dops[i],
+                              &span, &res, &smax, &tube);
+            if(nch<PAT_NEED || span<PAT_SPAN_S) continue;
+            /* safeguard (2): static-complex veto by LINE CONTRAST,
+             * unconditional (see the PAT_* block). A plain occupancy veto
+             * was measured killing the real longnight walker (his corridor
+             * idles at occ 0.33-0.88), and an occupancy-CONDITIONED
+             * contrast check let range-extended fakes through wherever the
+             * grid reads low or not at all (measured on T7: a 400 E/fr
+             * ghost at r=403 — PAST the occ grid's 400 m extent — and a
+             * 358 E one in low-occ cells). The tube is self-normalizing;
+             * it needs no occupancy gate. Occupancy keeps one job below:
+             * grants in high-occ cells serve a longer wire probation. */
+            if(nch<PAT_CONTRAST*tube) continue;
+            {
+                int ir=(int)((rs[i]-GR_R0)/GR_DR), ia=(int)((azs[i]-GR_A0)/GR_DA);
+                float nb=0;
+                if(ir>=0&&ir<NR&&ia>=0&&ia<NA){
+                    int i0=ir-1<0?0:ir-1,i1=ir+1>=NR?NR-1:ir+1;
+                    int j0=ia-1<0?0:ia-1,j1=ia+1>=NA?NA-1:ia+1;
+                    for(int a=i0;a<=i1;a++) for(int b=j0;b<=j1;b++)
+                        if(R->occ[a][b]>nb) nb=R->occ[a][b];
+                }
+                if(ndet<RADAR_MAX_POINTS){
+                    det[ndet].pt=i; det[ndet].cover=cover;
+                    det[ndet].occ_hi = nb>=OCC_FREE;
+                    det[ndet].span=span; det[ndet].res=res; det[ndet].smax=smax;
+                    ndet++;
+                }
+            }
+        }
+        /* strongest chain first (stable insertion by chain max SNR), so the
+         * copy suppression below always defers to the stronger claimant */
+        for(int i=1;i<ndet;i++){
+            PatDet key=det[i]; int j=i-1;
+            while(j>=0 && det[j].smax<key.smax){ det[j+1]=det[j]; j--; }
+            det[j+1]=key;
+        }
+        static int acted[RADAR_MAX_POINTS]; int nact=0;
+        for(int d=0;d<ndet;d++){
+            int i=det[d].pt, drop=0;
+            /* safeguard (1): copy suppression at chain level — a stronger
+             * co-ranged, doppler-matched claimant at a different azimuth
+             * means THIS chain is the sidelobe copy */
+            for(int oi=0;oi<R->nord && !drop;oi++){
+                Track *s=&R->tracks[R->ord[oi]];
+                if(!s->confirmed || R->ord[oi]==det[d].cover) continue;
+                if(s->snr_peak<=det[d].smax) continue;       /* only STRONGER */
+                if(fabs(s->r-rs[i])>=PAT_COPY_DR) continue;
+                if(!pat_dop_match(s->vr, dops[i])) continue;
+                if(fabs(s->az-azs[i])>PAT_COPY_DAZ) drop=1;
+            }
+            for(int e=0;e<nact && !drop;e++){
+                int k=acted[e];                              /* stronger: acted first */
+                if(fabs(rs[k]-rs[i])>=PAT_COPY_DR) continue;
+                if(!pat_dop_match(dops[k], dops[i])) continue;
+                if(fabs(azs[k]-azs[i])>PAT_COPY_DAZ) drop=1;
+            }
+            if(drop) continue;
+            /* route the chain onto the target's EXISTING confirmed track if
+             * one is co-ranged and co-doppler INSIDE the copy arc: at far
+             * range the angle noise spreads one walker's blips over several
+             * degrees, and each noise lobe can build its own qualifying
+             * chain — without this routing one target spawns parallel
+             * flanker tracks inside its own corridor (measured on T7: the
+             * walker emitting from 2-3 tids simultaneously, frag 22 vs
+             * baseline 15). Same body = same signed doppler within the
+             * copy arc at the MERGE range distance (the tracker's own
+             * same-body notion — the flankers this closes were being
+             * merge-killed into the main track a few frames later anyway,
+             * AFTER each had already burned a wire tid). */
+            int route=det[d].cover; double rstr=-1e18;
+            for(int oi=0;oi<R->nord;oi++){
+                Track *s=&R->tracks[R->ord[oi]];
+                if(!s->confirmed) continue;
+                if(!pat_dop_match(s->vr, dops[i])) continue;
+                /* same body = co-doppler within the copy arc at the MERGE
+                 * range distance — OR, for an in-LINE candidate (bearing
+                 * within twice the chain az gate), out to twice that: a
+                 * co-bearing co-speed echo offset in range is the bounce/
+                 * multipath image of the same walker, and granting it a
+                 * parallel track was measured as the T7 budget overshoot
+                 * (467 double-matched corridor frames per recording). */
+                double drr=fabs(s->r-rs[i]);
+                int same = drr<MERGE_R && fabs(s->az-azs[i])<=PAT_COPY_DAZ;
+                int inline_echo = drr<2.0*MERGE_R
+                                  && fabs(s->az-azs[i])<=2.0*PAT_CHAIN_DAZ;
+                if(!same && !inline_echo) continue;
+                double str=s->mv_ewma+0.001*(s->age<500?s->age:500);
+                if(str>rstr){ rstr=str; route=R->ord[oi]; }
+            }
+            Track *t=NULL; int material=0;
+            if(route>=0){
+                /* upgrade the routed track: the chain is the confirmation
+                 * evidence its M-of-N hit rate could never build */
+                t=&R->tracks[route];
+                if(t->confirmed && wire_capable(t, now_t))
+                    continue;                    /* second anchor, same target */
+                material = !t->confirmed || !t->guard_pass
+                           || now_t - t->chain_t > PAT_SPAN_S;
+                t->confirmed=1; t->guard_pass=1;
+                if(!t->ever_passed) t->chain_cred=1;         /* safeguard (3) */
+                /* a live qualifying chain is the strongest coherence
+                 * evidence this tracker owns — stronger than the guard's
+                 * 2.5 s waypoint window, which at a far target's ~12% hit
+                 * rate sees the junk its dragging gate collects and kills
+                 * the track every few seconds (measured: the T7 far-band
+                 * churn, 12 tids over one walker leg, every one a
+                 * guard_bad kill). Fresh chain -> the guard's grudge
+                 * counters reset. A trail-less track gains nothing here:
+                 * no chain, no reset, the kill works as shipped. */
+                t->guard_bad=0; t->jit_ctr=0;
+                if(det[d].smax>t->snr_peak) t->snr_peak=det[d].smax;
+            } else {
+                /* seed a new confirmed track from the chain's newest point */
+                int slot=-1;
+                for(int ti=0;ti<MAX_TRK;ti++) if(!R->tracks[ti].used){ slot=ti; break; }
+                if(slot<0) continue;
+                t=&R->tracks[slot]; memset(t,0,sizeof(*t));
+                t->used=1; t->tid=R->next_tid++;
+                t->r=rs[i]; t->az=azs[i]; t->el=els[i];
+                t->vr=dops[i];               /* claimed doppler = range-rate */
+                t->dop_last=dops[i];
+                t->sx=t->sy=t->sz=MIN_SIZE_M;
+                t->pass_r=rs[i];
+                t->f_az=azs[i]; t->f_el=els[i]; t->f_r=rs[i];
+                t->o_az=azs[i]; t->o_el=els[i]; t->f_init=1; t->f_vr=dops[i];
+                t->snr_peak=det[d].smax;     /* chain max — real measurements */
+                t->dop_err=det[d].res;       /* chain doppler residual */
+                if(!snrok[i]) t->snr_unknown=1;
+                t->confirmed=1; t->guard_pass=1; t->chain_cred=1;
+                hist_push(t,now_t,rs[i],azs[i],dops[i]);
+                hit_push(t,1); t->age=1; t->hits_total=1;
+                R->ord[R->nord++]=slot;
+                material=1;
+            }
+            /* The chain proves the RANGE-RATE (13+ links within +-0.5 m/s
+             * of the anchor claim over 3-5 s), so it seeds/refreshes vr —
+             * and ONLY vr. It hands out no motion lease: an earlier
+             * version set moved_frames/last_moved_t here, and every
+             * static-complex fake that slipped the vetoes cashed that
+             * into exactly one park-lease of ghost emission (measured
+             * 15.4 s and 13.7 s windows on T7). With vr as the only
+             * grant, the tracker's own motion test decides: a real walker
+             * (|vr| 1.4-1.8) is `moving` from the next frame and builds
+             * its park lease naturally; a 0.85 m/s edge-walking blob
+             * never is, and the phantom leash culls it in 1.3 s. */
+            t->vr = dops[i];
+            t->chain_t=now_t;                    /* freshness clock (guard) */
+            {   /* first-wire debounce; high-occupancy grants serve a longer
+                 * probation (see PAT_WARM_OCC — the measured T7 trade) */
+                int warm = det[d].occ_hi ? PAT_WARM_OCC*PAT_EMIT_WARM
+                                         : PAT_EMIT_WARM;
+                if(!t->wired && t->chain_warm<warm) t->chain_warm=warm;
+            }
+            /* count DETECTIONS, not maintenance: a dim not-yet-far track
+             * re-anchors every frame while the chain merely re-affirms a
+             * fresh grant — only a state change (new confirm/latch/seed or
+             * a stale clock revived) is a "chain confirmed" event */
+            if(material) R->chains_total++;
+            if(nact<RADAR_MAX_POINTS) acted[nact++]=i;
+        }
+        /* buffer this frame's far movers for future chains */
+        pat_push(R, now_t, rs, azs, dops, snrs, ismv, m);
+        R->chains_active=0;
+        for(int oi=0;oi<R->nord;oi++)
+            if(R->tracks[R->ord[oi]].chain_cred) R->chains_active++;
+    }
     /* ---- occupancy update ---- */
     double lr = warm ? LEARN_FAST : LEARN;
     static char hitcell[NR][NA]; memset(hitcell,0,sizeof(hitcell));
@@ -1256,18 +1816,23 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     for(int oi=0;oi<R->nord;oi++){
         int ti=R->ord[oi]; Track *t=&R->tracks[ti];
         if(!t->confirmed) continue;
-        if(!t->guard_pass) continue;            /* no positive coherence yet */
-        if(t->liar) continue;                   /* latched ghost: never emitted */
-        if(t->walk_latch) continue;             /* convicted breather: never emitted */
-        {
-            double req = snr_req(t->r);
-            double ramp = (t->r - FAR_MARGIN_R0) / (FAINT_R - FAR_MARGIN_R0);
-            req += FAR_MARGIN_DB * clampd(ramp, 0.0, 1.0);
-            if(!t->snr_unknown && t->snr_peak < req
-               /* faint-far relief: FULL coherent streak + doppler-consistent */
-               && !(t->r >= FAINT_R && t->deep_pass && t->dop_err <= DOP_GATE))
-                continue;                       /* not target-bright for THIS range */
-        }
+        /* latches (guard/liar/walk/debounce) + the brightness bar with its
+         * two faint-far reliefs — one definition shared with the patience
+         * anchor skip, see wire_capable() */
+        if(!wire_capable(t, now_t)) continue;
+        /* far chained tracks: the WIRE gets WALK_COV_MIN_S of coasting —
+         * the same integrated-evidence span the walk verifier calls
+         * decidable. The track itself survives a long fade (park lease +
+         * claim vet keep the tid alive for the target's return), but
+         * emitting extrapolated positions for the full 15 s park lease is
+         * not measurement: past the allowance a far patience track goes
+         * silent and resumes on re-acquire under the SAME tid. (This is
+         * also the E-budget knife edge: 3 s here put T7 and longnight
+         * 2-3% over their frozen emission gates, 0.4 s starved the
+         * longnight band coverage to 0.28.) */
+        if(t->chain_t>0.0 && t->r>=PAT_R_MIN
+           && t->misses>(int)lround(WALK_COV_MIN_S*TRK_FPS))
+            continue;
         int moved_recently = t->moved_frames>=MOVE_CONFIRM
                              && (now_t - t->last_moved_t) <= R->park_s;
         if(!(t->moving || moved_recently)) continue;   /* static/phantom */
@@ -1296,6 +1861,25 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(cross<R->dedup_cross && fabs(er-t->r)<DEDUP_R){ dup=1; break; }
         }
         if(dup) continue;
+        /* far patience tracks: one target per LINE. A second far chained
+         * track at the SAME bearing (within the seed guard arc) with the
+         * SAME signed doppler (fold-aware) but offset in range is a
+         * range-offset echo of the emitted one (bounce/multipath path
+         * length), not a second body — measured on T7: parallel in-line
+         * corridor emitters 15-25 m apart (outside the dedup's 12 m) were
+         * the whole E/fr overshoot (0.976 vs 0.811 at identical coverage).
+         * Two real co-bearing co-speed walkers in line at 200+ m collapse
+         * to one wire box — the acceptable cost, it is how the truth
+         * corridor scores them anyway. */
+        if(t->chain_t>0.0 && t->r>=PAT_R_MIN){
+            int echo=0;
+            for(int e=0;e<nout && !echo;e++){
+                if(etrk[e]->r<PAT_R_MIN) continue;
+                if(fabs(etrk[e]->az - t->az)>2.0*PAT_CHAIN_DAZ) continue;
+                if(pat_dop_match(etrk[e]->vr, t->vr)) echo=1;
+            }
+            if(echo) continue;
+        }
         /* reflection-copy suppressor (see REFL_* block): the shadow clock
          * is maintained below for every confirmed track; here it decides */
         if(t->shadow_s >= REFL_SHADOW_S) continue;      /* convicted copy */
@@ -1318,6 +1902,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         o->conf=(float)conf; o->num_points=t->hits_total;
         o->suspect=suspect;
         o->mv_class=t->mv_class;
+        t->wired=1;                             /* has reached the wire */
         etrk[nout-1]=t;
     }
     /* ---- reflection-shadow bookkeeping: every confirmed track vs the
@@ -1361,6 +1946,17 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     return nout;
 }
 
+/* patience-chain counters for /stats (no knob — the PAT_* constants are
+ * evidence-tied and fixed; these exist for observe-style live verification):
+ * chains_active = live tracks still on reduced chain credentials,
+ * chains_confirmed_total = chain detections acted on since start. */
+void cluster_chain_stats(const RadarClusterer *c, int *chains_active,
+                         unsigned long *chains_confirmed_total)
+{
+    if (chains_active) *chains_active = c ? c->chains_active : 0;
+    if (chains_confirmed_total) *chains_confirmed_total = c ? c->chains_total : 0;
+}
+
 #ifdef CLUSTER_INTROSPECT
 /* Bench-tool hook (radar/tools/track_replay.c): confirmed tracks in list
  * order, for parity diffing against the Python reference. Not compiled into
@@ -1383,16 +1979,18 @@ int cluster_all(const RadarClusterer *R, int *tid, double *r, double *az, int *c
     }
     return k;
 }
-int cluster_track_detail(const RadarClusterer *R, int want_tid, double *out12)
+int cluster_track_detail(const RadarClusterer *R, int want_tid, double *out16)
 {
     for(int oi=0;oi<R->nord;oi++){
         const Track *t=&R->tracks[R->ord[oi]];
         if(t->tid==want_tid){
-            out12[0]=t->r; out12[1]=t->az; out12[2]=t->snr_peak;
-            out12[3]=t->guard_pass; out12[4]=t->ever_passed;
-            out12[5]=t->ok_streak; out12[6]=t->guard_bad;
-            out12[7]=t->wD; out12[8]=t->wdR; out12[9]=t->wmed;
-            out12[10]=t->walk_bad; out12[11]=t->mv_class;
+            out16[0]=t->r; out16[1]=t->az; out16[2]=t->snr_peak;
+            out16[3]=t->guard_pass; out16[4]=t->ever_passed;
+            out16[5]=t->ok_streak; out16[6]=t->guard_bad;
+            out16[7]=t->wD; out16[8]=t->wdR; out16[9]=t->wmed;
+            out16[10]=t->walk_bad; out16[11]=t->mv_class;
+            out16[12]=t->liar; out16[13]=t->walk_latch;
+            out16[14]=t->chain_cred; out16[15]=t->dop_err;
             return 1;
         }
     }

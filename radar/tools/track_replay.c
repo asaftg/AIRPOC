@@ -167,10 +167,12 @@ int main(int argc, char **argv)
 
         printf("F %d %.9f\n", frame, t);
         if (getenv("REPLAY_ALL")) {
-            /* debug lines: seed counter, channel sizes + flood flag, all tracks */
+            /* debug lines: seed counter, channel sizes + flood flag + chain
+             * counters (chains_active, chains_confirmed_total), all tracks */
             printf("N %d\n", c->next_tid);
-            printf("M %d %d %d\n", c->dbg_nmv, c->dbg_m,
-                   t < c->flood_until ? 1 : 0);
+            printf("M %d %d %d %d %lu\n", c->dbg_nmv, c->dbg_m,
+                   t < c->flood_until ? 1 : 0,
+                   c->chains_active, c->chains_total);
             static int atid[MAX_TRK], aconf[MAX_TRK];
             static double arr2[MAX_TRK], aaz2[MAX_TRK];
             int na = cluster_all(c, atid, arr2, aaz2, aconf, MAX_TRK);
@@ -180,10 +182,13 @@ int main(int argc, char **argv)
         {
             const char *tw = getenv("REPLAY_TRACE_TID");
             if (tw) {
-                double d7[7];
-                if (cluster_track_detail(c, atoi(tw), d7))
-                    printf("T %.2f %.2f snrp %.1f pass %.0f ever %.0f streak %.0f bad %.0f\n",
-                           d7[0], d7[1], d7[2], d7[3], d7[4], d7[5], d7[6]);
+                double d[16];
+                if (cluster_track_detail(c, atoi(tw), d))
+                    printf("T %.2f %.2f snrp %.1f pass %.0f ever %.0f streak %.0f "
+                           "bad %.0f liar %.0f wlatch %.0f chain %.0f doperr %.2f "
+                           "mv %.0f wbad %.0f\n",
+                           d[0], d[1], d[2], d[3], d[4], d[5], d[6],
+                           d[12], d[13], d[14], d[15], d[11], d[10]);
             }
         }
         for (int i = 0; i < nc; i++)

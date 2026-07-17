@@ -113,6 +113,11 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
     http_publish(c->json, (size_t)len);
     http_set_stats(c->fps, c->drops, c->frame.n_points, c->frame.n_targets,
                    1, c->profile, AG_MAX_RANGE_M, fov);
+    {   /* patience-chain counters -> /stats (live chain verification) */
+        int ca; unsigned long ct;
+        cluster_chain_stats(c->clust, &ca, &ct);
+        http_set_chain_stats(ca, ct);
+    }
     if (stats)
         http_set_timing(stats->interframe_proc_us, stats->interframe_margin_us,
                         stats->active_cpu_pct, stats->interframe_cpu_pct);

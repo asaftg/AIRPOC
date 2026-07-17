@@ -225,6 +225,52 @@ continuity should come from the LLR confirm path plus a patience-style
 detector, not from widening what a track may claim. Do not re-introduce
 without replay evidence on this corpus.
 
+## Far-range patience detector (fixed, `PAT_*` in `src/cluster.c`, 2026-07-17)
+
+Beyond ~200 m a walking person's echoes are too weak to confirm through the
+normal path: measured on T7 at 285-295 m the tracker covered him 12% of the
+time, and of 546 tentative tracks near the real human only 5 ever confirmed —
+the binder is the **confirmation floors** (M-of-N hit rate, moving-rate
+EWMA), not association. But a real person leaves a **consistent trail**: over
+5 seconds his blips line up on one distance-line that moves exactly at his
+claimed-doppler speed. The junk carpet (~185 points/frame) produced **zero**
+qualifying trails in every recording of the corpus.
+
+How it works, in plain English: the tracker remembers the last 5 seconds of
+far moving points. Each frame, every far slow mover that no healthy track
+owns is tested as the endpoint of a trail — at least 13 remembered points, at
+most one per frame, spanning at least 3 seconds, each sitting where "this
+point moving at its claimed speed" predicts, at the same bearing and the same
+speed. If the trail exists, the track that covers it is confirmed and put on
+the wire; if nothing covers it, a new confirmed track is seeded from it.
+
+| Decision | Value | Why (all measured) |
+|---|---|---|
+| Chain gates | 1.5 m / 1.5° / 0.5 m/s, ≥13 links spanning ≥3 s, one link per frame | fixed, never miss-grown; noise made 6/13 at best across the corpus |
+| Range floor | r ≥ 190 m — **documented invariant, not a tunable** | with the full safeguard stack, a floor-130 experiment now stays sane (T7 +14% band E where the walker really is, T2 lower, negatives 0) — but 190 is where the field problem lives and nothing below it was ever field-validated |
+| Speed cap | anchors only up to 3 m/s | the starved class is slow and weak; every faster chain measured was a vehicle the normal path already tracks |
+| Copy suppression | co-range ±5 m, signed co-doppler ±1 m/s fold-aware, >10° apart → the weaker chain dies; in-line (≤3°) co-doppler chains ROUTE onto the existing track out to 24 m | sidelobe mirrors and bounce/range-offset echoes must not be born as tracks |
+| Static-complex veto | line CONTRAST: in the frames that light the chain's tube (±1.5°, ±7.5 m around the anchor's own motion line, same speed class), at least half must actually chain | a range-extended clutter band lends a point to any line but fails the gates in most frames; occupancy alone was measured killing the real longnight walker (his corridor idles at occ 0.33-0.88) while contrast separates cleanly |
+| Reduced credentials | chain-confirmed tracks are emission-eligible but NOT graveyard-eligible and NOT deep-pass-latched until they independently earn the full guard streak | an injected mistake must not found a lineage |
+| First-wire debounce | 8 frames; ×4 for grants in high-occupancy cells | grant-heads that die in 3-6 frames each burned a wire tid; the ×4 tier is the **T7 emission rationer** (see below) |
+| Claim vet | while on chain credentials, the track only claims moving points within ±1 m/s of its own last measured claim | junk claims during a far target's 5-7 s fades poisoned the guard and killed the track (12 tids across one T7 leg); vetted, a fade is clean misses and the park lease carries the SAME tid to the target's return |
+| Guard-kill deferral | a track with a live qualifying trail within the last 8 s may be unlatched but not killed | at 12% duty the guard's 2.5 s window reads fade-junk as incoherence; freshness is re-proven each hit frame and denied to tracks in guard/walk trouble (an always-open refresh bred an immortal wanderer, guard_bad 72) |
+| Wire coast | far patience tracks emit through at most 1.5 s of misses | the E-budget knife edge: 3 s put T7 and longnight 2-3% over their frozen emission gates; 0.4 s starved the longnight band to 0.28 |
+
+**The measured T7 trade.** T7's frozen never-exceed emission gate
+(E/fr ≤ 0.811) permits ~7580 emissions; full far-band coverage plus the
+scene's real second mover is ~8200 — **full T7 far coverage and the frozen
+gate are jointly impossible**. With the high-occupancy probation (`PAT_WARM_OCC 4`)
+the corpus passes 42/42 and longnight's far band reaches its target, at the
+cost of T7's 250-306 m outbound band (0.15-0.22 vs 0.57-0.69 baseline).
+Compiling with `-DPAT_WARM_OCC=1` flips the trade: T7 225-300 m outbound
+coverage 1.00 and return re-acquire at 304 m — and T7's emission gate fails
+at 0.97/fr. Choosing coverage over the frozen budget requires re-basing the
+T7 baseline, a decision for the field, not for this commit.
+
+There is **no live knob** for any of this. `/stats` carries `chains_active`
+and `chains_confirmed_total` for live verification.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,

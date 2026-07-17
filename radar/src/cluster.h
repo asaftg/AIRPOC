@@ -117,6 +117,13 @@ void cluster_set_track(RadarClusterer *c, int confirm_m, double coast_s, double 
 /* Current azimuth-gate half-angle (deg) — published on the wire for the wedge. */
 double cluster_fov(const RadarClusterer *c);
 
+/* Patience-chain counters, echoed in /stats for live verification (there is
+ * NO knob — the far-range chain detector's constants are evidence-tied and
+ * fixed): chains_active = live tracks still on reduced chain credentials;
+ * chains_confirmed_total = chain detections acted on since start. */
+void cluster_chain_stats(const RadarClusterer *c, int *chains_active,
+                         unsigned long *chains_confirmed_total);
+
 /* Track one frame. `pts`/`n` are updated in place (each point's .tid is set to
  * its owning track id, or 255). `now_s` is a monotonic timestamp (seconds);
  * `dt` is seconds since the previous step. Emitted (confirmed, in-band) targets
