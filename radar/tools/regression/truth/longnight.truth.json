@@ -1,0 +1,37 @@
+{
+  "fixture": "longnight.bin",
+  "session": "20260717T054529Z",
+  "truth_complete": false,
+  "notes": [
+    "Night, sterile scene, 536 s. A walker goes out 21 -> ~350-370 m and returns; an outbound car reaches 403 m. Recorded on the ghostfix tracker (03e12fd).",
+    "All times are seconds from the first frame of the fixture.",
+    "Walker ground truth from a chain-scan of the RAW points (not tracker output): outbound 248->300 m t=173-206 and 292->347 m t=230-268 (dop +1.4..+1.8, az -2..+2), with a slow bridge 206-230; return trail picked up at 308 m t=346 down to 240 m t=387 (dop -1.4..-1.8). The deployed tracker held him only to 249 m (t=173) and re-acquired at 242 m (t=388).",
+    "gaps: t=268-346 the walker is beyond ~350 m / turning around and his trail is NOT chain-provable in the raw points - that window is deliberately NOT a truth segment (coverage-exempt). Do not add a segment there: no detector can honestly cover it.",
+    "The walker continues walking in after t=387 (240 -> ~21 m by ~t=519); that leg is deliberately NOT in truth either - the late-recording corridor grows a dense junk-mover carpet and the leg was not chain-scanned. Emissions there count toward the (upper-bound) ghost figure only.",
+    "The car is encoded as a STATIC BOX, not a mover: it is real (do not count its emissions as ghosts) but its journey is multi-phase (fast leave ~14 m/s, slow far leg to 403 m t=259-274) and a linear mover segment would mis-gate both binaries.",
+    "truth_complete=false: ghost counts are upper bounds."
+  ],
+  "real_targets": [
+    {
+      "name": "walker",
+      "kind": "mover",
+      "segments": [
+        { "t0": 23.0,  "t1": 173.0, "r0": 19.0,  "r1": 249.0, "az": 0.0 },
+        { "t0": 173.0, "t1": 206.0, "r0": 248.0, "r1": 300.0, "az": 0.0 },
+        { "t0": 206.0, "t1": 230.0, "r0": 300.0, "r1": 292.0, "az": 0.0 },
+        { "t0": 230.0, "t1": 268.0, "r0": 292.0, "r1": 347.0, "az": 0.0 },
+        { "t0": 346.0, "t1": 387.0, "r0": 308.0, "r1": 240.0, "az": 0.0 }
+      ],
+      "gaps": [
+        { "t0": 268.0, "t1": 346.0, "why": "beyond ~350 m / turnaround; trail not chain-provable in raw points" }
+      ]
+    },
+    {
+      "name": "car",
+      "kind": "static",
+      "segments": [
+        { "t0": 198.0, "t1": 275.0, "rmin": 20.0, "rmax": 410.0, "azmin": -4.0, "azmax": 6.0 }
+      ]
+    }
+  ]
+}

@@ -13,6 +13,7 @@
     { "name": "c3",               "file": "c3_check.bin",         "sha256": "c691cb81b9bb9b172374f03ebffc8063edcb8e89980af22a1dbb0337d260fffd", "negative": true,  "truth": "c3_check.truth.json" },
     { "name": "V2DAY",            "file": "V2DAY.bin",            "sha256": "9977c583b824d25e99bf4f631d99dfaa2a9ed3fd31da26507678253eed7b26c8", "negative": false, "truth": "V2DAY.truth.json" },
     { "name": "fix_radar4",       "file": "fix_radar4.bin",       "sha256": "568a215b69df02abefe07b610db324dc22177f080e31f843a0072843660fdc42", "negative": false, "truth": "fix_radar4.truth.json" },
-    { "name": "fix_radar5",       "file": "fix_radar5.bin",       "sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac", "negative": false, "truth": "fix_radar5.truth.json" }
+    { "name": "fix_radar5",       "file": "fix_radar5.bin",       "sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac", "negative": false, "truth": "fix_radar5.truth.json" },
+    { "name": "longnight",        "file": "longnight.bin",        "sha256": "81d0289d9006f11b45f593ed07652f4e7ceac7ff849bea1fb81bf913e9239019", "negative": false, "truth": "longnight.truth.json" }
   ]
 }

@@ -168,6 +168,24 @@
     }
    },
    "fixture_sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac"
+  },
+  "longnight": {
+   "frames": 14103,
+   "e_total": 8617,
+   "e_fr": 0.611,
+   "tids": 29,
+   "occ": 0.5729,
+   "ghosts_fr": 0.227,
+   "mirror_fr": 0.0001,
+   "truth_complete": false,
+   "truth": {
+    "walker": {
+     "coverage": 0.6104,
+     "frag": 13,
+     "first_emit": 1
+    }
+   },
+   "fixture_sha256": "81d0289d9006f11b45f593ed07652f4e7ceac7ff849bea1fb81bf913e9239019"
   }
  }
 }

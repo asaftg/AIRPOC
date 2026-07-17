@@ -26,6 +26,7 @@ recording.
 | V2DAY | (V2 field day) | busy street; scripted walker leaves on boresight (r = -13.8 + 1.635t, az 0-3°) | walker coverage in heavy real traffic; ghost trend (truth incomplete) | 16 dB | day | yes |
 | radar4 | 20260714T033841Z | walker 69→30 m stop-and-go, then recedes 40→52 m at az ≈ -37°; far-clutter ghost bands at 100-180 m | ghost killers must not eat a stop-and-go walker; far clutter must stay dead | 16 dB | night | yes |
 | radar5 | 20260714T034025Z | walker approaching 68→28 m; parked car (idling) at 52-68 m az 35-80°; multipath reflection ghosts — THE ghost scene | the ghost metric itself: reflections and parked-car mirrors must not become tracks | 16 dB | night | yes |
+| longnight | 20260717T054529Z | night, sterile; walker to ~350-370 m + outbound car to 403 m — the far-range truth extender. Walker chain-scanned in the raw points: outbound provable 248→347 m (t=173-268), quiet 268-346 (beyond turnaround), return trail 308→240 m (t=346-387). Deployed tracker held him to 249 m only | patience-detector acceptance: far-band coverage where confirmation floors starve; quiet band beyond 360 m must stay empty | 16 dB | night | yes |
 
 ## What we still need (exact scene scripts)
 
