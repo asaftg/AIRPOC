@@ -97,3 +97,11 @@ documented inputs and outputs** — never by reaching into another module's inte
 Why: the system is many independently-evolving parts. Clear per-module I/O lets each
 be developed, tested, and replaced on its own, and lets the GUI integrate against a
 stable interface even while a module's internals change.
+
+## 8. Docs and plans are written in plain language
+
+Write every doc and plan so a smart engineer from another field follows it on
+first read — say what the thing does and why it matters, not the bit-level how.
+No hyper-deep jargon walls; if a sentence needs a glossary, rewrite it.
+Jargon-heavy internals (register maps, struct layouts, algorithm math) belong in
+code comments next to the code they describe, not in the docs.

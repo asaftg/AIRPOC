@@ -152,6 +152,11 @@ that version, so any layer can be reverted independently.
   `parity_check.py` (C-vs-reference replay validation), `walkout_score.py`
   (max-range walk scorer), `regression/` (fixture conversion + baseline
   fingerprints — see [`docs/TEST_CORPUS.md`](docs/TEST_CORPUS.md)).
+  `track_replay` prints one `K` header (the effective knob state it ran with)
+  then `F`/`C`/`E` lines per frame; `E` lines are the wire (tid, r, az, vr,
+  snr_peak) and are the ONLY lines validation scores. Every tracker change
+  must pass `regression/tracker_gates.py` before deploy — see
+  [`docs/VALIDATION.md`](docs/VALIDATION.md).
 - `v1/`, `v2/` — the locked version packages (above).
 - `docs/` —
   [`HARDWARE`](docs/HARDWARE.md) ·
@@ -161,7 +166,8 @@ that version, so any layer can be reverted independently.
   [`INTEGRATION`](docs/INTEGRATION.md) (GUI/fusion contract) ·
   [`TUNING`](docs/TUNING.md) (parameters + how to tune) ·
   [`ROADMAP`](docs/ROADMAP.md) (versions + status + future work) ·
-  [`TEST_CORPUS`](docs/TEST_CORPUS.md) (regression fixtures) ·
+  [`TEST_CORPUS`](docs/TEST_CORPUS.md) (living catalog of test recordings) ·
+  [`VALIDATION`](docs/VALIDATION.md) (the tracker bench + deploy checklist) ·
   [`SHIP_RUNBOOK_V2`](docs/SHIP_RUNBOOK_V2.md) (V2 ship record + the open
   comb-gate/bar-ladder steps) ·
   [`AG_FW_PLAN`](docs/AG_FW_PLAN.md) (historical fw root-cause analysis) ·
