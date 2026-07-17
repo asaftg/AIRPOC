@@ -63,6 +63,39 @@ are the "why 8-of-12 and not 8-of-20" answers.
 | Emit range / FOV | 500 m / the FOV knob | full radar coverage — no artificial clamp. |
 | Frame rate assumption | 26 Hz (`TRK_FPS`) | converts the coast/park **seconds** knobs to frames; matches the A/G profile. |
 
+## Liar latch (fixed, `LIAR_*` / `WALK_*` in `src/cluster.c`)
+
+Kills the far-clutter ghost class seen on the 2026-07-13 recordings: a
+confirmed track past 100 m that keeps a full 5 s of position history yet whose
+points almost never carry usable doppler (its "motion" comes from the tracker
+re-latching onto nearby junk, not from anything actually moving). A real mover
+past 100 m carries claimed doppler nearly every frame — measured on the T7
+night walker out to 306 m. The measured ghost only touches doppler in short
+soup bursts (0.04–1.4 s of coverage inside a full 5 s window) with wild values
+(1.2–31 m/s frame to frame).
+
+How it works, in plain terms: every frame that brings fresh doppler, the track
+is asked "over the last 5 seconds, how much of your history actually carried a
+doppler story?" Starved-but-claiming frames add a strike, healthy-coverage
+frames remove one, and 13 net strikes **latch** the track as a liar. A latched
+track keeps living and keeps claiming its points — so its junk cannot re-seed
+a fresh ghost — but it never reaches the wire again, and when it dies it
+leaves no graveyard credential for a successor to inherit.
+
+| Number | Value | Why |
+|---|---|---|
+| Judge floor | 100 m (`LIAR_R_MIN`) | below this, multipath makes claimed doppler soup for **real** targets too; near tracks belong to the flood + consistency guard. |
+| History span | ≥ 4 s (`LIAR_SPAN_MIN`) | starvation only counts on a track with a full window — a young track is not judged. |
+| Coverage bar | 1.5 s (`WALK_COV_MIN_S`) | measured: real movers cover most of the 5 s window; the ghosts never reach 1.5 s. |
+| Claim floor | 1.2 m/s median (`WALK_DOP_MIN`) | a radially-quiet target (crosser, stopped) claims ~nothing and is never judged. |
+| Latch | 13 net strikes (`LIAR_KILL`) | ~0.5 s of sustained starvation; hysteresis (strike/pay-back) mirrors the consistency guard. |
+| Latch, not kill | — | killing was tried and **raised** radar4 emissions 43%: each kill spawned a successor-ghost chain and reshuffled emit dedup scene-wide. The latch keeps tracker dynamics bit-identical outside the liar itself (validated: 10 of 12 corpus fixtures emit bit-identically with it on). |
+
+Validation (2026-07-16 corpus): the radar4 far-clutter ghost (450 emitted
+frames at 142–178 m) goes to **zero**; the radar4 walker, the whole T7 night
+walk (turnaround included), V2DAY, T2, T4, T5 and all noise fixtures are
+bit-identical to V2.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,

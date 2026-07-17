@@ -155,6 +155,76 @@
 #define FAR_MARGIN_R0 150.0
 #define DOP_GATE 4.0
 #define DOP_ALPHA 0.2
+/* ---- doppler-walk evidence (2026-07-16): does the claim match the walk? --
+ * A real target's claimed doppler (which on this firmware is its range-rate,
+ * sign verified on T7) integrates to the range displacement it actually
+ * walks. Over the trailing WALK_WIN of MEASURED history:
+ *   D  = trapezoid integral of the per-hit-frame median claimed doppler
+ *        (gaps > WALK_GAP_MAX not integrated; per-frame claims clamped to
+ *        WALK_DOP_CAPK x the window median so one noise-point median cannot
+ *        race D ahead);
+ *   dR = SIGNED net range displacement from time-binned waypoints over the
+ *        SAME covered pairs, each pair's range step winsorized against its
+ *        own claim (an association re-latch jump must not count as motion
+ *        the target never claimed).
+ * Instantaneous versions of this test were tried and measured useless at
+ * long range: |claimed - fitted vr| runs 5-15 m/s on the GENUINE T7 far
+ * human (the fit chases azimuth noise and re-latches), so only windowed
+ * integrals separate real from ghost. Consumers below: the liar kill
+ * (LIAR_*, this commit) and the walk guard (planned re-add). */
+#define WALK_WIN 5.0         /* s    verification window */
+#define WALK_NSEG 6          /*      time bins for the waypoint fit */
+#define WALK_GAP_MAX 0.5     /* s    do not integrate doppler across gaps */
+#define WALK_DOP_MIN 1.2     /* m/s  median-claim floor for the clamp scale */
+#define WALK_D_MIN 3.0       /* m    |integrated D| to be decidable */
+#define WALK_COV_MIN_S 1.5   /* s    integrated (covered) time to be decidable */
+#define WALK_DOP_CAPK 3.0    /*      per-frame |claimed dop| clamp: K*median */
+#define WALK_JUMP_K 3.0      /*      per-pair |dr| cap: K*|claimed dop|*dt ... */
+#define WALK_JUMP_M 0.5      /* m/s  ... + this slack rate */
+#define WALK_TOL_M 1.5       /* m    |dR - D| tolerance at r=0 ... */
+#define WALK_TOL_RK 0.01     /* m/m  ... growing with range (endpoint noise) */
+#define WALK_TOL_K 0.3       /*      ... or this fraction of |D| */
+/* ---- liar latch (2026-07-16): starved claims = far-clutter ghost ----
+ * A real mover past 100 m owns integrable claimed doppler nearly every
+ * frame: the T7 walker's covered time tracks its full window (measured).
+ * The radar4 far-clutter ghost does not: its apparent motion comes from
+ * re-latching, and it only touches doppler in soup bursts — measured
+ * covered time 0.04-1.4 s inside a FULL 5 s window of position history,
+ * with wild claim medians (1.2-31 m/s frame to frame). Strike per evidence
+ * frame (fresh claimed doppler this frame), confirmed tracks past
+ * LIAR_R_MIN only: a full history window (span >= LIAR_SPAN_MIN) whose
+ * integrable doppler coverage stays under WALK_COV_MIN_S while the claims
+ * it does make say "mover" (median >= WALK_DOP_MIN). A healthy-coverage
+ * frame pays one strike back (guard_bad-style hysteresis); LIAR_KILL net
+ * strikes LATCH the track as a liar: it keeps living and claiming its
+ * points (so its junk cannot re-seed a fresh ghost every few seconds) but
+ * it never reaches the wire again, and its coast-death leaves no graveyard
+ * credential — a ghost must not will its emission rights to the next
+ * ghost. Suppression, not death, is deliberate: KILLING these tracks was
+ * tried and measured to RAISE radar4 emissions 43% — every kill spawned a
+ * successor chain and reshuffled emit dedup across the whole scene, while
+ * the latch leaves tracker dynamics bit-identical outside the liar itself.
+ * Never judged below LIAR_R_MIN: near-field multipath makes claimed
+ * doppler soup, and radar4's real walkers live there.
+ * Alternates tried and measured before this test (kept honest):
+ *   - |claimed - fitted vr| EWMA bar (1.5 m/s, fold-corrected): unusable —
+ *     the genuine T7 far human runs 5-15 m/s of fit error at 250 m+,
+ *     indistinguishable from the ghosts by magnitude;
+ *   - claimed-vs-drift DIRECTION contradiction on the walk integrals:
+ *     safe and it kills the re-latch ladder class (T7 tid11033 climbing
+ *     181->257 m at an implied 63 m/s against its own claims), but that
+ *     class is the walk guard's job (planned re-add), and the extra kills
+ *     reshuffled V2DAY over its frozen baseline. Not included. */
+#define LIAR_R_MIN 100.0     /* m    never judge below this (near-field soup) */
+#define LIAR_SPAN_MIN 4.0    /* s    history span that makes starvation chronic */
+#ifndef LIAR_KILL
+#define LIAR_KILL 13         /*      net striking evidence frames -> latch (~0.5 s) */
+#endif
+/* V_FOLD from the shipped A/G cfg (profileCfg idle 3 us + rampEnd 20.5 us =
+ * 23.5 us chirp repeat at 77 GHz): v = lambda/(4*Tc) = 41.4 m/s. Matches the
+ * measured max |doppler| in the corpus (41.416). Re-derive if the cfg chirp
+ * timing ever changes. */
+#define V_FOLD_MPS 41.45
 
 typedef struct {
     int used, tid;
@@ -163,6 +233,7 @@ typedef struct {
     int misses, age, st_frames, hits_total;
     int confirmed;
     double ht[HMAX], hr[HMAX], ha[HMAX]; int hn, hhead;
+    double hd[HMAX];         /* median claimed doppler per hit frame (NAN: none) */
     int hit[WMAX], hitn;
     double sx, sy, sz;           /* half-extents (m), from the frame's points */
     /* motion test */
@@ -173,6 +244,8 @@ typedef struct {
     int jit_ctr, deep_pass;  /* soft-trouble counter; held a FULL streak once */
     double pass_r;           /* range where the latch was last held */
     double dop_err;          /* EWMA |median claimed doppler - fitted vr| */
+    int liar_evid, liar_bad; /* liar latch: fresh-doppler flag, strike counter */
+    int liar;                /* latched ghost: lives on, never emitted */
     double snr_peak;         /* lifetime max claimed SNR (brightness evidence) */
     int snr_unknown;         /* saw a point without SNR (no TLV7) -> fail open */
 } Track;
@@ -267,8 +340,8 @@ static double med(const double *v, int n){
     qsort(a, (size_t)n, sizeof(double), dcmp);
     return (n&1) ? a[n/2] : 0.5*(a[n/2-1]+a[n/2]);
 }
-static void hist_push(Track *t, double tm, double r, double a){
-    t->ht[t->hhead]=tm; t->hr[t->hhead]=r; t->ha[t->hhead]=a;
+static void hist_push(Track *t, double tm, double r, double a, double dop){
+    t->ht[t->hhead]=tm; t->hr[t->hhead]=r; t->ha[t->hhead]=a; t->hd[t->hhead]=dop;
     t->hhead=(t->hhead+1)%HMAX; if(t->hn<HMAX) t->hn++;
 }
 /* copy the in-window tail of the history ring in CHRONOLOGICAL order */
@@ -304,6 +377,72 @@ static void recent_motion(const Track *t, double tnow, double win,
     r1/=k; a1/=k; r2/=k; a2/=k;
     *rad = fabs(r2-r1);
     *cross = fabs((a2-a1)*DEG)*0.5*(r1+r2);
+}
+/* Doppler-walk evidence over the trailing WALK_WIN of MEASURED history (see
+ * WALK_* block above). Returns the number of in-window samples; outputs the
+ * doppler displacement integral D and the SIGNED measured range displacement
+ * dR over EXACTLY the integrated pairs (telescoped per contiguous run — the
+ * two must be compared over the same covered time, or a flickery far track
+ * fails by construction), the covered time t_cov, the waypoint cross-range
+ * net/path (m), and the median |claimed doppler| over covered hit frames. */
+static int walk_metrics(const Track *t, double tnow, double *D, double *dR,
+                        double *t_cov, double *c_net, double *c_path,
+                        double *meddop){
+    double ht[HMAX], hr[HMAX], ha[HMAX], hd[HMAX];
+    int n=0;
+    for(int i=0;i<t->hn;i++){
+        int idx=(t->hhead - t->hn + i + HMAX)%HMAX;      /* oldest -> newest */
+        if(tnow - t->ht[idx] <= WALK_WIN){
+            ht[n]=t->ht[idx]; hr[n]=t->hr[idx]; ha[n]=t->ha[idx]; hd[n]=t->hd[idx]; n++;
+        }
+    }
+    *D=*dR=*t_cov=*c_net=*c_path=0.0; *meddop=0.0;
+    if(n<2) return n;
+    /* doppler displacement integral (trapezoid; no integration across gaps)
+     * + measured range displacement over the SAME pairs. Both robustified:
+     * per-frame claimed doppler is clamped to WALK_DOP_CAPK x the window
+     * median (one 30 m/s noise-point median on a 1.8 m/s walker must not
+     * race D ahead — the integral is mean-like), and each pair's range step
+     * is winsorized against its own claim (an association re-latch jump of
+     * +6 m in one 0.4 s gap, T2 @ 217 m, is measurement artifact, not
+     * motion a ghost gets credit for). */
+    static double ad[HMAX]; int nd=0;
+    for(int i=0;i<n;i++) if(!isnan(hd[i])) ad[nd++]=fabs(hd[i]);
+    if(nd) *meddop=med(ad,nd);
+    double dcap = WALK_DOP_CAPK * (*meddop > WALK_DOP_MIN ? *meddop : WALK_DOP_MIN);
+    for(int i=1;i<n;i++){
+        double sdt=ht[i]-ht[i-1];
+        if(sdt<=0.0 || sdt>WALK_GAP_MAX) continue;
+        if(isnan(hd[i]) || isnan(hd[i-1])) continue;
+        double d0=clampd(hd[i-1],-dcap,dcap), d1=clampd(hd[i],-dcap,dcap);
+        *D += 0.5*(d0+d1)*sdt;
+        {
+            double dmx=fabs(d1)>fabs(d0)?fabs(d1):fabs(d0);
+            double cap=(WALK_JUMP_K*dmx + WALK_JUMP_M)*sdt;
+            *dR += clampd(hr[i]-hr[i-1], -cap, cap);
+        }
+        *t_cov += sdt;
+    }
+    /* signed waypoint displacement (guard_metrics-style time binning) */
+    double tlo=ht[0];
+    double seg_dt=(ht[n-1]-tlo)/WALK_NSEG; if(seg_dt<1e-9) seg_dt=1e-9;
+    double wr[WALK_NSEG+1], wa[WALK_NSEG+1]; int nwp=0;
+    double br=0,ba=0; int bc=0, cur=0;
+    for(int i=0;i<n;i++){
+        int k=(int)((ht[i]-tlo)/seg_dt); if(k>WALK_NSEG-1) k=WALK_NSEG-1;
+        if(k!=cur && bc){
+            wr[nwp]=br/bc; wa[nwp]=ba/bc; nwp++;
+            br=ba=0; bc=0; cur=k;
+        }
+        br+=hr[i]; ba+=ha[i]; bc++;
+    }
+    if(bc){ wr[nwp]=br/bc; wa[nwp]=ba/bc; nwp++; }
+    if(nwp<2) return n;
+    *dR = wr[nwp-1]-wr[0];                                /* SIGNED */
+    *c_net = fabs((wa[nwp-1]-wa[0])*DEG)*0.5*(wr[0]+wr[nwp-1]);
+    for(int i=1;i<nwp;i++)
+        *c_path += fabs((wa[i]-wa[i-1])*DEG)*0.5*(wr[i]+wr[i-1]);
+    return n;
 }
 static void refit_vel(Track *t, double tnow){
     double tt[HMAX], rr[HMAX], aa[HMAX];
@@ -531,8 +670,11 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(smax>t->snr_peak
                && !(now_t < R->flood_until && t->r < FLOOD_R+FLOOD_MARGIN))
                 t->snr_peak=smax;
+            t->liar_evid = nmv_hit>0;          /* fresh claimed doppler this frame */
+            double vd=0.0;
             if(nmv_hit){                       /* doppler self-consistency */
-                double derr=fabs(med(gv,nmv_hit) - t->vr);
+                vd=med(gv,nmv_hit);
+                double derr=fabs(vd - t->vr);
                 t->dop_err=(1-DOP_ALPHA)*t->dop_err + DOP_ALPHA*derr;
             }
             /* half-extents from the frame's points (for the wire box) */
@@ -547,7 +689,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             t->sx=clampd((mxx-mnx)/2, MIN_SIZE_M, MAX_SIZE_M);
             t->sy=clampd((mxy-mny)/2, MIN_SIZE_M, MAX_SIZE_M);
             t->sz=clampd((mxz-mnz)/2, MIN_SIZE_M, MAX_SIZE_M);
-            hist_push(t, now_t, t->r, t->az);
+            hist_push(t, now_t, t->r, t->az, nmv_hit>0 ? vd : (double)NAN);
             refit_vel(t, now_t);
             hit_push(t, 1); t->misses=0; t->age++; t->hits_total++;
         } else {
@@ -560,6 +702,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             } else { t->r=PR[ti]; t->az=PAZ[ti]; }
             hit_push(t, 0); t->misses++; t->age++;
             t->mv_ewma*=0.85; if(t->mv_ewma<ST_MV_LO) t->st_frames++;
+            t->liar_evid=0;
         }
     }
     /* ---- motion test (range-scaled, NON-latching) ---- */
@@ -636,6 +779,26 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         if(t->guard_bad>=GUARD_UNLATCH || t->jit_ctr>=GUARD_UNLATCH)
             t->guard_pass=0;
     }
+    /* ---- liar latch: starved doppler claims past LIAR_R_MIN (see LIAR_*) ---- */
+    for(int oi=0;oi<R->nord;oi++){
+        Track *t=&R->tracks[R->ord[oi]];
+        if(!t->confirmed || !t->liar_evid) continue;   /* fresh doppler only */
+        if(t->r<=LIAR_R_MIN) continue;                 /* near-field: not judged */
+        double D, dR, tcov, c_net, c_path, meddop;
+        int nw = walk_metrics(t, now_t, &D, &dR, &tcov, &c_net, &c_path, &meddop);
+        if(nw<GUARD_MIN_N) continue;                   /* window too thin: hold */
+        double span=0.0;
+        {
+            double ht[HMAX], hr[HMAX], ha[HMAX];
+            int n = hist_window(t, now_t, WALK_WIN, ht, hr, ha);
+            if(n>=2) span = ht[n-1]-ht[0];
+        }
+        if(span>=LIAR_SPAN_MIN && tcov<WALK_COV_MIN_S && meddop>=WALK_DOP_MIN)
+            t->liar_bad++;                             /* starved claims */
+        else if(tcov>=WALK_COV_MIN_S && t->liar_bad>0)
+            t->liar_bad--;                             /* guard_bad hysteresis */
+        if(t->liar_bad>=LIAR_KILL) t->liar=1;          /* latch: off the wire */
+    }
     /* ---- lifecycle + confirmation (python order) ---- */
     for(int oi=0;oi<R->nord;){
         Track *t=&R->tracks[R->ord[oi]];
@@ -645,7 +808,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                              && (now_t - t->last_moved_t) <= R->park_s;
         if(t->confirmed && t->misses>coast_frames){
             if(!(moved_recently && t->misses<=park_frames)){
-                if(t->guard_pass && R->ngrave<GRAVE_MAX){
+                if(t->guard_pass && !t->liar && R->ngrave<GRAVE_MAX){
                     Grave *g=&R->grave[R->ngrave++];
                     g->t=now_t; g->r=t->r; g->az=t->az; g->snr_peak=t->snr_peak;
                 }
@@ -695,22 +858,22 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     }
     /* ---- seed from unclaimed MOVING points ---- */
     if(m){
-        static double sr[RADAR_MAX_POINTS], sa[RADAR_MAX_POINTS], se[RADAR_MAX_POINTS], ss[RADAR_MAX_POINTS];
+        static double sr[RADAR_MAX_POINTS], sa[RADAR_MAX_POINTS], se[RADAR_MAX_POINTS], ss[RADAR_MAX_POINTS], sd[RADAR_MAX_POINTS];
         static int sk[RADAR_MAX_POINTS]; int ns=0;
         for(int i=0;i<m;i++) if(owner[i]<0 && ismv[i]){
-            sr[ns]=rs[i]; sa[ns]=azs[i]; se[ns]=els[i]; ss[ns]=snrs[i]; sk[ns]=snrok[i]; ns++;
+            sr[ns]=rs[i]; sa[ns]=azs[i]; se[ns]=els[i]; ss[ns]=snrs[i]; sd[ns]=dops[i]; sk[ns]=snrok[i]; ns++;
         }
         if(ns){
             static int lbl[RADAR_MAX_POINTS]; int k=cluster_pts(sr,sa,ns,SEED_LINK_R,SEED_LINK_CROSS,lbl);
             for(int c=0;c<k;c++){
                 double sumr=0,suma=0,smax=-1e9; int cnt=0, any_unk=0;
-                static double eb[RADAR_MAX_POINTS]; int ne=0;
+                static double eb[RADAR_MAX_POINTS], db[RADAR_MAX_POINTS]; int ne=0;
                 for(int i=0;i<ns;i++) if(lbl[i]==c){
-                    sumr+=sr[i]; suma+=sa[i]; eb[ne++]=se[i]; cnt++;
+                    sumr+=sr[i]; suma+=sa[i]; db[ne]=sd[i]; eb[ne++]=se[i]; cnt++;
                     if(sk[i]){ if(ss[i]>smax) smax=ss[i]; } else any_unk=1;
                 }
                 if(cnt<R->min_pts) continue;
-                double crr=sumr/cnt, caz=suma/cnt, cel=med(eb,ne);
+                double crr=sumr/cnt, caz=suma/cnt, cel=med(eb,ne), cdop=med(db,ne);
                 int guarded=0;
                 for(int oi=0;oi<R->nord;oi++){
                     Track *t=&R->tracks[R->ord[oi]];
@@ -740,7 +903,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                         break;
                     }
                 }
-                hist_push(t,now_t,crr,caz); hit_push(t,1); t->age=1; t->hits_total=1;
+                hist_push(t,now_t,crr,caz,cdop); hit_push(t,1); t->age=1; t->hits_total=1;
                 R->ord[R->nord++]=slot;
             }
         }
@@ -758,6 +921,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         int ti=R->ord[oi]; Track *t=&R->tracks[ti];
         if(!t->confirmed) continue;
         if(!t->guard_pass) continue;            /* no positive coherence yet */
+        if(t->liar) continue;                   /* latched ghost: never emitted */
         {
             double req = snr_req(t->r);
             double ramp = (t->r - FAR_MARGIN_R0) / (FAINT_R - FAR_MARGIN_R0);
