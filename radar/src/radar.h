@@ -38,6 +38,11 @@ typedef struct {
     float sx, sy, sz;             /* half-extents, m */
     float conf;                   /* 0..1 */
     int   num_points;             /* hits accumulated */
+    int   suspect;                /* 1 = standing in a stronger target's
+                                     co-range co-velocity shadow (possible
+                                     antenna-sidelobe copy, not yet held long
+                                     enough to suppress) — fusion should
+                                     treat with caution */
 } RadarTarget;
 
 /* Per-frame timing the chip measures and reports in the stats TLV (type 6,

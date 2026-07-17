@@ -47,12 +47,21 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
   num_points, num_targets,
   points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
-  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,class}, ...] }
+  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,sus,class}, ...] }
 ```
 Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres (`z` carries
 elevation). `snr` is the per-point SNR in dB (live; `null` only if a firmware
 without SideInfo is flashed). `class` is always `radar_detection`. `tid` is a
 stable per-target id.
+
+`sus` (0/1, added 2026-07-16): **suspected antenna-sidelobe copy.** The target
+currently sits at the same range with the same signed speed as a stronger
+emitted target, well separated in azimuth — the signature of a reflection.
+It is still published (a genuine second target crossing another's range looks
+the same for a second or two), but consumers that act on targets (gimbal cueing,
+fusion) should treat a `sus:1` box with caution until the flag clears. Copies
+that hold this signature continuously for several seconds stop being published
+altogether.
 
 > Note: azimuth/elevation are the radar's own frame — the radar↔EO calibration
 > offsets are applied by the GUI/fusion, not baked into the wire.

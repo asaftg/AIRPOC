@@ -225,6 +225,37 @@
  * measured max |doppler| in the corpus (41.416). Re-derive if the cfg chirp
  * timing ever changes. */
 #define V_FOLD_MPS 41.45
+/* ---- reflection-copy suppressor (2026-07-16): sustained co-range shadow --
+ * An antenna sidelobe shows a bright mover a SECOND time: same range (bin-
+ * identical lockstep), same signed doppler, azimuth 10-70 deg off (measured
+ * radar5 — the garage walker and car each drag such copies). At the emit
+ * stage, a candidate standing in a stronger emitted target's co-range +
+ * co-velocity shadow is put on watch. Time is what convicts: real tracks
+ * crossing each other's range stay co-ranged ~1-2 s (measured on the T1/T2
+ * crossing pairs — naive same-frame suppression wrongly ate 94/29 of their
+ * frames), while a reflection shadows its source for its whole life, so
+ * only a shadow held >= REFL_SHADOW_S suppresses. Below that the candidate
+ * still emits, flagged suspect on the wire ("sus":1) so fusion can hold
+ * fire without the radar hiding anything.
+ * Bookkeeping runs for EVERY confirmed track, not just emit candidates: a
+ * copy shadows its source while it is still earning emission (measured
+ * radar5: the mirror is co-ranged for seconds before its first emit), so
+ * by the time it asks for the wire its sentence is already served. The
+ * shadow clock only resets on a DECISIVE separation (>= REFL_CLEAR_S
+ * continuously clear): single-frame match blips from measurement noise
+ * must not launder a copy, while a genuine crosser separates in range and
+ * stays separated. The velocity match is SIGNED and wrap-aware
+ * (V_FOLD_MPS): V2DAY's opposite-direction vehicle pairs (-4.3 vs
+ * +4.4 m/s) meet at the same range but never match. The separation floor
+ * keeps this out of the spatial dedup's territory: a shadow only counts
+ * when the copy is FAR in cross-range yet glued in range+velocity —
+ * physically a sidelobe, never a split cluster of the same body. */
+#define REFL_R 5.0           /* m    co-range gate |S.r - C.r| */
+#define REFL_DV 1.5          /* m/s  SIGNED co-velocity gate (wrap-aware) */
+#define REFL_SEP_M 4.5       /* m    min cross-range separation to be a copy ... */
+#define REFL_SEP_DEG 10.0    /* deg  ... or this azimuth arc, whichever larger */
+#define REFL_SHADOW_S 2.5    /* s    sustained shadow that convicts a copy */
+#define REFL_CLEAR_S 1.0     /* s    continuous clear that resets the clock */
 
 typedef struct {
     int used, tid;
@@ -246,6 +277,12 @@ typedef struct {
     double dop_err;          /* EWMA |median claimed doppler - fitted vr| */
     int liar_evid, liar_bad; /* liar latch: fresh-doppler flag, strike counter */
     int liar;                /* latched ghost: lives on, never emitted */
+    double shadow_s;         /* time spent in a stronger target's co-range
+                                co-velocity shadow (reflection suppressor) */
+    double clear_s;          /* continuous time out of any shadow */
+    int breeder;             /* a copy already served full time in THIS
+                                track's shadow: proven mirror source, its
+                                later copies convict instantly */
     double snr_peak;         /* lifetime max claimed SNR (brightness evidence) */
     int snr_unknown;         /* saw a point without SNR (no TLV7) -> fail open */
 } Track;
@@ -946,6 +983,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(js<ks){ci[j+1]=ci[j];j--;}else break; } ci[j+1]=key;
     }
     int nout=0;
+    static Track *etrk[RADAR_MAX_TARGETS];        /* tracks behind out[] */
     for(int i=0;i<ncand && nout<max_out;i++){
         Track *t=&R->tracks[ci[i]]; int dup=0;
         /* spatial dedup against already-emitted (recover r,az from x,y) */
@@ -955,6 +993,10 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(cross<R->dedup_cross && fabs(er-t->r)<DEDUP_R){ dup=1; break; }
         }
         if(dup) continue;
+        /* reflection-copy suppressor (see REFL_* block): the shadow clock
+         * is maintained below for every confirmed track; here it decides */
+        if(t->shadow_s >= REFL_SHADOW_S) continue;      /* convicted copy */
+        int suspect = t->shadow_s > 0.0;        /* on watch: emit, flagged */
         double rr=t->r, a=t->az*DEG, e=t->el*DEG, rh=rr*cos(e);
         double vrad=t->vr, vaz=t->va*DEG;
         RadarTarget *o=&out[nout++];
@@ -966,6 +1008,46 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         o->sx=(float)t->sx; o->sy=(float)t->sy; o->sz=(float)t->sz;
         double conf=t->hits_total/10.0; if(conf>1.0)conf=1.0;
         o->conf=(float)conf; o->num_points=t->hits_total;
+        o->suspect=suspect;
+        etrk[nout-1]=t;
+    }
+    /* ---- reflection-shadow bookkeeping: every confirmed track vs the
+     * frame's emitted set (see REFL_* block). Runs after emission so a
+     * copy serves its sentence while still earning its first emit. ---- */
+    for(int oi=0;oi<R->nord;oi++){
+        Track *t=&R->tracks[R->ord[oi]];
+        if(!t->confirmed) continue;
+        double tstr = t->mv_ewma + 0.001*(t->age<500?t->age:500);
+        int shadowed=0; Track *src=NULL;
+        for(int e=0;e<nout;e++){
+            Track *s=etrk[e];
+            if(s==t) continue;
+            double sstr = s->mv_ewma + 0.001*(s->age<500?s->age:500);
+            if(sstr <= tstr) continue;          /* only a STRONGER source */
+            if(fabs(s->r - t->r) >= REFL_R) continue;
+            double dv=1e18;                     /* signed, wrap-aware */
+            for(int k=-2;k<=2;k++){
+                double d=fabs(s->vr - t->vr + 2.0*k*V_FOLD_MPS);
+                if(d<dv) dv=d;
+            }
+            if(dv >= REFL_DV) continue;
+            double sep=fabs((s->az - t->az)*DEG)*0.5*(s->r + t->r);
+            double sep_min=REFL_SEP_DEG*DEG*0.5*(s->r + t->r);
+            if(sep_min < REFL_SEP_M) sep_min = REFL_SEP_M;
+            if(sep > sep_min){ shadowed=1; src=s; break; }
+        }
+        if(shadowed){
+            t->shadow_s += dt; t->clear_s = 0.0;
+            /* proven mirror-breeder source: its later copies convict on
+             * sight (each ghost episode is shorter than the dwell, but the
+             * SOURCE geometry already served full time) */
+            if(src->breeder && t->shadow_s < REFL_SHADOW_S)
+                t->shadow_s = REFL_SHADOW_S;
+            if(t->shadow_s >= REFL_SHADOW_S) src->breeder = 1;
+        } else if(t->shadow_s > 0.0){
+            t->clear_s += dt;                   /* decisive separation only */
+            if(t->clear_s >= REFL_CLEAR_S){ t->shadow_s = 0.0; t->clear_s = 0.0; }
+        }
     }
     return nout;
 }

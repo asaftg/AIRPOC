@@ -96,6 +96,39 @@ frames at 142–178 m) goes to **zero**; the radar4 walker, the whole T7 night
 walk (turnaround included), V2DAY, T2, T4, T5 and all noise fixtures are
 bit-identical to V2.
 
+## Reflection-copy suppressor (fixed, `REFL_*` in `src/cluster.c`)
+
+Antenna sidelobes show a bright mover a **second time**: same range (lockstep,
+bin-identical), same signed speed, 10–70° away in azimuth (measured on the
+2026-07-13 garage recording — the walker and the parked car each drag such
+copies). The suppressor watches every confirmed track for this signature
+against the frame's stronger emitted targets and lets **time** convict:
+
+- a genuine second target crossing another's range looks identical for a
+  moment — measured on the T1/T2 crossing pairs it stays co-ranged ~1–2 s,
+  and naive same-frame suppression wrongly ate 94/29 of their frames;
+- a reflection shadows its source for its **whole life**.
+
+While a track is in a shadow but not yet convicted, it **still emits**, marked
+`"sus":1` on the wire (fusion can hold fire; the radar hides nothing). A shadow
+held ≥ 2.5 s convicts: the copy stops being published (the track keeps living
+so its junk cannot re-seed). Once one copy has served full time in a source's
+shadow, the source is a **proven mirror-breeder**: its later copies convict on
+sight — each ghost episode is shorter than the dwell, but the source geometry
+already proved itself (this is what catches the short-lived copy chains).
+
+| Number | Value | Why |
+|---|---|---|
+| Co-range gate | 5 m (`REFL_R`) | measured copies are range-bin-identical to the source. |
+| Co-velocity gate | 1.5 m/s SIGNED, wrap-aware (`REFL_DV`) | V2DAY's opposite-direction pairs (−4.3 vs +4.4 m/s) meet in range but never match — sign protects them. |
+| Separation floor | max(4.5 m, 10° arc) (`REFL_SEP_M/_DEG`) | closer than this is the spatial dedup's territory (one body split in two); a shadow is far in azimuth yet glued in range+velocity. |
+| Conviction dwell | 2.5 s (`REFL_SHADOW_S`) | T1/T2 real crossing pairs max out at ~1.7 s of shadow (measured); the T1 slowest real shadow-dweller (3.46 s) emits nothing between 2.5 and 3.46 s, so 2.5 s cuts deeper into the mirrors at zero real cost. |
+| Clear reset | 1.0 s continuous (`REFL_CLEAR_S`) | single-frame match blips (measurement noise) must not launder a copy; a real crosser separates and STAYS separated. |
+
+Validation (2026-07-16 corpus): radar5 mirror population 453 → 137 emitted
+frames (walker and car retained to the frame); T1/T2 crossing pairs zero
+suppressed frames; T7/T4/V2DAY/T5 bit-identical.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,
