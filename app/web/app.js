@@ -293,9 +293,9 @@
   RADARC.forEach(function (c) {
     $("rd-" + c.key).oninput = function () { $("rv-" + c.key).textContent = c.fmt(parseFloat(this.value)); rcTouch = Date.now(); ctl("radar_" + c.key + "=" + this.value); };
   });
-  /* (Removed the auto radar_fov=60 send on page load — the console must not push ANY radar
-   * control unless the operator moves a slider. It was overriding the radar's FOV on every
-   * reload. The FOV slider still seeds from the radar's live value via pollRstats.) */
+  /* On load the console pushes the operator's chosen radar defaults (FOV ±60°, EL ±20°) — see the
+   * load-defaults block below. Between reloads the sliders seed from the radar's live value via
+   * pollRstats; the rcTouch guard keeps a readback from fighting an active drag or the load push. */
   function pollRstats() {
     if (!$("dev").classList.contains("open")) return;   /* only the DEV panel shows these — don't poll when it's closed */
     fetch(API.rstats).then(function (r) { return r.json(); }).then(function (d) {
@@ -930,7 +930,7 @@
   }
 
   /* ═══════════════════════ RECORDER / REPLAY ═══════════════════════ */
-  var TAGVOCAB = ["night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
+  var TAGVOCAB = ["filter", "night", "day", "human", "vehicle", "drone", "long-range", "short-range", "radar", "tracking", "fusion", "illum", "test", "bug", "demo", "calibration"];
   var recState = null, pendingSid = null, libSel = {}, libTagFilter = {}, libSessions = [], handledSids = {};
   var healing = false, toastTimer = null;
 
@@ -1117,7 +1117,7 @@
     if (radarES) { radarES.close(); radarES = null; }
     if (detES)   { detES.close();   detES = null; }
     $("video").src = BLANK;
-    buildTagFilter(); loadLibrary();
+    loadLibrary();   /* loadLibrary → renderLibrary rebuilds the tag-filter bar from live data */
   };
   $("lib-close").onclick = function () {   /* EXIT to live -> guarantee a clean live state */
     /* Cancel any in-flight replay open (its late callback would flip replaying=true over the live
@@ -1133,9 +1133,24 @@
     openRadarStream(); openDetStream();
   };
   $("lib-q").oninput = debounce(loadLibrary, 250);
-  function buildTagFilter() {
-    var w = $("lib-tagfilter"); if (w.childElementCount) return;
-    TAGVOCAB.forEach(function (t) { var c = document.createElement("span"); c.className = "tagchip"; c.textContent = t; c.onclick = function () { c.classList.toggle("on"); libTagFilter[t] = c.classList.contains("on"); loadLibrary(); }; w.appendChild(c); });
+  /* The filter bar = the common vocab PLUS every custom tag actually used across the library, so
+   * operator-added tags become filterable (they weren't before — the bar was TAGVOCAB-only and
+   * built once). Rebuilt on each library load; selection lives in libTagFilter so it survives the
+   * rebuild, and a filter for a tag that no longer exists anywhere is dropped. */
+  function renderTagFilter(sessions) {
+    var used = {};
+    (sessions || []).forEach(function (s) { (s.tags || []).forEach(function (t) { used[t] = 1; }); });
+    var custom = Object.keys(used).filter(function (t) { return TAGVOCAB.indexOf(t) < 0; }).sort();
+    var vocab = TAGVOCAB.concat(custom);
+    Object.keys(libTagFilter).forEach(function (t) { if (vocab.indexOf(t) < 0) delete libTagFilter[t]; });
+    var w = $("lib-tagfilter"); w.innerHTML = "";
+    vocab.forEach(function (t) {
+      var c = document.createElement("span");
+      c.className = "tagchip" + (libTagFilter[t] ? " on" : "") + (custom.indexOf(t) >= 0 ? " custom" : "");
+      c.textContent = t;
+      c.onclick = function () { c.classList.toggle("on"); libTagFilter[t] = c.classList.contains("on"); loadLibrary(); };
+      w.appendChild(c);
+    });
   }
   function loadLibrary() {
     /* Tag filtering is done CLIENT-SIDE in renderLibrary (every session already carries its
@@ -1155,6 +1170,7 @@
     }
     var g = $("lib-grid"); g.innerHTML = "";
     var all = d.sessions || [];
+    renderTagFilter(all);   /* refresh the filter bar from every tag in use, incl. custom ones */
     var active = Object.keys(libTagFilter).filter(function (t) { return libTagFilter[t]; });   /* AND-match the selected tags */
     var sessions = active.length ? all.filter(function (s) { var st = s.tags || []; return active.every(function (t) { return st.indexOf(t) >= 0; }); }) : all;
     libSessions = sessions;   /* the shown set — delete/offload-all act on what's filtered */
@@ -1509,12 +1525,17 @@
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();
-  /* Console-enforced sensor defaults on load (operator request): EO MEDIAN off, detector MOTION
-   * on. Push once the feeds are up; set the touch guards so the /stats readback doesn't revert
-   * the button before the feed/detector applies the change. */
+  /* Console-enforced defaults on load (operator request): EO MEDIAN off + DENOISE off, detector
+   * MOTION on, radar FOV ±60° + EL ±20°. Push once the feeds are up; set the touch guards so the
+   * /stats readback doesn't revert the control before the feed/daemon applies the change. */
   setTimeout(function () {
     if (replaying) return;
-    ispTouch = Date.now(); ctl("median=0"); var md = document.querySelector('#md-btns [data-md="0"]'); if (md) setSeg("md-btns", md);
+    ispTouch = Date.now();
+    ctl("median=0");  var md = document.querySelector('#md-btns [data-md="0"]'); if (md) setSeg("md-btns", md);
+    ctl("denoise=0"); var dn = document.querySelector('#dn-btns [data-dn="0"]'); if (dn) setSeg("dn-btns", dn); $("o-dn").textContent = "";
     dtTouch = Date.now(); ctl("det_motion=1"); var mb = document.querySelector('#mot-btns [data-mot="1"]'); if (mb) setSeg("mot-btns", mb);
+    rcTouch = Date.now();
+    ctl("radar_fov=60");   $("rd-fov").value = 60;   $("rv-fov").textContent = "60°";
+    ctl("radar_elmax=20"); $("rd-elmax").value = 20; $("rv-elmax").textContent = "20°";
   }, 1000);
 })();

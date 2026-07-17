@@ -311,6 +311,7 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
 .tagchip{font-size:10px;letter-spacing:.5px;color:var(--muted);background:var(--sub);border:1px solid var(--bd2);
   border-radius:10px;padding:1px 8px;cursor:pointer;user-select:none}
 .tagchip.on{color:var(--amber);border-color:var(--amber);background:#3a2c0f}
+.tagchip.custom{border-style:dashed}   /* operator-added tags, to tell them from the common vocab */
 
 /* ── save dialog modal ── */
 #recdlg{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center}
