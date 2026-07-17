@@ -2,34 +2,137 @@
  *
  * Reads a point-cloud fixture (repeated records of:
  *   double t_seconds LE, int32 n, then n * 5 float32 {range, az, el, doppler, snr})
- * and runs cluster_step() over it with the shipping defaults, printing per
- * frame the CONFIRMED tracks and the EMITTED targets:
+ * and runs cluster_step() over it, printing per frame the CONFIRMED tracks and
+ * the EMITTED targets:
  *
+ *   K eps=.. minpts=.. speed=.. snrmin=.. fov=.. elmax=.. doppler=.. confirm=.. coast=.. park=..
  *   F <frame_idx> <t>
- *   C <tid> <r_m> <az_deg>        (one per confirmed track, list order)
- *   E <tid> <r_m> <az_deg>        (one per emitted target)
+ *   C <tid> <r_m> <az_deg>                          (one per confirmed track, list order)
+ *   E <tid> <r_m> <az_deg> <vr_mps> <snr_peak_db>   (one per emitted target)
  *
- * Used by parity_check.py to diff track life/death and positions against the
- * Python reference (radar/tools/radar_tracker.py) frame by frame.
+ * The single K header echoes the EFFECTIVE knob state (after clamping), so a
+ * replay log always says what it actually ran with. E lines are the wire — the
+ * subset of confirmed tracks the daemon would emit. Validation must score E
+ * lines, never C lines (see radar/docs/VALIDATION.md).
+ *
+ * Knobs — all 10 live tracker knobs can be overridden, two equivalent ways:
+ *   argv:  ./track_replay points.bin snrmin=18 confirm=4
+ *   env:   REPLAY_SNRMIN=18 REPLAY_CONFIRM=4 ./track_replay points.bin
+ * argv wins over env; anything not given uses the compiled default. The knob
+ * names are: eps minpts speed snrmin fov elmax doppler confirm coast park —
+ * they map 1:1 onto cluster_set_dbscan / cluster_set_gates / cluster_set_track.
+ * Backward compat: a bare number as argv[2] is still elmax_deg.
+ *
+ * Used by parity_check.py (frame diff vs the Python reference) and by
+ * regression/tracker_gates.py (the validation bench).
  *
  * Build:  make -C radar/tools track_replay
- * Run:    ./track_replay points.bin [elmax_deg]
+ * Run:    ./track_replay points.bin [elmax_deg] [knob=value ...]
  */
 #define CLUSTER_INTROSPECT
 #include "../src/cluster.c"     /* private access to track state (bench tool) */
 #include <stdio.h>
+#include <ctype.h>
+
+/* ---- knob plumbing ------------------------------------------------------ */
+typedef struct { const char *name; double val; } Knob;
+enum { K_EPS, K_MINPTS, K_SPEED, K_SNRMIN, K_FOV, K_ELMAX, K_DOP,
+       K_CONFIRM, K_COAST, K_PARK, K_N };
+
+static Knob knobs[K_N] = {
+    [K_EPS]     = { "eps",     CLUSTER_DEFAULT_EPS_M   },
+    [K_MINPTS]  = { "minpts",  CLUSTER_DEFAULT_MIN_PTS },
+    [K_SPEED]   = { "speed",   CLUSTER_DEFAULT_SPEED   },
+    [K_SNRMIN]  = { "snrmin",  CLUSTER_DEFAULT_SNR     },
+    [K_FOV]     = { "fov",     CLUSTER_DEFAULT_FOV     },
+    [K_ELMAX]   = { "elmax",   CLUSTER_DEFAULT_ELMAX   },
+    [K_DOP]     = { "doppler", CLUSTER_DEFAULT_DOP     },
+    [K_CONFIRM] = { "confirm", CLUSTER_DEFAULT_CONFIRM },
+    [K_COAST]   = { "coast",   CLUSTER_DEFAULT_COAST_S },
+    [K_PARK]    = { "park",    CLUSTER_DEFAULT_PARK_S  },
+};
+
+static int knob_index(const char *name, size_t len)
+{
+    for (int i = 0; i < K_N; i++)
+        if (strlen(knobs[i].name) == len && !strncmp(knobs[i].name, name, len))
+            return i;
+    return -1;
+}
+
+/* env REPLAY_EPS / REPLAY_MINPTS / ... (uppercased knob name) */
+static void knobs_from_env(void)
+{
+    for (int i = 0; i < K_N; i++) {
+        char var[32] = "REPLAY_";
+        size_t off = strlen(var);
+        for (const char *p = knobs[i].name; *p && off < sizeof(var) - 1; p++)
+            var[off++] = (char)toupper((unsigned char)*p);
+        var[off] = 0;
+        const char *v = getenv(var);
+        if (v && *v) knobs[i].val = atof(v);
+    }
+}
+
+/* "name=value" argv token; returns 0 if not a knob assignment */
+static int knob_from_arg(const char *arg)
+{
+    const char *eq = strchr(arg, '=');
+    if (!eq || eq == arg) return 0;
+    int i = knob_index(arg, (size_t)(eq - arg));
+    if (i < 0) return 0;
+    knobs[i].val = atof(eq + 1);
+    return 1;
+}
+
+/* find the live Track behind an emitted tid (private access via the include;
+ * cluster.c's API is untouched) */
+static const Track *find_track(const RadarClusterer *R, int tid)
+{
+    for (int oi = 0; oi < R->nord; oi++) {
+        const Track *t = &R->tracks[R->ord[oi]];
+        if (t->tid == tid) return t;
+    }
+    return NULL;
+}
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: %s points.bin [elmax_deg]\n", argv[0]); return 2; }
-    double elmax = (argc > 2) ? atof(argv[2]) : CLUSTER_DEFAULT_ELMAX;
+    if (argc < 2) {
+        fprintf(stderr,
+            "usage: %s points.bin [elmax_deg] [knob=value ...]\n"
+            "knobs: eps minpts speed snrmin fov elmax doppler confirm coast park\n"
+            "env:   REPLAY_<KNOB>=value (argv wins)\n", argv[0]);
+        return 2;
+    }
+    knobs_from_env();
+    for (int a = 2; a < argc; a++) {
+        if (knob_from_arg(argv[a])) continue;
+        if (a == 2 && strchr("0123456789.-+", argv[a][0])) {  /* legacy [elmax] */
+            knobs[K_ELMAX].val = atof(argv[a]);
+            continue;
+        }
+        fprintf(stderr, "unknown arg: %s\n", argv[a]);
+        return 2;
+    }
+
     FILE *f = fopen(argv[1], "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", argv[1]); return 2; }
 
     RadarClusterer *c = cluster_new();
     if (!c) { fclose(f); return 2; }
-    cluster_set_gates(c, CLUSTER_DEFAULT_SPEED, CLUSTER_DEFAULT_SNR,
-                      CLUSTER_DEFAULT_FOV, elmax, CLUSTER_DEFAULT_DOP);
+    cluster_set_dbscan(c, knobs[K_EPS].val, (int)knobs[K_MINPTS].val);
+    cluster_set_gates(c, knobs[K_SPEED].val, knobs[K_SNRMIN].val,
+                      knobs[K_FOV].val, knobs[K_ELMAX].val, knobs[K_DOP].val);
+    cluster_set_track(c, (int)knobs[K_CONFIRM].val, knobs[K_COAST].val,
+                      knobs[K_PARK].val);
+
+    /* echo the EFFECTIVE state (read back after clamping) — a replay log must
+     * say what it actually ran with, not what was asked for */
+    printf("K eps=%.3f minpts=%d speed=%.3f snrmin=%.3f fov=%.3f elmax=%.3f "
+           "doppler=%.3f confirm=%d coast=%.3f park=%.3f\n",
+           c->dedup_cross, c->min_pts, c->vmin, c->snr_mv, c->fov_half,
+           c->el_max, c->merge_dv, c->conf_m, c->coast_s, c->park_s);
 
     static RadarPoint pts[RADAR_MAX_POINTS];
     static RadarTarget tg[RADAR_MAX_TARGETS];
@@ -86,7 +189,9 @@ int main(int argc, char **argv)
             printf("C %d %.6f %.6f\n", ctid[i], crr[i], caz[i]);
         for (int i = 0; i < nt; i++) {
             double r = hypot(tg[i].x, tg[i].y), az = atan2(tg[i].x, tg[i].y) / DEG;
-            printf("E %d %.6f %.6f\n", tg[i].tid, r, az);
+            const Track *tk = find_track(c, tg[i].tid);
+            printf("E %d %.6f %.6f %.3f %.1f\n", tg[i].tid, r, az,
+                   tk ? tk->vr : 0.0, tk ? tk->snr_peak : 0.0);
         }
         frame++;
     }

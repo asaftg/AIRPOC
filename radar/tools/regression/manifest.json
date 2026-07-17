@@ -1,0 +1,18 @@
+{
+  "comment": "Tracker-bench fixture manifest. Every fixture the bench runs, with its pinned sha256. Fixtures are NOT committed (large binaries) - see radar/docs/TEST_CORPUS.md for what each one is and how to regenerate it. A new recording joins the bench by getting a row here plus a truth sidecar in truth/.",
+  "fixtures": [
+    { "name": "T1",               "file": "T1.bin",               "sha256": "e80f6a45eb86e562e25f14f4b7fe0a4db2ee758046988f0f748843ebb61a242d", "negative": false, "truth": null },
+    { "name": "T2",               "file": "T2.bin",               "sha256": "cd740b8275161d06cc82919a50cfae429f9bc7e5c72da2b6fe0af5549cd0179a", "negative": false, "truth": null },
+    { "name": "T3",               "file": "T3.bin",               "sha256": "d7645f3f52e84759ef1a36e57676e7b20d3cf935597cf0a7446875d4a529e99c", "negative": false, "truth": null },
+    { "name": "T4",               "file": "T4.bin",               "sha256": "3d3b94996639f0aaf19239e2c16178110c9d304b85f404e367ea1a036f7a2058", "negative": false, "truth": null },
+    { "name": "T5",               "file": "T5.bin",               "sha256": "12dfa95b29d8196db4d5b3eff1112b1d432c114f5ca7839296836812eb8969c5", "negative": false, "truth": null },
+    { "name": "T6",               "file": "T6_wander_garage.bin", "sha256": "50776dcdc7b66d07d2dd2e9fb4c8349f65992288496b2a3e194fa15163488522", "negative": true,  "truth": "T6_wander_garage.truth.json" },
+    { "name": "T7",               "file": "T7_human_16db.bin",    "sha256": "5fc2dbd8ba54b83fe1b92332ef1967915e595a480814938a115d1b27a2b7f5b1", "negative": false, "truth": "T7_human_16db.truth.json" },
+    { "name": "AGV1_garage",      "file": "AGV1_garage.bin",      "sha256": "8d6edd835f11d90f6d0fe9cc999536b35af73599862dfceaad8c00ded322baef", "negative": true,  "truth": "AGV1_garage.truth.json" },
+    { "name": "c16",              "file": "c16_check.bin",        "sha256": "c10348be11c5a5e719aa0bbfd05e56b5a9f6ed22bb5c0f116e067712eacce8b1", "negative": true,  "truth": "c16_check.truth.json" },
+    { "name": "c3",               "file": "c3_check.bin",         "sha256": "c691cb81b9bb9b172374f03ebffc8063edcb8e89980af22a1dbb0337d260fffd", "negative": true,  "truth": "c3_check.truth.json" },
+    { "name": "V2DAY",            "file": "V2DAY.bin",            "sha256": "9977c583b824d25e99bf4f631d99dfaa2a9ed3fd31da26507678253eed7b26c8", "negative": false, "truth": "V2DAY.truth.json" },
+    { "name": "fix_radar4",       "file": "fix_radar4.bin",       "sha256": "568a215b69df02abefe07b610db324dc22177f080e31f843a0072843660fdc42", "negative": false, "truth": "fix_radar4.truth.json" },
+    { "name": "fix_radar5",       "file": "fix_radar5.bin",       "sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac", "negative": false, "truth": "fix_radar5.truth.json" }
+  ]
+}
