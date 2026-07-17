@@ -184,6 +184,42 @@
 #define WALK_TOL_M 1.5       /* m    |dR - D| tolerance at r=0 ... */
 #define WALK_TOL_RK 0.01     /* m/m  ... growing with range (endpoint noise) */
 #define WALK_TOL_K 0.3       /*      ... or this fraction of |D| */
+/* ---- walk guard (2026-07-16 re-add of 74128a6): MOTION VERIFICATION ----
+ * A real mover's claimed doppler integrates to its actual range
+ * displacement; a multipath breather / ghost claims doppler its position
+ * never delivers. Judged on the doppler-walk evidence above, per confirmed
+ * track. Decidable only when the target claims real radial motion (median
+ * |doppler| >= WALK_DOP_MIN and |D| >= WALK_D_MIN): slow/tangential targets
+ * are NEVER judged by this guard — they are classed UNVERIFIED_SLOW and
+ * still emitted.
+ *   pass — |dR - D| within tolerance -> VERIFIED_MOVER; the credential is
+ *          latched (mv_ever) and graveyard-inheritable like snr_peak, and a
+ *          latched track is never walk-killed (protects a real target
+ *          through turnarounds, e.g. the T7 walker reversing at 306 m);
+ *   cross — real azimuth net displacement over the window also VERIFIES
+ *          (radially-silent tangential crossers must not sit unverified);
+ *   fail — decidable and contradicted: walk_bad++; WALK_KILL consecutive
+ *          fails LATCH the track off the wire (same mechanism as the liar
+ *          latch, and for the same measured reason: the quad-era KILL was
+ *          re-tried here and pushed radar4/V2DAY emissions above their
+ *          frozen baselines through successor-ghost chains — a latched
+ *          track keeps claiming its junk instead of bequeathing it). This
+ *          is the breather killer: claimed motion with no displacement is
+ *          physically a ghost.
+ * The wire carries the LIVE class per target (mv_class): 0 = UNVERIFIED_SLOW
+ * (not decidable this window), 1 = VERIFIED_MOVER, 2 = SUSPECT (decidable
+ * fail streak in progress). A verified target that slows (turnaround) drops
+ * to 0, it does not die. */
+#define WALK_R_MIN 20.0      /* m    below this the guard may VERIFY but never
+                              *      count a fail: near-field multipath makes
+                              *      claimed doppler soup (T7 walker at 5-13 m
+                              *      claims +7.6 m/s); near range belongs to
+                              *      the flood logic + consistency guard */
+#define WALK_CROSS_K 2.0     /*      cross floor factor: c_net >= K*angfloor*r */
+#define WALK_KILL 13         /*      consecutive decidable fails -> latch (~0.5 s) */
+#define MV_UNVERIFIED 0
+#define MV_VERIFIED 1
+#define MV_SUSPECT 2
 /* ---- liar latch (2026-07-16): starved claims = far-clutter ghost ----
  * A real mover past 100 m owns integrable claimed doppler nearly every
  * frame: the T7 walker's covered time tracks its full window (measured).
@@ -316,6 +352,12 @@ typedef struct {
     double dop_err;          /* EWMA |median claimed doppler - fitted vr| */
     int liar_evid, liar_bad; /* liar latch: fresh-doppler flag, strike counter */
     int liar;                /* latched ghost: lives on, never emitted */
+    /* walk guard (motion verification) */
+    int mv_class;            /* live class on the wire (MV_*) */
+    int mv_ever;             /* latched VERIFIED credential (grave-inheritable) */
+    int walk_bad;            /* consecutive decidable-fail frames */
+    int walk_latch;          /* convicted breather: lives on, never emitted */
+    double wD, wdR, wcnet, wmed; /* last walk metrics (introspection) */
     double shadow_s;         /* time spent in a stronger target's co-range
                                 co-velocity shadow (reflection suppressor) */
     double clear_s;          /* continuous time out of any shadow */
@@ -332,7 +374,7 @@ typedef struct {
     int snr_unknown;         /* saw a point without SNR (no TLV7) -> fail open */
 } Track;
 
-typedef struct { double t, r, az, snr_peak; } Grave;
+typedef struct { double t, r, az, snr_peak; int mv_ever; } Grave;
 
 struct RadarClusterer {
     Track tracks[MAX_TRK];
@@ -929,6 +971,50 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         if(t->guard_bad>=GUARD_UNLATCH || t->jit_ctr>=GUARD_UNLATCH)
             t->guard_pass=0;
     }
+    /* ---- walk guard: motion verification (see WALK_* block) ---- */
+    for(int oi=0;oi<R->nord;oi++){
+        Track *t=&R->tracks[R->ord[oi]];
+        if(!t->confirmed) continue;
+        if(t->misses) continue;    /* judge only frames WITH evidence: a miss
+                                    * streak freezes the window; re-counting
+                                    * one observation is not more evidence
+                                    * (same rule as the consistency guard) */
+        double D, dR, tcov, c_net, c_path, meddop;
+        int nw = walk_metrics(t, now_t, &D, &dR, &tcov, &c_net, &c_path, &meddop);
+        t->wD=D; t->wdR=dR; t->wcnet=c_net; t->wmed=meddop;
+        int enough = nw >= GUARD_MIN_N;
+        double c_floor = WALK_CROSS_K*(ANG_FLOOR_DEG*DEG)*t->r;
+        if(c_floor < WALK_D_MIN) c_floor = WALK_D_MIN;
+        double tol = WALK_TOL_M + WALK_TOL_RK*t->r;
+        if(WALK_TOL_K*fabs(D) > tol) tol = WALK_TOL_K*fabs(D);
+        int radial_sane = fabs(dR - D) <= tol;
+        /* COHERENT cross displacement verifies a tangential mover — but only
+         * with a SANE radial story: the garage wanderer slides coherently in
+         * az for stretches while its range teleports +56 m against a claimed
+         * D of ~0. Cross evidence without radial sanity still BLOCKS the
+         * kill (a real crosser with soup-polluted doppler must never die
+         * here) but earns no VERIFIED latch. */
+        int cross_coh = enough && c_net >= c_floor
+                        && c_path > 0.0 && c_net/c_path >= COH_MIN;
+        int decidable = enough && meddop >= WALK_DOP_MIN
+                        && fabs(D) >= WALK_D_MIN && tcov >= WALK_COV_MIN_S;
+        if(cross_coh && radial_sane){
+            t->mv_ever=1; t->walk_bad=0; t->mv_class=MV_VERIFIED;
+        } else if(decidable){
+            if(radial_sane){
+                t->mv_ever=1; t->walk_bad=0; t->mv_class=MV_VERIFIED;
+            } else if(cross_coh || t->r < WALK_R_MIN){
+                /* protected: real cross motion, or near-field soup */
+                t->walk_bad=0; t->mv_class=MV_UNVERIFIED;
+            } else {
+                t->walk_bad++; t->mv_class=MV_SUSPECT;
+                if(!t->mv_ever && t->walk_bad>=WALK_KILL)
+                    t->walk_latch=1;            /* breather: off the wire */
+            }
+        } else {               /* slow / tangential-quiet: not judged */
+            t->walk_bad=0; t->mv_class=MV_UNVERIFIED;
+        }
+    }
     /* ---- liar latch: starved doppler claims past LIAR_R_MIN (see LIAR_*) ---- */
     for(int oi=0;oi<R->nord;oi++){
         Track *t=&R->tracks[R->ord[oi]];
@@ -958,9 +1044,10 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                              && (now_t - t->last_moved_t) <= R->park_s;
         if(t->confirmed && t->misses>coast_frames){
             if(!(moved_recently && t->misses<=park_frames)){
-                if(t->guard_pass && !t->liar && R->ngrave<GRAVE_MAX){
+                if(t->guard_pass && !t->liar && !t->walk_latch && R->ngrave<GRAVE_MAX){
                     Grave *g=&R->grave[R->ngrave++];
                     g->t=now_t; g->r=t->r; g->az=t->az; g->snr_peak=t->snr_peak;
+                    g->mv_ever=t->mv_ever;
                 }
                 ord_remove(R,oi); continue;
             }
@@ -1052,6 +1139,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                         t->guard_pass=1; t->ever_passed=1;
                         t->pass_r=crr;
                         if(g->snr_peak>t->snr_peak) t->snr_peak=g->snr_peak;
+                        if(g->mv_ever) t->mv_ever=1;
                         break;
                     }
                 }
@@ -1074,6 +1162,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         if(!t->confirmed) continue;
         if(!t->guard_pass) continue;            /* no positive coherence yet */
         if(t->liar) continue;                   /* latched ghost: never emitted */
+        if(t->walk_latch) continue;             /* convicted breather: never emitted */
         {
             double req = snr_req(t->r);
             double ramp = (t->r - FAR_MARGIN_R0) / (FAINT_R - FAR_MARGIN_R0);
@@ -1132,6 +1221,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         double conf=t->hits_total/10.0; if(conf>1.0)conf=1.0;
         o->conf=(float)conf; o->num_points=t->hits_total;
         o->suspect=suspect;
+        o->mv_class=t->mv_class;
         etrk[nout-1]=t;
     }
     /* ---- reflection-shadow bookkeeping: every confirmed track vs the
@@ -1197,14 +1287,16 @@ int cluster_all(const RadarClusterer *R, int *tid, double *r, double *az, int *c
     }
     return k;
 }
-int cluster_track_detail(const RadarClusterer *R, int want_tid, double *out7)
+int cluster_track_detail(const RadarClusterer *R, int want_tid, double *out12)
 {
     for(int oi=0;oi<R->nord;oi++){
         const Track *t=&R->tracks[R->ord[oi]];
         if(t->tid==want_tid){
-            out7[0]=t->r; out7[1]=t->az; out7[2]=t->snr_peak;
-            out7[3]=t->guard_pass; out7[4]=t->ever_passed;
-            out7[5]=t->ok_streak; out7[6]=t->guard_bad;
+            out12[0]=t->r; out12[1]=t->az; out12[2]=t->snr_peak;
+            out12[3]=t->guard_pass; out12[4]=t->ever_passed;
+            out12[5]=t->ok_streak; out12[6]=t->guard_bad;
+            out12[7]=t->wD; out12[8]=t->wdR; out12[9]=t->wmed;
+            out12[10]=t->walk_bad; out12[11]=t->mv_class;
             return 1;
         }
     }

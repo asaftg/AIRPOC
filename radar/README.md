@@ -47,7 +47,7 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
   num_points, num_targets,
   points:  [{x,y,z,v,snr,r,az,el,tid}, ...],
-  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,sus,class}, ...] }
+  targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,sus,mv_class,class}, ...] }
 ```
 Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres (`z` carries
 elevation). `snr` is the per-point SNR in dB (live; `null` only if a firmware
@@ -62,6 +62,16 @@ the same for a second or two), but consumers that act on targets (gimbal cueing,
 fusion) should treat a `sus:1` box with caution until the flag clears. Copies
 that hold this signature continuously for several seconds stop being published
 altogether.
+
+`mv_class` (0/1/2, added 2026-07-16): **motion verification.** `1` = verified
+mover — the target's claimed doppler adds up to the distance it actually
+walked (or it shows real cross-range motion); the strongest "this is real"
+signal the radar can give. `0` = unverified-slow — radially quiet or too
+faint to judge (crossers, parked targets); still perfectly valid, just not
+provable this window. `2` = suspect — its claimed motion is currently
+contradicted by its own position history; targets that stay in this state
+stop being published. A verified target that slows down drops back to `0`,
+it does not die.
 
 Target `x,y,z` / `vx,vy` are the tracker's **guidance output filter** state
 (alpha-beta smoothed angles + doppler-aided range-rate, slew-limited on

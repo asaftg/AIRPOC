@@ -43,6 +43,11 @@ typedef struct {
                                      antenna-sidelobe copy, not yet held long
                                      enough to suppress) — fusion should
                                      treat with caution */
+    int   mv_class;               /* walk-guard motion class: 0 = UNVERIFIED_SLOW
+                                     (radially quiet, not judged), 1 = VERIFIED_MOVER
+                                     (claimed doppler matches displacement, or
+                                     coherent cross motion), 2 = SUSPECT (claimed
+                                     motion contradicted; on the way out) */
 } RadarTarget;
 
 /* Per-frame timing the chip measures and reports in the stats TLV (type 6,

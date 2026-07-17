@@ -129,6 +129,40 @@ Validation (2026-07-16 corpus): radar5 mirror population 453 → 137 emitted
 frames (walker and car retained to the frame); T1/T2 crossing pairs zero
 suppressed frames; T7/T4/V2DAY/T5 bit-identical.
 
+## Walk guard (fixed, `WALK_*` in `src/cluster.c`)
+
+Motion **verification**: a real mover's claimed doppler, added up over 5 s,
+equals the range distance it actually walked; a multipath "breather" claims
+motion its position never delivers. Per confirmed track the guard compares
+that doppler integral (D) against the measured walk (dR), both robustified
+(claims clamped against the window median, range steps capped against the
+claim so association re-latch jumps don't count as motion).
+
+- **Verified** (`mv_class:1`) — the stories match, or the track shows coherent
+  cross-range motion with a sane radial story. The credential latches
+  (`mv_ever`), survives track death via the graveyard, and a verified track is
+  **never** walk-latched — a real target reversing through its turnaround
+  (the T7 walker at 306 m) must survive.
+- **Unverified-slow** (`mv_class:0`) — radially quiet or not enough claimed
+  motion to judge (crossers, parked, faint). Never judged, always still
+  emitted.
+- **Suspect** (`mv_class:2`) — decidable and contradicted; a fail streak in
+  progress. 13 consecutive decidable fails on a never-verified track LATCH it
+  off the wire (it keeps living and claiming its junk — same mechanism and
+  same measured reason as the liar latch: killing these tracks spawned
+  successor-ghost chains that pushed radar4/V2DAY above their frozen
+  baselines).
+
+Key numbers: decidable needs median |claim| ≥ 1.2 m/s, |D| ≥ 3 m, ≥ 1.5 s
+covered (`WALK_DOP_MIN/_D_MIN/_COV_MIN_S`); fails only count at r ≥ 20 m
+(`WALK_R_MIN` — near-field claims are multipath soup); tolerance
+1.5 m + 1 cm/m + 30 % of |D| (`WALK_TOL_*`).
+
+Validation (2026-07-16 corpus): T7 loses only an off-corridor 130 m breather
+(the return-leg corridor is at ~185 m at that moment); every corridor human
+fragment and the 306 m turnaround untouched; T2 loses one 84-frame breather;
+T6/noise stay zero; T1/T4/T5/radar4/radar5 bit-identical.
+
 ## Guidance output filter (fixed, `OUTF_*` in `src/cluster.c`)
 
 What the **wire reports** for each target is a smoothed output filter, not the
