@@ -1,4 +1,5 @@
-/* motion.cpp — see motion.h. Rolling-background motion worker.
+/* motion.cpp — see motion.h. Motion worker with two reference methods
+ * (background-subtraction / frame-difference) sharing one pipeline.
  * OpenCV confined to this object + stab_ecc. */
 #include "motion.h"
 #include "stab.h"
@@ -6,16 +7,17 @@
 #include <vector>
 #include <deque>
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 
-#define MOT_MAX_SAMPLES  64      /* ring cap: the background is median of <= this many frames */
-#define MOT_MIN_SAMPLES  16      /* need this many before we trust the background */
+#define MOT_MAX_SAMPLES  64      /* ring cap: reference history is <= this many subsampled frames */
+#define MOT_MIN_SAMPLES  16      /* method 0: samples needed before the median background is trusted */
 #define MOT_CONFIRM_MIN  15      /* M-of-N window floor (frames) */
 #define MOT_CONFIRM_MAX  60      /* M-of-N window cap — fits in the uint64 hit ring */
 
 /* A persistence track in FULL-res coordinates. `hist` is a rolling bit-ring of the
- * last <=64 frames' hits (bit0 = this frame); a track is reported when its hit
- * count over the confirmation window reaches `m`. */
+ * last <=60 frames' hits (bit0 = this frame); a track is reported when its hit count
+ * over the confirmation window reaches Mreq. */
 struct Track {
     float cx, cy, w, h;
     uint64_t hist;
@@ -23,11 +25,14 @@ struct Track {
     bool matched;
 };
 
+/* One subsampled reference frame + the frame index it was captured at. */
+struct RingItem { cv::Mat img; long fno; };
+
 struct MotionWorker {
     int fw, fh, down, dw, dh;
     Stabilizer stab;
-    std::deque<cv::Mat> ring;   /* down-res luma8 samples spanning the window */
-    cv::Mat bg;                 /* current background (down-res luma8); empty until warm */
+    std::deque<RingItem> ring;  /* down-res luma8 history */
+    cv::Mat bg;                 /* method 0: cached median background (down-res luma8) */
     long   frame_no;            /* frames seen */
     long   last_recomp;         /* frame_no of last median rebuild */
     long   last_push;           /* frame_no of last ring push */
@@ -51,7 +56,8 @@ static void to_luma_down(const uint8_t *y10, int w, int h, int down, cv::Mat &ou
     cv::Mat m16(h, w, CV_16U, (void *)y10);
     cv::Mat m8;
     m16.convertTo(m8, CV_8U, 1.0 / 256.0);   /* word>>8 : 10-bit -> 8-bit */
-    cv::resize(m8, out, cv::Size(w / down, h / down), 0, 0, cv::INTER_AREA);
+    if (down == 1) out = m8;                 /* native: no resize */
+    else cv::resize(m8, out, cv::Size(w / down, h / down), 0, 0, cv::INTER_AREA);
 }
 
 /* Subtract each row's median from a float image: cancels the per-row differential
@@ -85,7 +91,7 @@ static void median_mad(const cv::Mat &img, int &median, int &mad)
     for (int i = 0; i < 256; i++) { acc += mhist[i]; if (acc >= n / 2) { mad = i; break; } }
 }
 
-/* Per-pixel median of the ring -> background (down-res luma8). */
+/* Per-pixel median of the ring -> background (down-res luma8). Method 0 only. */
 static void rebuild_bg(MotionWorker *m)
 {
     int n = (int)m->ring.size();
@@ -95,7 +101,7 @@ static void rebuild_bg(MotionWorker *m)
     for (int y = 0; y < m->dh; y++) {
         uint8_t *bo = m->bg.ptr<uint8_t>(y);
         for (int x = 0; x < m->dw; x++) {
-            for (int i = 0; i < n; i++) col[i] = m->ring[i].ptr<uint8_t>(y)[x];
+            for (int i = 0; i < n; i++) col[i] = m->ring[i].img.ptr<uint8_t>(y)[x];
             std::nth_element(col.begin(), col.begin() + n / 2, col.end());
             bo[x] = col[n / 2];
         }
@@ -112,52 +118,79 @@ extern "C" int motion_process(MotionWorker *m, const uint8_t *y10, int w, int h,
     to_luma_down(y10, w, h, m->down, cur);
     m->frame_no++;
 
-    /* --- rolling background: push a sample every `stride` frames so the ring
-     * spans `window_s` seconds with ~MOT_MAX_SAMPLES samples, then rebuild the
-     * median a couple times a second. --- */
     double fps = p->fps > 1.0 ? p->fps : 60.0;
     double window_s = p->window_s > 0.1 ? p->window_s : 5.0;
-    int stride = (int)std::lround(window_s * fps / MOT_MAX_SAMPLES);
+    int method = p->method ? 1 : 0;
+    double baseline_s = p->baseline_s > 0.05 ? p->baseline_s : 2.0;
+
+    /* Ring must span both windows so either method can find its reference. Subsample
+     * so the span is covered by <= MOT_MAX_SAMPLES frames. */
+    double span_s = std::max(window_s, method == 1 ? baseline_s : 0.0);
+    int stride = (int)std::lround(span_s * fps / MOT_MAX_SAMPLES);
     if (stride < 1) stride = 1;
     if (m->frame_no - m->last_push >= stride) {
-        m->ring.push_back(cur.clone());
+        m->ring.push_back({ cur.clone(), m->frame_no });
         while ((int)m->ring.size() > MOT_MAX_SAMPLES) m->ring.pop_front();
         m->last_push = m->frame_no;
     }
-    int recomp = (int)std::lround(fps / 2.0); if (recomp < 1) recomp = 1;
-    if ((int)m->ring.size() >= MOT_MIN_SAMPLES &&
-        (m->bg.empty() || m->frame_no - m->last_recomp >= recomp)) {
-        rebuild_bg(m);
-        m->last_recomp = m->frame_no;
-    }
-    if (m->bg.empty()) return 0;   /* background still warming up */
 
-    /* Align the background onto the current frame (identity on a static mount;
-     * ECC/ego-motion cancels platform motion on a slewing gimbal). */
+    /* --- pick the reference frame (down-res 8u) by method --- */
+    cv::Mat ref;
+    if (method == 1) {
+        /* frame-difference: the ring entry closest to baseline_s ago */
+        long target = m->frame_no - (long)std::llround(baseline_s * fps);
+        if (m->ring.empty() || m->ring.front().fno > target) return 0;   /* not enough history yet */
+        long bestd = 1L << 30;
+        for (const auto &it : m->ring) {
+            long dd = std::labs(it.fno - target);
+            if (dd < bestd) { bestd = dd; ref = it.img; }
+        }
+    } else {
+        /* background-subtraction: median of the ring, rebuilt a couple times/second */
+        int recomp = (int)std::lround(fps / 2.0); if (recomp < 1) recomp = 1;
+        if ((int)m->ring.size() >= MOT_MIN_SAMPLES &&
+            (m->bg.empty() || m->frame_no - m->last_recomp >= recomp)) {
+            rebuild_bg(m);
+            m->last_recomp = m->frame_no;
+        }
+        if (m->bg.empty()) return 0;   /* background still warming up */
+        ref = m->bg;
+    }
+
+    /* Align the reference onto the current frame (identity on a static mount;
+     * ECC/ego-motion cancels platform motion on a slewing gimbal). Skip the warp
+     * entirely when it is identity (the common static-mount case). */
     float warp[6];
-    int rc = m->stab.align(m->stab.self, m->bg.data, cur.data, warp);
+    int rc = m->stab.align(m->stab.self, ref.data, cur.data, warp);
     if (stab_fail) *stab_fail = (rc == STAB_FAIL);
-    cv::Mat M = (cv::Mat_<float>(2, 3) << warp[0], warp[1], warp[2], warp[3], warp[4], warp[5]);
-    cv::Mat bg_aligned;
-    cv::warpAffine(m->bg, bg_aligned, M, cur.size(), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+    bool ident = (warp[0] == 1.f && warp[1] == 0.f && warp[2] == 0.f &&
+                  warp[3] == 0.f && warp[4] == 1.f && warp[5] == 0.f);
+    cv::Mat ref_aligned;
+    if (ident) ref_aligned = ref;
+    else {
+        cv::Mat M = (cv::Mat_<float>(2, 3) << warp[0], warp[1], warp[2], warp[3], warp[4], warp[5]);
+        cv::warpAffine(ref, ref_aligned, M, cur.size(), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+    }
 
     /* Signed difference -> destripe rows -> magnitude. */
-    cv::Mat curf, bgf, d;
+    cv::Mat curf, reff, d;
     cur.convertTo(curf, CV_32F);
-    bg_aligned.convertTo(bgf, CV_32F);
-    d = curf - bgf;
+    ref_aligned.convertTo(reff, CV_32F);
+    d = curf - reff;
     destripe_rows(d);
     d = cv::abs(d);
     cv::Mat diff8;
     d.convertTo(diff8, CV_8U);
 
-    /* Kill the invalid border the warp introduces (proportional to translation). */
-    int bw = (int)std::ceil(std::fabs(warp[2]) + std::fabs(warp[5])) + 2;
-    if (bw > 0 && bw * 2 < diff8.cols && bw * 2 < diff8.rows) {
-        diff8(cv::Rect(0, 0, diff8.cols, bw)).setTo(0);
-        diff8(cv::Rect(0, diff8.rows - bw, diff8.cols, bw)).setTo(0);
-        diff8(cv::Rect(0, 0, bw, diff8.rows)).setTo(0);
-        diff8(cv::Rect(diff8.cols - bw, 0, bw, diff8.rows)).setTo(0);
+    /* Kill the invalid border a non-identity warp introduces (proportional to translation). */
+    if (!ident) {
+        int bw = (int)std::ceil(std::fabs(warp[2]) + std::fabs(warp[5])) + 2;
+        if (bw > 0 && bw * 2 < diff8.cols && bw * 2 < diff8.rows) {
+            diff8(cv::Rect(0, 0, diff8.cols, bw)).setTo(0);
+            diff8(cv::Rect(0, diff8.rows - bw, diff8.cols, bw)).setTo(0);
+            diff8(cv::Rect(0, 0, bw, diff8.rows)).setTo(0);
+            diff8(cv::Rect(diff8.cols - bw, 0, bw, diff8.rows)).setTo(0);
+        }
     }
 
     int med, mad;

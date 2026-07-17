@@ -63,9 +63,10 @@ static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
     fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d motion=%d max_dets=%d "
-            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d mot_down=%d\n",
+            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d mot_down=%d "
+            "mot_method=%d mot_baseline_s=%.2f\n",
             k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k,
-            k->mot_window_s, k->mot_persist, k->mot_down);
+            k->mot_window_s, k->mot_persist, k->mot_down, k->mot_method, k->mot_baseline_s);
 }
 
 static void *motion_thread(void *arg)
@@ -114,7 +115,8 @@ static void *motion_thread(void *arg)
         double cap_fps = fps > 1.0 ? fps : 60.0;
         int nmov = 0, sf = 0;
         MotionParams mp = { .k_mad = k.mot_k, .window_s = k.mot_window_s,
-                            .fps = cap_fps / cadence, .persist = k.mot_persist };
+                            .fps = cap_fps / cadence, .persist = k.mot_persist,
+                            .method = k.mot_method, .baseline_s = k.mot_baseline_s };
         nmov = motion_process(mw, f.y10, f.w, f.h, &mp, local, MAX_MOV_CAP, &sf);
 
         uint64_t now = tap_now_ns();

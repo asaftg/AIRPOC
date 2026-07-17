@@ -12,13 +12,16 @@ class + confidence, the frame id, and the exposure timestamp as the correlation 
 
 Two detection paths:
 - **Appearance model** (TensorRT, GPU) at native 1440×1088 — classified boxes.
-- **Motion worker** (OpenCV, CPU thread, camera rate) — a safety net that catches
-  any *moving* target the model missed (far tiny drone, or a mid-range vehicle /
-  person lost to poor contrast). It models the scene with a **rolling background**
-  (per-pixel median of the last few seconds), subtracts it, removes the night row
-  read-noise, and confirms a mover with an M-of-N tracker over ~1 s. Emits
-  unclassified `movers`. Where a mover overlaps a model box the model wins → one
-  box per target.
+- **Motion worker** (OpenCV, CPU thread, on the detector `cadence`) — a **deliberately
+  permissive** safety net that catches any *moving* target the model missed (far tiny
+  drone, or a mid-range vehicle / person lost to poor contrast). It diffs the current
+  frame against a "no-mover" reference — **two selectable methods** (`mot_method`):
+  background-subtraction (median of the last `mot_window_s`) or frame-difference (vs
+  `mot_baseline_s` ago) — removes the night row read-noise, and confirms a mover with an
+  M-of-N tracker over ~1 s. Emits unclassified `movers`. Where a mover overlaps a model
+  box the model wins → one box per target. **It is not meant to be clean:** clutter
+  rejection (keep tracks that *translate*, drop wind-blown foliage that oscillates in
+  place) is the EO tracker's temporal-integration job, not the detector's.
 
 Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 
@@ -29,21 +32,36 @@ Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRAT
   (separate data/training agent) drops in with no code change — same format, same
   endpoint. `human`/`vehicle` today (`vehicle` = car/bus/truck); `drone` comes
   with the trained model.
-- **Motion:** **rolling-background** worker (median-of-recent-frames − destripe −
-  M-of-N), validated offline on a night NIR recording where it holds a walking
-  human that the appearance model drops. **Off by default** — the background is
-  built in the current frame, so on a *moving* camera it needs ego-motion alignment
-  (IMU/VIO, or the `-E` ECC stabilizer) behind `stabilize()` first. Safe on a
-  static/holding mount; enable via `/ctl`. Runs at **native resolution** (`mot_down`=1)
-  on the **same `cadence` tick as the model** (one rate for both — 4 ≈ 15 Hz) — small far
-  movers are slow in pixels, so the cadence rate keeps native affordable; downscaling
-  would blind exactly the targets this net exists to catch. Window length is the
-  `mot_window_s` knob (1–60 s, default 15). Knobs: `mot_down`, `mot_window_s`, `mot_k`,
-  `mot_persist`, and `cadence` (shared with the model).
+- **Motion:** worker with **two reference methods** (`mot_method`), validated offline
+  across night/day recordings — both kept so the EO-tracker phase picks the winner:
+  - `0` **background-subtraction** — median of the last `mot_window_s`. Best on a stable
+    scene with high-contrast movers (a bright far walker on dark road). *Absorbs* a slow /
+    near-stationary target that lingers in view; costs a median rebuild.
+  - `1` **frame-difference** (default) — vs the frame `mot_baseline_s` (default 2 s) ago.
+    Catches the slow persistent movers the median absorbs; cheaper. A too-short baseline
+    misses a slow far target; a long baseline over a moving camera needs ego-motion.
+
+  Runs at **native resolution** (`mot_down`=1) on the **same `cadence` tick as the model**
+  (one rate for both — 4 ≈ 15 Hz): far/small movers are slow in pixels, so the cadence
+  rate keeps native affordable; downscaling would blind exactly the targets this net is
+  for. **Off by default** — the reference is compared in the current frame, so a *moving*
+  camera needs ego-motion alignment (the `-E` ECC stabilizer, IMU/VIO later) behind
+  `stabilize()` first; safe on a static/holding mount. Knobs: `mot_method`,
+  `mot_baseline_s`, `mot_down`, `mot_window_s`, `mot_k`, `mot_persist`, and `cadence`.
   > Pitfall: at native the worker floods on wind-blown foliage in daytime — genuine
-  > motion, not noise, so it's rejected downstream by the EO tracker (foliage
-  > oscillates in place; a real target translates), not by a detector threshold.
+  > motion, not noise. It's rejected **downstream by the EO tracker** (foliage oscillates
+  > in place; a real target translates), not by any detector threshold — no `mot_k` /
+  > baseline setting removes foliage without also deleting the far targets.
 - **Contract + recorder tap live;** the app/console already consumes `:8094`.
+
+> ### ⚠️ OPEN DECISION — two motion methods ship on purpose (revisit in the tracker phase)
+> The motion worker deliberately carries **both** reference methods behind the `mot_method`
+> knob — `0` background-subtraction and `1` frame-difference — because on our recordings
+> **neither is a clear winner**: bg-sub *absorbs* slow/near-stationary movers (it lost two
+> loitering people), frame-diff catches those but needs the right `mot_baseline_s`.
+> **This is temporary.** The **EO-tracker phase must A/B the two on real tracked targets,
+> pick the winner, and delete the loser** — do not assume one is chosen. Evidence lives in
+> the session notes; the default today is frame-diff (`mot_method=1`).
 
 ### Latency (measured on-device, hot GPU, native resolution)
 | engine | per-inference | max fps |
@@ -96,7 +114,7 @@ detection/
        source.h tap_source.c  frame source (live tap; replay sources land next)
        preproc.cu/.h          Y10 -> normalized model input (CUDA)
        infer.cpp/.h           TensorRT engine + raw-head decode + NMS
-       motion.cpp/.h          motion worker (OpenCV, native rolling-background, on cadence)
+       motion.cpp/.h          motion worker (OpenCV, native, bg-sub | frame-diff, on cadence)
        stab.h stab_identity.c stab_ecc.cpp   frame-alignment interface + impls
        http.h http.c          /stream + /stats + /ctl
        emit.h emit.c          detection-message JSON + pixel->angle mapping

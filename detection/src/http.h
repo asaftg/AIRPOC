@@ -25,6 +25,8 @@ typedef struct {
     double mot_window_s;  /* rolling-background window (seconds) */
     int    mot_persist;   /* confirmation strength 1..5 (fraction of the ~1 s M-of-N window) */
     int    mot_down;      /* motion spatial downscale (1 = native) */
+    int    mot_method;    /* 0 = background-subtraction, 1 = frame-difference */
+    double mot_baseline_s;/* frame-diff baseline (seconds back) */
 } DetKnobs;
 
 int  http_start(int port);

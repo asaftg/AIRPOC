@@ -159,21 +159,32 @@ On-device detector (`detectiond`, `:8094`) that reads the EO camera tap
 `/stream` + `/stats` + `/ctl`, plus the `airpoc.det_wire` recorder tap — the same
 contract shape as the radar daemon; the console already consumes it. Two paths: a
 **TensorRT appearance model** at native 1440×1088 (RTMDet-tiny, Apache; raw-head
-export with decode + NMS in our C++) and a **CPU motion worker** (frame-diff safety
-net for movers the model missed). Where they overlap the model wins → one box per
-target. Boxes carry pixels **and** real-world angle (via the lens IFOV) for fusion.
+export with decode + NMS in our C++) and a **CPU motion worker** — a *permissive*
+safety net for movers the model missed, run at native res on the model's `cadence`,
+with two selectable references (`mot_method`: background-subtraction vs frame-difference).
+Where they overlap the model wins → one box per target. Boxes carry pixels **and**
+real-world angle (via the lens IFOV) for fusion.
 
 **Deliberately stateless** — one fresh list of boxes per frame; all cross-frame
-work (temporal confirmation, smoothing, coasting, track IDs, detect-slow/track-fast)
-is the **EO tracker's** job, which consumes this feed. Measured on-device (hot GPU,
-native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near its floor for this
-chip, and the biggest live-latency lever is pinning the GPU clocks (a `jetson/`
-boot service). **Current model is a stock COCO placeholder** proving the pipeline;
-the trained mono model (data/training agent) drops in with no code change. Motion
-defaults **off** — the frame-diff path needs real ego-motion (IMU/VIO, or the ECC
-stabilizer) before it is usable on a moving camera. Detail:
+work (temporal confirmation, smoothing, coasting, track IDs, detect-slow/track-fast,
+**and mover-clutter rejection**) is the **EO tracker's** job, which consumes this feed.
+The motion worker is deliberately noisy — it must not *miss* a mover; separating real
+targets (which translate) from wind-blown foliage (which oscillates in place) is the
+tracker's temporal-integration job, not a detector threshold. Measured on-device (hot
+GPU, native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near its floor for this
+chip, and the biggest live-latency lever is pinning the GPU clocks (a `jetson/` boot
+service). **Current model is a stock COCO placeholder** proving the pipeline; the
+trained mono model (data/training agent) drops in with no code change. Motion defaults
+**off** — the reference is compared in the current frame, so it needs real ego-motion
+(IMU/VIO, or the `-E` ECC stabilizer) before it is usable on a moving camera. Detail:
 [`detection/README.md`](../detection/README.md) ·
 [`detection/docs/INTEGRATION.md`](../detection/docs/INTEGRATION.md).
+
+> **⚠️ Open decision (tracker phase):** the motion worker ships **two** reference methods
+> behind `mot_method` (background-subtraction vs frame-difference) *on purpose* — neither
+> was a clear winner on our test recordings (bg-sub absorbs slow movers; frame-diff needs
+> the right baseline). The **EO tracker phase must A/B both on real tracked targets and
+> delete the loser.** Not yet decided; default is frame-diff.
 
 ### Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,

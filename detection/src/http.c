@@ -24,6 +24,7 @@ static DetKnobs g_k = {
     .mot_k = DET_MOT_K_DEFAULT, .mot_window_s = DET_MOT_WINDOW_S_DEFAULT,
     .mot_persist = DET_MOT_PERSIST_DEFAULT,
     .mot_down = DET_MOT_DOWN_DEFAULT,
+    .mot_method = DET_MOT_METHOD_DEFAULT, .mot_baseline_s = DET_MOT_BASELINE_S_DEFAULT,
 };
 static void (*g_ctl_cb)(const DetKnobs *, void *) = NULL;
 static void  *g_ctl_user = NULL;
@@ -127,7 +128,7 @@ static int build_stats(char *b, size_t cap)
         "\"motion\":{\"active\":%s,\"fps\":%.1f,\"stab_fail_pct\":%.1f,\"candidates\":%d},"
         "\"knobs\":{\"conf\":%.2f,\"cadence\":%d,\"motion\":%d,\"max_dets\":%d,"
         "\"nms\":%.2f,\"mot_k\":%.1f,\"mot_window_s\":%.1f,\"mot_persist\":%d,"
-        "\"mot_down\":%d}}\n",
+        "\"mot_down\":%d,\"mot_method\":%d,\"mot_baseline_s\":%.2f}}\n",
         g_version, g_ifov_urad, g_img_w, g_img_h,
         g_tap.connected ? "true" : "false", g_tap.fps, g_tap.gaps, g_tap.drops_cum,
         g_tap.frame_id,
@@ -135,7 +136,7 @@ static int build_stats(char *b, size_t cap)
         g_det.infer_p50, g_det.infer_p95, g_det.e2e_p50, g_det.e2e_p95,
         g_mot.active ? "true" : "false", g_mot.fps, g_mot.stab_fail_pct, g_mot.candidates,
         g_k.conf, g_k.cadence, g_k.motion, g_k.max_dets, g_k.nms, g_k.mot_k,
-        g_k.mot_window_s, g_k.mot_persist, g_k.mot_down);
+        g_k.mot_window_s, g_k.mot_persist, g_k.mot_down, g_k.mot_method, g_k.mot_baseline_s);
 }
 
 static void *client(void *arg)
@@ -172,6 +173,8 @@ static void *client(void *arg)
         if ((q = strstr(req, "mot_window_s="))) k.mot_window_s = atof(q + 13);
         if ((q = strstr(req, "mot_persist=")))  k.mot_persist = atoi(q + 12);
         if ((q = strstr(req, "mot_down=")))     k.mot_down = atoi(q + 9);
+        if ((q = strstr(req, "mot_method=")))   k.mot_method = atoi(q + 11);
+        if ((q = strstr(req, "mot_baseline_s="))) k.mot_baseline_s = atof(q + 15);
         k.conf = clampd(k.conf, DET_CONF_MIN, DET_CONF_MAX);
         k.cadence = clampi(k.cadence, DET_CADENCE_MIN, DET_CADENCE_MAX);
         k.motion = k.motion ? 1 : 0;
@@ -181,6 +184,8 @@ static void *client(void *arg)
         k.mot_window_s = clampd(k.mot_window_s, DET_MOT_WINDOW_S_MIN, DET_MOT_WINDOW_S_MAX);
         k.mot_persist = clampi(k.mot_persist, DET_MOT_PERSIST_MIN, DET_MOT_PERSIST_MAX);
         k.mot_down = clampi(k.mot_down, DET_MOT_DOWN_MIN, DET_MOT_DOWN_MAX);
+        k.mot_method = clampi(k.mot_method, DET_MOT_METHOD_MIN, DET_MOT_METHOD_MAX);
+        k.mot_baseline_s = clampd(k.mot_baseline_s, DET_MOT_BASELINE_S_MIN, DET_MOT_BASELINE_S_MAX);
         pthread_mutex_lock(&g_lock);
         g_k = k;
         pthread_mutex_unlock(&g_lock);

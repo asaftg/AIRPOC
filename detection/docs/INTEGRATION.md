@@ -59,13 +59,14 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
 
 ## Output — `GET /stats`
 ```json
-{"version":"0.4.0","ifov_urad":287.5,"img":{"w":1440,"h":1088},
+{"version":"0.5.0","ifov_urad":287.5,"img":{"w":1440,"h":1088},
  "tap":{"connected":true,"fps":60.0,"gaps":0,"drops_cum":0,"frame_id":184223},
  "det":{"active":false,"fps":0.0,"model":"none","precision":"",
         "infer_ms":{"p50":0,"p95":0},"e2e_ms":{"p50":0,"p95":0}},
  "motion":{"active":false,"fps":0.0,"stab_fail_pct":0.0,"candidates":0},
  "knobs":{"conf":0.35,"cadence":4,"motion":1,"max_dets":128,
-          "mot_k":6.0,"mot_window_s":15.0,"mot_persist":3,"mot_down":1}}
+          "mot_k":6.0,"mot_window_s":15.0,"mot_persist":3,"mot_down":1,
+          "mot_method":1,"mot_baseline_s":2.0}}
 ```
 `det.active` is true once an engine is loaded (`-e`); `motion.active` is true once
 the motion thread has processed a frame. `candidates` is the raw mover count
@@ -82,17 +83,22 @@ replies `ok`.
 | `motion` | 0/1 | motion worker on/off |
 | `max_dets` | 1–512 | cap on detections per frame |
 | `nms` | 0.10–0.90 | box-merge IoU (lower = merge more; also merges a box mostly inside a higher-scoring one — collapses the multiple boxes a big/close object produces) |
+| `mot_method` | 0/1 | motion reference method: **0** = background-subtraction (median of `mot_window_s`), **1** = frame-difference (vs `mot_baseline_s` ago, default). bg-sub is best on a stable scene but absorbs slow/near-stationary movers; frame-diff catches those and is cheaper. Both kept for the EO-tracker phase to choose. |
+| `mot_baseline_s` | 0.25–5 s | frame-diff (method 1) baseline: difference against the frame this many seconds back. Longer catches slower/farther targets (more displacement); too short misses them. |
 | `mot_k` | 1–30 | motion MAD threshold multiplier (noise floor above the median diff) |
-| `mot_window_s` | 1–60 s | rolling-background window: how far back "normal scene" is modelled. Short adapts fast & is cleaner in a changing scene; long is smoother but slower to forget a stopped object. **GUI slider.** |
+| `mot_window_s` | 1–60 s | background-subtraction (method 0) window: how far back "normal scene" is modelled. Short adapts fast; long is smoother but slower to forget a stopped object. |
 | `mot_persist` | 1–5 | confirmation strength = fraction of the ~1 s M-of-N tracker window a mover must hit before it's reported (rejects sparkle/twinkle) |
-| `mot_down` | 1–4 | motion spatial downscale. **1 = native** (resolves the far/small movers the net exists for); higher is cheaper but blinds small targets (÷4 collapses a far human to ~3 px). Changing it rebuilds the worker (background re-warms). |
+| `mot_down` | 1–4 | motion spatial downscale. **1 = native** (resolves the far/small movers the net exists for); higher is cheaper but blinds small targets (÷4 collapses a far human to ~3 px). Changing it rebuilds the worker (reference re-warms). |
 
-Raise `cadence` toward 1 as a target closes — a fast crosser up close needs the
-higher rate; searching at range can run slower to save GPU.
+The motion worker runs on the **same `cadence`** tick as the appearance model (one rate
+for both). Raise `cadence` toward 1 as a target closes; searching at range can run slower.
 
-> Pitfall: the motion worker's rolling background is built in the current frame, so
-> it is correct only on a static/holding mount until real ego-motion is wired behind
-> `stabilize()`. It is `motion=0` by default for that reason.
+> Pitfall: the motion reference is compared in the current frame, so it is correct only on
+> a static/holding mount until real ego-motion is wired behind `stabilize()` (`-E` ECC now).
+> `motion=0` by default for that reason.
+> Pitfall: at native the worker floods on daytime wind-blown foliage — genuine motion, not
+> noise. No `mot_k`/baseline setting removes it without also deleting the far targets; it's
+> the **EO tracker's** job (keep translating tracks, drop oscillating ones).
 
 ## Output — `airpoc.det_wire` (recorder tap)
 Best-effort shm publisher (protocol v1), byte-verbatim `/stream` JSON, 16 slots.

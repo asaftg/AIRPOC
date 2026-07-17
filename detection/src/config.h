@@ -9,7 +9,7 @@
 #ifndef DET_CONFIG_H
 #define DET_CONFIG_H
 
-#define DET_VERSION       "0.4.0"          /* native rolling-background motion on cadence + contract */
+#define DET_VERSION       "0.5.0"          /* dual-method motion (bg-sub | frame-diff) + native + cadence */
 
 /* IMX296 native frame delivered on airpoc.eo_y10 (Y10 in 16-bit LE words). */
 #define EO_IMG_W          1440
@@ -46,10 +46,10 @@
                                           a higher-scoring one (see infer.cpp). */
 #define DET_NMS_MIN            0.10
 #define DET_NMS_MAX            0.90
-#define DET_MOTION_DEFAULT     0       /* motion worker OFF by default: the rolling
-                                          background is built in the current frame, so
-                                          on a MOVING camera it needs ego-motion
-                                          alignment (IMU/VIO, or ECC -E) behind
+#define DET_MOTION_DEFAULT     0       /* motion worker OFF by default: the reference (bg
+                                          median or baseline frame) is compared in the
+                                          current frame, so on a MOVING camera it needs
+                                          ego-motion alignment (IMU/VIO, or ECC -E) behind
                                           stabilize() first. Enable via /ctl on a
                                           static/holding mount or once ego-motion is real. */
 #define DET_MAXDETS_DEFAULT    128
@@ -75,6 +75,17 @@
                                           ~3 px. Trade CPU with `cadence`, not by throwing away pixels. */
 #define DET_MOT_DOWN_MIN       1
 #define DET_MOT_DOWN_MAX       4
+#define DET_MOT_METHOD_DEFAULT 1       /* reference method: 0 = background-subtraction (median of
+                                          mot_window_s), 1 = frame-difference (vs mot_baseline_s ago).
+                                          Default frame-diff: catches slow persistent movers the median
+                                          absorbs, and it's cheaper (no median rebuild). Both kept so the
+                                          EO-tracker phase can pick the winner on real data. */
+#define DET_MOT_METHOD_MIN     0
+#define DET_MOT_METHOD_MAX     1
+#define DET_MOT_BASELINE_S_DEFAULT 2.0 /* frame-diff (method 1) baseline, seconds back. Long enough that a
+                                          slow far target has moved a few px; too short misses it. */
+#define DET_MOT_BASELINE_S_MIN 0.25
+#define DET_MOT_BASELINE_S_MAX 5.0
 /* The motion worker runs on the SAME `cadence` tick as the appearance model (one rate
  * for both) — far/small movers are slow in pixels and don't need the full camera rate,
  * and that lower rate is what makes native resolution affordable. No separate motion
