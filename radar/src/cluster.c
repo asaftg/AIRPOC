@@ -373,6 +373,14 @@
 #define OUTF_T2_SNR 21.0     /* dB   ... plus lifetime peak SNR over this */
 #define OUTF_BB(a) ((a)*(a)/(2.0-(a)))  /* Benedict-Bordner beta */
 #define OUTF_DOP_GAIN 0.35   /*      claimed-doppler direct range-rate gain */
+/* ELEVATION is NOT alpha-beta filtered. The elevation measurement from this
+ * antenna (2 rows) is far noisier than azimuth — per-frame medians at 245 m
+ * swing tens of degrees — and running it through the fast az tiers made the
+ * reported elevation ~2x noisier than the pre-filter tracker (measured on the
+ * 2026-07-16 night recording: total swing 25.6 deg vs 17.9 under the old
+ * reporting). Elevation therefore keeps the old V2 behavior exactly: a slow
+ * EWMA, no rate term (a rate fitted from this much noise is pure noise). */
+#define OUTF_EL_A 0.10       /*      elevation EWMA gain (== old EL_ALPHA) */
 #define OUTF_DOP_GATE 3.0    /* m/s  reject folded/noise claimed doppler */
 #define OUTF_PARK_BLEED 0.5  /*      rate bleed per frame while park-held */
 #define OUTF_SLEW_DPS 3.0    /* deg/s re-acquire output slew cap (+track rate) */
@@ -812,7 +820,7 @@ static void outf_step(Track *t, double dt, int hit, int parked,
                    : (t->hits_total >= OUTF_T1_HITS) ? OUTF_A1 : OUTF_A0;
         double b = OUTF_BB(a), e;
         e = maz - t->f_az; t->f_az += a * e; t->f_azr += b / dt * e;
-        e = mel - t->f_el; t->f_el += a * e; t->f_elr += b / dt * e;
+        e = mel - t->f_el; t->f_el += OUTF_EL_A * e; t->f_elr = 0.0;
         e = mr  - t->f_r;  t->f_r  += a * e; t->f_vr  += b / dt * e;
         /* claimed doppler = direct range-rate on this fw (sign verified) */
         if (have_vd && fabs(vd - t->f_vr) < OUTF_DOP_GATE)
