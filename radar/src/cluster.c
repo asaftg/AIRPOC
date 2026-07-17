@@ -241,45 +241,6 @@
 #define MV_UNVERIFIED 0
 #define MV_VERIFIED 1
 #define MV_SUSPECT 2
-/* ---- LLR track score (2026-07-13): likelihood confirmation ----
- * Sequential log-likelihood ratio per track, the classic track-score test:
- *   hit  : L += log( P_D * N(innovation) / lambda_c )
- *   miss : L += log( 1 - P_D )
- * where N is the 2-D gaussian density of the innovation in (range, cross)
- * measurement space (sigmas SNR-quality-weighted: a bright return is a
- * tighter measurement) and lambda_c is an ONLINE per-range-annulus EWMA of
- * unclaimed moving-point density (pts / m^2) - the local clutter rate. Both
- * are densities, so the ratio is dimensionless.
- * Confirmation = the EXISTING M-of-N paths (unchanged, they are the floor)
- * OR L >= LLR_CONFIRM with the same jitter/motion quality floors. The LLR
- * path confirms a flickery-but-consistent far target earlier than 8-of-12
- * can (hits with gaps still accumulate evidence), while floor-noise tracks
- * hover near zero score: their innovations sit at the gate edge where
- * N ~ lambda. Threshold calibrated on the c16/c3/garage noise fixtures:
- * ZERO emitted tracks and no material confirmed-junk growth. */
-#define LLR_NLAM 10          /*      range annuli for the clutter EWMA */
-#define LLR_LAM_DR 50.0      /* m    annulus width */
-#define LLR_LAM_ALPHA 0.02   /*      clutter EWMA gain (after warmup) */
-#define LLR_LAM_WARM 50      /*      frames of fast (0.1) warmup */
-#define LLR_LAM_MIN 2e-4     /* 1/m^2 clutter floor (empty-annulus guard) */
-#define LLR_PD 0.6           /*      detection probability assumption */
-#define LLR_SR_HI 1.5        /* m    range sigma, bright return ... */
-#define LLR_SR_LO 3.0        /* m    ... and floor-noise return */
-#define LLR_SC_K 0.035       /* rad  cross sigma = K*r (about 2 deg) ... */
-#define LLR_SC_MIN 2.0       /* m    ... floored close-in */
-#define LLR_Q_SNR0 16.0      /* dB   quality ramp start (the chip floor) */
-#define LLR_Q_SNRW 8.0       /* dB   quality ramp width */
-#ifndef LLR_CONFIRM
-#define LLR_CONFIRM 5.5      /*      score to confirm (with quality floors) */
-#endif
-#define LLR_HIT_MAX 1.5     /*      per-hit increment cap: an empty annulus
-                              *      (lambda at the floor) must not let one
-                              *      bright multipath coincidence confirm in
-                              *      two hits (AGV1 garage) - confirmation
-                              *      always takes several consistent hits */
-#define LLR_HIT_MIN (-2.0)   /*      per-hit floor (gate-edge hit != death) */
-#define LLR_MAX 30.0         /*      score cap */
-#define LLR_MIN (-10.0)      /*      score floor (misses must stay recoverable) */
 
 typedef struct {
     int used, tid;
@@ -306,7 +267,6 @@ typedef struct {
     int mv_ever;             /* latched VERIFIED credential (grave-inheritable) */
     int walk_bad;            /* consecutive decidable-fail frames */
     double wD, wdR, wcnet, wmed; /* last walk metrics (introspection) */
-    double llr;              /* sequential track score (LLR confirmation) */
     /* guidance output filter (wire-only; no assoc/lifecycle feedback) */
     double f_az, f_azr;      /* alpha-beta az state (deg, deg/s) */
     double f_el, f_elr;      /* alpha-beta el state (deg, deg/s) */
@@ -325,8 +285,6 @@ struct RadarClusterer {
     float occ[NR][NA];
     double t0; int have_t0;
     double flood_until;
-    float lam[LLR_NLAM];     /* clutter density EWMA per range annulus (1/m^2) */
-    int   lam_n;             /* frames folded into lam (warmup gain switch) */
     Grave grave[GRAVE_MAX]; int ngrave;
     /* live knobs */
     float dedup_cross;   /* eps knob   */
@@ -729,7 +687,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     }
 
     R->dbg_nmv = nmv; R->dbg_m = m;
-    double fov_rad2 = 2.0 * (fov * DEG);    /* full azimuth span, radians */
     /* ---- predictions (python-list order) ---- */
     static double PR[MAX_TRK], PAZ[MAX_TRK], RG[MAX_TRK], AZG[MAX_TRK];
     for (int oi=0;oi<R->nord;oi++){
@@ -772,23 +729,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         if(tier){
             for(int i=0;i<m;i++){ tier1[i] = owner[i]>=0; if(!tier1[i]) bestd[i]=1e9; }
         }
-    }
-    /* ---- online clutter rate: unclaimed moving-point density per annulus
-     * (this is what the LLR hit increment competes against) ---- */
-    {
-        int cnt[LLR_NLAM]; memset(cnt, 0, sizeof(cnt));
-        for(int i=0;i<m;i++) if(owner[i]<0 && ismv[i]){
-            int k=(int)(rs[i]/LLR_LAM_DR);
-            if(k>=0 && k<LLR_NLAM) cnt[k]++;
-        }
-        double a = R->lam_n < LLR_LAM_WARM ? 0.1 : LLR_LAM_ALPHA;
-        for(int k=0;k<LLR_NLAM;k++){
-            double rmid=(k+0.5)*LLR_LAM_DR;
-            double area=LLR_LAM_DR * fov_rad2 * rmid;   /* annulus, m^2 */
-            double d=cnt[k]/(area>1.0?area:1.0);
-            R->lam[k]=(float)((1.0-a)*R->lam[k] + a*d);
-        }
-        R->lam_n++;
     }
     /* ---- update tracks ---- */
     static double gr[RADAR_MAX_POINTS], ga[RADAR_MAX_POINTS], ge[RADAR_MAX_POINTS];
@@ -838,21 +778,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             t->sx=clampd((mxx-mnx)/2, MIN_SIZE_M, MAX_SIZE_M);
             t->sy=clampd((mxy-mny)/2, MIN_SIZE_M, MAX_SIZE_M);
             t->sz=clampd((mxz-mnz)/2, MIN_SIZE_M, MAX_SIZE_M);
-            /* LLR hit: innovation likelihood vs local clutter density */
-            if(!t->confirmed){
-                double q=(smax-LLR_Q_SNR0)/LLR_Q_SNRW;
-                q=clampd(smax>-1e9?q:0.0, 0.0, 1.0);
-                double sr=LLR_SR_LO+(LLR_SR_HI-LLR_SR_LO)*q;
-                double sc=LLR_SC_K*t->r*(1.5-0.5*q); if(sc<LLR_SC_MIN) sc=LLR_SC_MIN;
-                double dri=mr-PR[ti], dci=(maz-PAZ[ti])*DEG*mr;
-                double d2=(dri/sr)*(dri/sr)+(dci/sc)*(dci/sc);
-                double N=exp(-0.5*d2)/(2.0*M_PI*sr*sc);
-                int k=(int)(t->r/LLR_LAM_DR); if(k<0)k=0; if(k>=LLR_NLAM)k=LLR_NLAM-1;
-                double lam=R->lam[k]; if(lam<LLR_LAM_MIN) lam=LLR_LAM_MIN;
-                t->llr += clampd(log(LLR_PD) + log(N/lam),
-                                 LLR_HIT_MIN, LLR_HIT_MAX);
-                t->llr = clampd(t->llr, LLR_MIN, LLR_MAX);
-            }
             hist_push(t, now_t, t->r, t->az, nmv_hit>0 ? vd : (double)NAN);
             refit_vel(t, now_t);
             hit_push(t, 1); t->misses=0; t->age++; t->hits_total++;
@@ -866,10 +791,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 t->vr=0; t->va=0;    /* genuinely-moved target that stopped: hold */
                 parked=1;
             } else { t->r=PR[ti]; t->az=PAZ[ti]; }
-            if(!t->confirmed){
-                t->llr += log(1.0-LLR_PD);
-                t->llr = clampd(t->llr, LLR_MIN, LLR_MAX);
-            }
             hit_push(t, 0); t->misses++; t->age++;
             t->mv_ewma*=0.85; if(t->mv_ewma<ST_MV_LO) t->st_frames++;
             outf_step(t, dt, 0, parked, 0.0, 0.0, 0.0, 0, 0.0);
@@ -1020,14 +941,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             if(hit_sum_last(t,conf_n)>=conf_m && t->mv_ewma>=MV_RATE_MIN && t->jit<JIT_MAX)
                 t->confirmed=1;
             else if(t->hitn>=ST_CONF_N && hit_sum_last(t,ST_CONF_N)>=ST_CONF_M && t->jit<ST_JIT_MAX)
-                t->confirmed=1;
-            /* LLR path: enough accumulated likelihood, the jitter floor,
-             * and a REDUCED moving-rate floor (ST_MV_LO, ~3 frames to
-             * build, vs MV_RATE_MIN's ~6 - the full floor, not M-of-N,
-             * was the real latency binder; dropping it entirely lets
-             * marginal garage junk reach emission). Calibrated on
-             * c16/c3/garage: zero emitted, no material junk growth. */
-            else if(t->llr>=LLR_CONFIRM && t->mv_ewma>=ST_MV_LO && t->jit<JIT_MAX)
                 t->confirmed=1;
         }
         oi++;
@@ -1215,7 +1128,7 @@ int cluster_track_detail(const RadarClusterer *R, int want_tid, double *out12)
             out12[3]=t->guard_pass; out12[4]=t->ever_passed;
             out12[5]=t->ok_streak; out12[6]=t->guard_bad;
             out12[7]=t->wD; out12[8]=t->wdR; out12[9]=t->wmed;
-            out12[10]=t->walk_bad; out12[11]=t->llr;
+            out12[10]=t->walk_bad; out12[11]=t->mv_class;
             return 1;
         }
     }
