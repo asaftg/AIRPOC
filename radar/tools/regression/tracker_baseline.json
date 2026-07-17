@@ -1,23 +1,23 @@
 {
- "created": "2026-07-17T05:15:22Z",
+ "created": "2026-07-17T18:03:46Z",
  "tracker_git_sha": "unknown",
- "binary_sha256": "f7b80e65c700d80884519d49e52382fd4befb052a0cdfa69a12dfdf9698ba977",
+ "binary_sha256": "363dded180a8240441010c2ea7765a731de4dfbd3a4b3d1fa62ab589594caa13",
  "knob_vector": "eps=4.500 minpts=2 speed=0.700 snrmin=16.000 fov=90.000 elmax=20.000 doppler=1.200 confirm=3 coast=0.400 park=15.000",
  "fixtures": {
   "T1": {
    "frames": 5709,
-   "e_total": 16442,
-   "e_fr": 2.88,
+   "e_total": 16397,
+   "e_fr": 2.8721,
    "tids": 45,
    "occ": 0.9865,
    "fixture_sha256": "e80f6a45eb86e562e25f14f4b7fe0a4db2ee758046988f0f748843ebb61a242d"
   },
   "T2": {
    "frames": 10179,
-   "e_total": 11721,
-   "e_fr": 1.1515,
-   "tids": 22,
-   "occ": 0.8471,
+   "e_total": 11637,
+   "e_fr": 1.1432,
+   "tids": 21,
+   "occ": 0.8389,
    "fixture_sha256": "cd740b8275161d06cc82919a50cfae429f9bc7e5c72da2b6fe0af5549cd0179a"
   },
   "T3": {
@@ -58,16 +58,16 @@
   },
   "T7": {
    "frames": 9347,
-   "e_total": 6588,
-   "e_fr": 0.7048,
+   "e_total": 6427,
+   "e_fr": 0.6876,
    "tids": 17,
-   "occ": 0.6611,
-   "ghosts_fr": 0.1157,
+   "occ": 0.6466,
+   "ghosts_fr": 0.093,
    "mirror_fr": 0.0,
    "truth_complete": false,
    "truth": {
     "walker": {
-     "coverage": 0.5996,
+     "coverage": 0.6052,
      "frag": 15,
      "first_emit": 26
     }
@@ -112,29 +112,29 @@
   },
   "V2DAY": {
    "frames": 14354,
-   "e_total": 17802,
-   "e_fr": 1.2402,
-   "tids": 52,
-   "occ": 0.8071,
-   "ghosts_fr": 1.0377,
-   "mirror_fr": 0.0069,
+   "e_total": 17765,
+   "e_fr": 1.2376,
+   "tids": 51,
+   "occ": 0.807,
+   "ghosts_fr": 1.0348,
+   "mirror_fr": 0.006,
    "truth_complete": false,
    "truth": {
     "walker": {
-     "coverage": 0.5678,
-     "frag": 7,
-     "first_emit": 195
+     "coverage": 0.5684,
+     "frag": 6,
+     "first_emit": 199
     }
    },
    "fixture_sha256": "9977c583b824d25e99bf4f631d99dfaa2a9ed3fd31da26507678253eed7b26c8"
   },
   "fix_radar4": {
    "frames": 2017,
-   "e_total": 1834,
-   "e_fr": 0.9093,
-   "tids": 8,
-   "occ": 0.7343,
-   "ghosts_fr": 0.3109,
+   "e_total": 1382,
+   "e_fr": 0.6852,
+   "tids": 6,
+   "occ": 0.6391,
+   "ghosts_fr": 0.0868,
    "mirror_fr": 0.0,
    "truth_complete": true,
    "truth": {
@@ -148,40 +148,40 @@
   },
   "fix_radar5": {
    "frames": 796,
-   "e_total": 1344,
-   "e_fr": 1.6884,
-   "tids": 11,
+   "e_total": 1028,
+   "e_fr": 1.2915,
+   "tids": 8,
    "occ": 0.9221,
    "ghosts_fr": 0.0427,
-   "mirror_fr": 0.5565,
+   "mirror_fr": 0.157,
    "truth_complete": false,
    "truth": {
     "walker": {
      "coverage": 0.9221,
-     "frag": 10,
+     "frag": 7,
      "first_emit": 48
     },
     "outbound_mover": {
-     "coverage": 0.3452,
+     "coverage": 0.3553,
      "frag": 1,
-     "first_emit": 130
+     "first_emit": 127
     }
    },
    "fixture_sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac"
   },
   "longnight": {
    "frames": 14103,
-   "e_total": 8617,
-   "e_fr": 0.611,
-   "tids": 29,
-   "occ": 0.5729,
-   "ghosts_fr": 0.227,
+   "e_total": 7437,
+   "e_fr": 0.5273,
+   "tids": 24,
+   "occ": 0.5205,
+   "ghosts_fr": 0.2538,
    "mirror_fr": 0.0001,
    "truth_complete": false,
    "truth": {
     "walker": {
-     "coverage": 0.6104,
-     "frag": 13,
+     "coverage": 0.422,
+     "frag": 9,
      "first_emit": 1
     }
    },
