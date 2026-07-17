@@ -49,7 +49,6 @@ static struct {
     RChan jpeg, radar, y10, det;
     int has_native, has_display, video_native;    /* video source selection */
     int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
-    int meter_z, meter_dw, meter_dh;               /* operator's recorded zoom + display dims — meter the native tone map on that crop */
     int tonemap_match;                             /* replay tone map == record-time tone map */
     int tm_vs_eo;                                  /* 0 not checked, 1 matches EO, -1 drift */
     double tm_vs_eo_diff;                          /* mean abs pixel diff of the check */
@@ -390,6 +389,15 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
     const uint8_t *p = rchan_payload(&g_rp.y10, i, &plen, NULL);
     int w = g_rp.nat_w, h = g_rp.nat_h, mode = g_rp.nat_mode;
     int median = ev_int(ev_at(EV_EO, g_rp.y10.t_ms[i]), "median", 0);   /* as it was live */
+    /* PER-FRAME operator zoom crop for tone-map metering (zoom varies within a
+     * session; a session-level value blows out the wide parts). Read the display
+     * frame at this instant: eo_jpeg meta {seq,dw,dh,zoom,res,0}. */
+    int mz = 0, mdw = 0, mdh = 0;
+    if (g_rp.jpeg.n > 0) {
+        long jj = rchan_at(&g_rp.jpeg, g_rp.y10.t_ms[i]); if (jj < 0) jj = 0;
+        uint32_t jl; const AirecRecHdr *jh;
+        if (rchan_payload(&g_rp.jpeg, jj, &jl, &jh) && jh) { mz = (int)jh->meta[3]; mdw = (int)jh->meta[1]; mdh = (int)jh->meta[2]; }
+    }
     if (!p) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     if (plen > raw_cap) { free(raw); raw = malloc(plen); raw_cap = raw ? plen : 0; }
     if (!raw) { pthread_mutex_unlock(&g_rp.lk); return -1; }
@@ -404,8 +412,7 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
     }
     int reseed = (i != g_nat.tone_i + 1);        /* EMA advances on sequential play */
     int rc = render_native_jpeg(raw, plen, w, h, mode, median, &g_nat.tone, reseed, quality,
-                                buf, NAT_JPG_CAP, len,
-                                g_rp.meter_z, g_rp.meter_dw, g_rp.meter_dh);
+                                buf, NAT_JPG_CAP, len, mz, mdw, mdh);
     if (rc == 0) {
         g_nat.tone_i = i;
         if (!g_nat.jpg) g_nat.jpg = malloc(NAT_JPG_CAP);
@@ -491,21 +498,8 @@ static int rp_open(const char *sid)
                 g_rp.has_illum = 1;
         }
     }
-
-    /* Meter the native tone map on the region the operator was actually viewing:
-     * read the zoom + display dims from a representative recorded display frame
-     * (eo_jpeg meta = {seq,dw,dh,zoom,res,0}). Without this a full-frame native
-     * render meters the whole (mostly-dark night) frame and blows out the lit
-     * center. 0 => whole-frame meter (no display channel to read the zoom from). */
-    g_rp.meter_z = g_rp.meter_dw = g_rp.meter_dh = 0;
-    if (g_rp.jpeg.n > 0) {
-        uint32_t jl; const AirecRecHdr *jh;
-        if (rchan_payload(&g_rp.jpeg, g_rp.jpeg.n / 2, &jl, &jh) && jh) {
-            g_rp.meter_z  = (int)jh->meta[3];   /* zoom 1/2/4/8 */
-            g_rp.meter_dw = (int)jh->meta[1];   /* display width  */
-            g_rp.meter_dh = (int)jh->meta[2];   /* display height */
-        }
-    }
+    /* Native tone-map metering uses the operator's PER-FRAME zoom crop, read from
+     * the display frame at each instant in nat_jpeg (zoom varies within a session). */
     nat_cache_drop();
 
     char v[64] = "";

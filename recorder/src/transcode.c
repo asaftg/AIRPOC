@@ -85,8 +85,9 @@ void transcode_cancel(void)
  * v3 = 50 Mbit/s + keyframe/s — high quality, still level-conformant, smooth seek.
  * v4 = (median-flag attempt — superseded).
  * v5 = hqdn3d denoise: kills night-grain shimmer that H.264 introduced.
- * v6 = meter the tone map on the operator's recorded zoom crop (no full-frame blow-out). */
-#define TRANSCODE_VER 6
+ * v6 = meter the tone map on the operator's recorded zoom crop (no full-frame blow-out).
+ * v7 = PER-FRAME zoom crop (zoom varies within a session; session-level blew out wide parts). */
+#define TRANSCODE_VER 7
 
 /* An mp4 is usable only if it exists AND carries the current encoder version
  * (sidecar native.mp4.ver). Older recordings' mp4s have no marker (or a stale
@@ -159,29 +160,48 @@ static AirecIdxRow *load_idx(const char *dir, const char *chan, long *n)
     return rows;
 }
 
-/* Operator's recorded zoom + display dims from a representative eo_jpeg frame
- * (meta {seq,dw,dh,zoom,res,0}), so the mp4 meters the tone map on the region the
- * operator viewed — same as the live/replay path, or a full-frame night render
- * blows out. Session-level (zoom is a stable AE decision). 0 => whole-frame. */
-static void read_meter_zoom(const char *dir, int *mz, int *mdw, int *mdh)
+/* Per-frame operator-zoom timeline from eo_jpeg (meta {seq,dw,dh,zoom,res,0}), so
+ * each mp4 frame is tone-mapped for the crop the operator viewed at THAT instant —
+ * zoom varies within a session, and metering a wide frame on a narrow crop blows
+ * out the periphery. Index order == time order (0 => whole-frame at that point). */
+typedef struct { uint64_t t; int z, dw, dh; } ZoomPt;
+
+static ZoomPt *build_zoom_timeline(const char *dir, long *out_n)
 {
-    *mz = *mdw = *mdh = 0;
     long n = 0;
     AirecIdxRow *rows = load_idx(dir, "eo_jpeg", &n);
-    if (!rows || n <= 0) { free(rows); return; }
-    AirecIdxRow *r = &rows[n / 2];               /* representative (mid-session) frame */
-    char sp[720];
-    snprintf(sp, sizeof sp, "%s/eo_jpeg/data.%05u.airec", dir, r->segment_no);
-    FILE *f = fopen(sp, "rb");
-    if (f) {
-        AirecRecHdr h;
-        if (fseek(f, (long)r->offset, SEEK_SET) == 0 &&
-            fread(&h, 1, sizeof h, f) == sizeof h && h.magic == AIREC_REC_MAGIC) {
-            *mdw = (int)h.meta[1]; *mdh = (int)h.meta[2]; *mz = (int)h.meta[3];
+    *out_n = 0;
+    if (!rows || n <= 0) { free(rows); return NULL; }
+    ZoomPt *zt = malloc((size_t)n * sizeof *zt);
+    if (!zt) { free(rows); return NULL; }
+    FILE *f = NULL; uint32_t seg = 0xffffffff;
+    for (long k = 0; k < n; k++) {
+        AirecIdxRow *r = &rows[k];
+        zt[k].t = r->t_ns; zt[k].z = 0; zt[k].dw = 0; zt[k].dh = 0;
+        if (r->segment_no != seg) {
+            if (f) fclose(f);
+            char sp[720]; snprintf(sp, sizeof sp, "%s/eo_jpeg/data.%05u.airec", dir, r->segment_no);
+            f = fopen(sp, "rb"); seg = r->segment_no;
         }
-        fclose(f);
+        AirecRecHdr h;
+        if (f && fseek(f, (long)r->offset, SEEK_SET) == 0 &&
+            fread(&h, 1, sizeof h, f) == sizeof h && h.magic == AIREC_REC_MAGIC) {
+            zt[k].dw = (int)h.meta[1]; zt[k].dh = (int)h.meta[2]; zt[k].z = (int)h.meta[3];
+        }
     }
+    if (f) fclose(f);
     free(rows);
+    *out_n = n;
+    return zt;
+}
+
+static void zoom_at(const ZoomPt *zt, long n, uint64_t t, int *z, int *dw, int *dh)
+{
+    *z = 0; *dw = 0; *dh = 0;
+    if (!zt || n <= 0) return;
+    long lo = 0, hi = n - 1, best = 0;
+    while (lo <= hi) { long mid = (lo + hi) / 2; if (zt[mid].t <= t) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+    *z = zt[best].z; *dw = zt[best].dw; *dh = zt[best].dh;
 }
 
 /* Build native.mp4 for a session (blocking). pct (optional) tracks progress.
@@ -245,7 +265,7 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
     uint8_t *out8 = malloc((size_t)w * h);
     uint8_t *raw = malloc((size_t)w * h * 2);
     EoToneState st = { 0, 0, 0 };
-    int mz, mdw, mdh; read_meter_zoom(dir, &mz, &mdw, &mdh);   /* meter on the operator's zoom crop */
+    long zn = 0; ZoomPt *zt = build_zoom_timeline(dir, &zn);   /* per-frame operator zoom for tone-map metering */
     FILE *cur = NULL; uint32_t cur_seg = 0xffffffff;   /* one segment open at a time */
     int ok = out8 && raw;
 
@@ -265,12 +285,13 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
             r->payload_len > (uint32_t)w * h * 2 ||
             fread(raw, 1, r->payload_len, cur) != r->payload_len) continue;
 
+        int mz, mdw, mdh; zoom_at(zt, zn, r->t_ns, &mz, &mdw, &mdh);   /* the crop the operator viewed at this frame */
         if (render_native_gray8(raw, r->payload_len, w, h, mode, 0, &st, i == 0, out8, mz, mdw, mdh) == 0)
             if (fwrite(out8, 1, (size_t)w * h, ff) != (size_t)w * h) { ok = 0; break; }
         if (pct) *pct = (int)((i + 1) * 100 / n);
     }
     if (cur) fclose(cur);
-    free(out8); free(raw); free(rows);
+    free(out8); free(raw); free(rows); free(zt);
     int rc = pclose(ff);
 
     char final[680];
