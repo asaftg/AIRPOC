@@ -279,43 +279,6 @@
                               *      always takes several consistent hits */
 #define LLR_HIT_MIN (-2.0)   /*      per-hit floor (gate-edge hit != death) */
 #define LLR_MAX 30.0         /*      score cap */
-/* ---- doppler-native association (2026-07-13) ----
- * MOVING points are claimed in a 3-D gate (range, azimuth, doppler) instead
- * of the spatial-only 2-D gate: a point must also tell the track's velocity
- * story. Doppler on this fw is direct range-rate (sign verified), so the
- * track's velocity identity vr_eff blends its recent median CLAIMED doppler
- * with its fitted range-rate (a young track has no trustworthy fit - claimed
- * only; an incoherent track's fit is noise-fed - claimed only).
- *   dr = |r_i - (r_t + vr_eff*dt)| / (DN_R * growth)
- *   da = |az_i - az_pred|          / (DN_AZ * growth)
- *   dd = min over k in {-1,0,1} of |dop_i - vr_eff + k*2*V_FOLD| / DN_D
- *   claim if dr<1 && da<1 && dd<1 && dr+da+dd < DN_SUM ; score = sum
- * Fold-aware: a fast target's doppler wraps at +-V_FOLD; k scans one wrap.
- * The existing miss-growth factor still widens dr/da on coasting tracks
- * (dropping it would regress re-acquire), and dd is never widened - the
- * velocity story must hold precisely.
- * The dd term compares the point's doppler to the track's CLAIMED-doppler
- * identity (dop_med), never to the fit-blend: fast vehicles on this DDMA
- * fw carry a systematic claimed-doppler bias (T5 receding car: claims a
- * consistent +11.5 m/s while moving ~18 m/s radially - a demux artifact),
- * and gating them against the fit-corrected blend rejects their own
- * points. Identity is claim-to-claim; the blend only PREDICTS range.
- * (A wider either-claim-or-fit band was tried and rejected: it lets
- * co-located competitors steal points - V2DAY corridor -13 pts.)
- * STATIC-channel points keep the old spatial claiming (no doppler
- * identity), as do moving points against a track that never owned a
- * moving point. Two-tier confirmed-first structure unchanged. */
-#define DN_R 4.0             /* m    range gate norm */
-#define DN_AZ 4.0            /* deg  azimuth gate norm */
-#define DN_D 1.5             /* m/s  doppler gate norm */
-#define DN_SUM 2.5           /*      combined gate */
-#define DN_YOUNG_HITS 5      /*      below this the velocity fit is not trusted */
-#define DN_MED_ALPHA 0.3     /*      claimed-doppler median EWMA gain */
-/* V_FOLD from the shipped A/G cfg (profileCfg idle 3 us + rampEnd 20.5 us =
- * 23.5 us chirp repeat at 77 GHz): v = lambda/(4*Tc) = 41.4 m/s. Matches the
- * measured max |doppler| in the corpus (41.416). Re-derive if the cfg chirp
- * timing ever changes. */
-#define V_FOLD_MPS 41.45
 #define LLR_MIN (-10.0)      /*      score floor (misses must stay recoverable) */
 
 typedef struct {
@@ -344,8 +307,6 @@ typedef struct {
     int walk_bad;            /* consecutive decidable-fail frames */
     double wD, wdR, wcnet, wmed; /* last walk metrics (introspection) */
     double llr;              /* sequential track score (LLR confirmation) */
-    double dop_med;          /* EWMA of median claimed doppler (velocity id) */
-    int dop_ok;              /* track has owned moving points */
     /* guidance output filter (wire-only; no assoc/lifecycle feedback) */
     double f_az, f_azr;      /* alpha-beta az state (deg, deg/s) */
     double f_el, f_elr;      /* alpha-beta el state (deg, deg/s) */
@@ -801,40 +762,11 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             int ti=R->ord[oi]; Track *t=&R->tracks[ti];
             if(t->confirmed != tier) continue;
             int st_ok = t->max_mv >= ST_SUSTAIN_MV;
-            /* velocity identity + doppler-native gate norms (see DN_*) */
-            int dnative = t->dop_ok;
-            double vr_eff;
-            if(!t->dop_ok)                      vr_eff = t->vr;
-            else if(t->hits_total < DN_YOUNG_HITS || t->coh_bad)
-                                                vr_eff = t->dop_med;
-            else                                vr_eff = 0.6*t->dop_med + 0.4*t->vr;
-            double prd = t->r + vr_eff*dt;
-            double gcap = t->confirmed ? CONF_GROW_CAP : MISS_GROW_CAP;
-            double g = t->coh_bad ? 1.0 : 1.0 + MISS_GROW*t->misses;
-            if(g > gcap) g = gcap;
-            double nr = DN_R*g, naz = DN_AZ*g;
             for(int i=0;i<m;i++){
                 if(!tier && tier1[i]) continue;          /* leftovers only */
-                if(ismv[i] && dnative){
-                    /* 3-D doppler-native gate (moving points) */
-                    double dr=fabs(rs[i]-prd)/nr, da=fabs(azs[i]-PAZ[ti])/naz;
-                    if(dr>=1.0 || da>=1.0) continue;
-                    double dd0=fabs(dops[i]-t->dop_med);
-                    double ddm=fabs(dops[i]-t->dop_med+2.0*V_FOLD_MPS);
-                    double ddp=fabs(dops[i]-t->dop_med-2.0*V_FOLD_MPS);
-                    double dd=(ddm<dd0?ddm:dd0); if(ddp<dd) dd=ddp;
-                    dd/=DN_D;
-                    if(dd>=1.0) continue;
-                    double d=dr+da+dd;
-                    if(d<DN_SUM && d<bestd[i]){ bestd[i]=d; owner[i]=ti; }
-                } else {
-                    /* spatial claiming: static-channel points always; moving
-                     * points too when the track's velocity story is broken
-                     * (fast-vehicle demux bias) or absent */
-                    if(!ismv[i] && !st_ok) continue;
-                    double dr=fabs(rs[i]-PR[ti])/RG[ti], da=fabs(azs[i]-PAZ[ti])/AZG[ti];
-                    if(dr<1.0 && da<1.0){ double d=dr+da; if(d<bestd[i]){ bestd[i]=d; owner[i]=ti; } }
-                }
+                if(!ismv[i] && !st_ok) continue;
+                double dr=fabs(rs[i]-PR[ti])/RG[ti], da=fabs(azs[i]-PAZ[ti])/AZG[ti];
+                if(dr<1.0 && da<1.0){ double d=dr+da; if(d<bestd[i]){ bestd[i]=d; owner[i]=ti; } }
             }
         }
         if(tier){
@@ -893,8 +825,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 vd=med(gv,nmv_hit);
                 double derr=fabs(vd - t->vr);
                 t->dop_err=(1-DOP_ALPHA)*t->dop_err + DOP_ALPHA*derr;
-                if(!t->dop_ok){ t->dop_med=vd; t->dop_ok=1; }
-                else t->dop_med=(1-DN_MED_ALPHA)*t->dop_med + DN_MED_ALPHA*vd;
             }
             /* half-extents from the frame's points (for the wire box) */
             double mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
@@ -1166,7 +1096,6 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 t->pass_r=crr;
                 t->f_az=caz; t->f_el=cel; t->f_r=crr;   /* output filter seed */
                 t->o_az=caz; t->o_el=cel; t->f_init=1;
-                t->dop_med=cdop; t->dop_ok=1;           /* velocity identity */
                 if(any_unk) t->snr_unknown=1;
                 if(smax>-1e9
                    && !(now_t < R->flood_until && crr < FLOOD_R+FLOOD_MARGIN))

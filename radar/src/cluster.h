@@ -2,9 +2,7 @@
  *
  * Replaces the earlier per-frame DBSCAN+Kalman (ground-bench clustering.py port).
  * Class-agnostic track-before-detect: velocity from position history (range-rate
- * / angle-rate) with claimed doppler as a second, fold-aware velocity identity
- * (2026-07-13: doppler-native association, walk-guard motion verification, and
- * the guidance output filter all consume it); two-tier nearest-track association
+ * / angle-rate, never ambiguous Doppler); two-tier nearest-track association
  * (confirmed tracks claim points first — junk cannot shred an established
  * target); a moving channel plus a fresh-static occupancy channel so a car that
  * drives in and parks keeps its box; fast M-of-N confirm; short coast; spatial
