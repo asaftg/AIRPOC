@@ -163,6 +163,30 @@ Validation (2026-07-16 corpus): T7 loses only an off-corridor 130 m breather
 fragment and the 306 m turnaround untouched; T2 loses one 84-frame breather;
 T6/noise stay zero; T1/T4/T5/radar4/radar5 bit-identical.
 
+## LLR confirm path, far-only (fixed, `LLR_*` in `src/cluster.c`)
+
+A second, evidence-accumulating way for a track **past 150 m** to confirm.
+The standard M-of-N paths need a dense hit pattern inside a short window; a
+far, faint target flickers, and its hits-with-gaps never line up. The LLR
+score adds up likelihood instead: every hit adds "how much better than local
+clutter does this measurement fit the track" (brighter return = tighter fit
+= more credit; the local clutter rate is learned online per 50 m range ring),
+every miss subtracts a fixed penalty. Reaching a score of 5.5 confirms, with
+the same jitter gate and a reduced moving-rate floor.
+
+Far-only is the re-add fix: the unrestricted quad-era path once bred a
+phantom class at 130–138 m; below 150 m the strict M-of-N floor stands alone.
+Per-hit credit is capped (+1.5) so an empty ring cannot let one bright
+multipath coincidence confirm in two hits.
+
+Honest validation note (2026-07-16 corpus): calibration holds — noise
+fixtures stay at zero, T1 gains 15 far frames, nothing exceeds any baseline —
+but this path did NOT move the T7 return-leg re-acquire it was hoped to fix.
+Measured in the 34 s re-acquire gap: 928 distinct tentative tracks die of
+4-miss runs at the night walker's 16 dB detection duty vs 4 that confirm at
+all. The binder is tentative death by misses (an association-continuity
+problem), not confirmation latency.
+
 ## Guidance output filter (fixed, `OUTF_*` in `src/cluster.c`)
 
 What the **wire reports** for each target is a smoothed output filter, not the
