@@ -208,6 +208,23 @@ deduplicated emitted targets by comparing a raw candidate against the
 dedup now compares raw track positions on both sides, which is exactly the
 comparison the pre-filter tracker made (validated count-neutral corpus-wide).
 
+## Doppler-native association — evaluated and NOT re-added (2026-07-16)
+
+The quad-era 3-D association gate (range, azimuth, doppler; commit 8b277e0)
+was re-applied on top of the ghost-killer stack and measured against the
+frozen corpus before deciding. Verdict: **dropped.** With the reflection
+suppressor active it still blew four fixtures far past their
+never-exceed baselines — radar5 1.29 → 3.30 E/fr, radar4 0.69 → 1.59,
+V2DAY 1.24 → 2.62, T1 2.87 → 4.30 — and it regressed T7's near-field
+outbound coverage (<70 m) from 659 to 440 covered frames (−18.5 points,
+reproducing the regression that got the quad reverted in the field). The
+one gate it passed: T7 70–200 m coverage 3286 → 3898 frames. Holding a
+track together by its doppler identity keeps real far tracks alive AND
+keeps every junk track alive; the corpus says the junk wins. Far-leg
+continuity should come from the LLR confirm path plus a patience-style
+detector, not from widening what a track may claim. Do not re-introduce
+without replay evidence on this corpus.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,
