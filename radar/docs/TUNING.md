@@ -129,6 +129,27 @@ Validation (2026-07-16 corpus): radar5 mirror population 453 → 137 emitted
 frames (walker and car retained to the frame); T1/T2 crossing pairs zero
 suppressed frames; T7/T4/V2DAY/T5 bit-identical.
 
+## Guidance output filter (fixed, `OUTF_*` in `src/cluster.c`)
+
+What the **wire reports** for each target is a smoothed output filter, not the
+raw per-frame cluster median. Output-only: association, gating and lifecycle
+never see it (validated — emitted counts and track-id sequences are identical
+across the whole fixture corpus with the filter on).
+
+| Number | Value | Why |
+|---|---|---|
+| Angle smoother | alpha-beta on (az, az-rate) + (el, el-rate), Benedict-Bordner beta = a²/(2−a) | steady angles for the gimbal; the rate state follows a constant-rate crosser without lag. |
+| Alpha tiers | 0.35 / 0.20 / 0.12 at <20 hits / ≥20 / ≥60 hits + peak SNR ≥21 dB | a young or faint track follows its measurements; an established bright one smooths hard. Far-segment (>200 m) az step-std 0.466→0.150° (3.1×) on T7. |
+| Range/vr filter | same alpha-beta + claimed-doppler median as a **direct** range-rate measurement (gain 0.35, gate 3 m/s) | doppler sign verified on this firmware = range-rate (outbound walker claims +1.8 m/s); the gate rejects folded/soup doppler. |
+| Coast / park | rates held through misses; park-held track bleeds rates ×0.5/frame | coasting continues the trajectory; a parked box must not drift on a stale rate. |
+| Re-acquire slew | output angles converge ≤3°/s + track rate after a coast (`OUTF_SLEW_DPS`) | the gimbal never sees a re-latch teleport; normal tracking follows the filter exactly (no cap). |
+
+Re-add note (this was in the reverted 2026-07-13 quad): the original version
+deduplicated emitted targets by comparing a raw candidate against the
+**filtered** wire outputs — two views of the same scene that drift apart. The
+dedup now compares raw track positions on both sides, which is exactly the
+comparison the pre-filter tracker made (validated count-neutral corpus-wide).
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,

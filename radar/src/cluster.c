@@ -256,6 +256,45 @@
 #define REFL_SEP_DEG 10.0    /* deg  ... or this azimuth arc, whichever larger */
 #define REFL_SHADOW_S 2.5    /* s    sustained shadow that convicts a copy */
 #define REFL_CLEAR_S 1.0     /* s    continuous clear that resets the clock */
+/* ---- guidance output filter (2026-07-16 re-add of 01eec6e): the WIRE ----
+ * Output-only smoothing of the emitted (az, el, range) so the gimbal consumes
+ * a steady angle stream instead of the raw per-frame medians. It NEVER feeds
+ * association, gating, or lifecycle — the tracker state above is bit-identical
+ * with or without it (validated: emitted counts and tid sequences unchanged on
+ * the whole fixture corpus).
+ *   angles — alpha-beta on (az, az_rate) and (el, el_rate), Benedict-Bordner
+ *            beta = a^2/(2-a), gain tiers scheduled on hit-count + brightness
+ *            (a young/faint track follows its measurements, an established one
+ *            smooths hard);
+ *   range  — same alpha-beta on (r, vr), PLUS the claimed-doppler median as a
+ *            DIRECT range-rate measurement. Sign verified on this fw against
+ *            T7 (outbound walker, r growing, claims +1.8 m/s): positive
+ *            doppler = receding = range-rate, so it feeds vr unnegated. A
+ *            claimed median far from the current estimate is folded/soup —
+ *            rejected (OUTF_DOP_GATE);
+ *   coast  — on a miss the filter propagates on its own rates (rates held);
+ *            while the track is park-held (vr forced 0) the filter holds
+ *            position and bleeds its rates so a parked box cannot drift;
+ *   reacq  — after a coast, the OUTPUT angles converge to the filter at
+ *            <= OUTF_SLEW_DPS on top of the track's own angular rate, so the
+ *            gimbal never sees a teleport on re-acquire.
+ * Re-add fix vs the reverted quad commit: the emit-stage spatial dedup used
+ * to recover positions from the FILTERED wire outputs while candidates came
+ * in raw — the two drift apart and dedup decisions could flip. Dedup now
+ * compares raw track positions on both sides (etrk[]), by construction the
+ * same comparison V2 made. */
+#define OUTF_A0 0.35         /*      alpha: young track (few hits) */
+#define OUTF_A1 0.20         /*      alpha: established track (spec point) */
+#define OUTF_A2 0.12         /*      alpha: long-lived bright track */
+#define OUTF_T1_HITS 20      /*      hits to reach tier 1 */
+#define OUTF_T2_HITS 60      /*      hits to reach tier 2 ... */
+#define OUTF_T2_SNR 21.0     /* dB   ... plus lifetime peak SNR over this */
+#define OUTF_BB(a) ((a)*(a)/(2.0-(a)))  /* Benedict-Bordner beta */
+#define OUTF_DOP_GAIN 0.35   /*      claimed-doppler direct range-rate gain */
+#define OUTF_DOP_GATE 3.0    /* m/s  reject folded/noise claimed doppler */
+#define OUTF_PARK_BLEED 0.5  /*      rate bleed per frame while park-held */
+#define OUTF_SLEW_DPS 3.0    /* deg/s re-acquire output slew cap (+track rate) */
+#define OUTF_REACQ_MISS 2    /*      miss streak that arms the slew limiter */
 
 typedef struct {
     int used, tid;
@@ -283,6 +322,12 @@ typedef struct {
     int breeder;             /* a copy already served full time in THIS
                                 track's shadow: proven mirror source, its
                                 later copies convict instantly */
+    /* guidance output filter (wire-only; no assoc/lifecycle feedback) */
+    double f_az, f_azr;      /* alpha-beta az state (deg, deg/s) */
+    double f_el, f_elr;      /* alpha-beta el state (deg, deg/s) */
+    double f_r, f_vr;        /* alpha-beta range state (m, m/s) */
+    double o_az, o_el;       /* slew-limited OUTPUT angles (deg) */
+    int f_init, f_reacq;
     double snr_peak;         /* lifetime max claimed SNR (brightness evidence) */
     int snr_unknown;         /* saw a point without SNR (no TLV7) -> fail open */
 } Track;
@@ -493,6 +538,71 @@ static void refit_vel(Track *t, double tnow){
     t->vr=clampd(nr/den, -SPEED_MAX, SPEED_MAX);
     double valim=(SPEED_MAX/(t->r>10.0?t->r:10.0))/DEG;
     t->va=clampd(na/den, -valim, valim);
+}
+/* Guidance output filter — advance one frame (see OUTF_* block above).
+ * hit: fresh frame medians (mr, maz, mel) + optionally the claimed-doppler
+ * median vd (have_vd). miss: coast on held rates; parked: hold position and
+ * bleed rates (a park-held box must not drift on a stale rate). */
+static void outf_step(Track *t, double dt, int hit, int parked,
+                      double mr, double maz, double mel,
+                      int have_vd, double vd)
+{
+    if (!t->f_init) {
+        if (!hit) return;
+        t->f_az = maz; t->f_el = mel; t->f_r = mr;
+        t->f_azr = 0.0; t->f_elr = 0.0; t->f_vr = have_vd ? vd : 0.0;
+        t->o_az = maz; t->o_el = mel;
+        t->f_init = 1; t->f_reacq = 0;
+        return;
+    }
+    if (parked) {                        /* park-held: freeze, bleed rates */
+        t->f_azr *= OUTF_PARK_BLEED;
+        t->f_elr *= OUTF_PARK_BLEED;
+        t->f_vr  *= OUTF_PARK_BLEED;
+    } else {                             /* predict */
+        t->f_az += t->f_azr * dt;
+        t->f_el += t->f_elr * dt;
+        t->f_r  += t->f_vr  * dt;
+    }
+    if (hit) {
+        double a = (t->hits_total >= OUTF_T2_HITS && t->snr_peak >= OUTF_T2_SNR)
+                       ? OUTF_A2
+                   : (t->hits_total >= OUTF_T1_HITS) ? OUTF_A1 : OUTF_A0;
+        double b = OUTF_BB(a), e;
+        e = maz - t->f_az; t->f_az += a * e; t->f_azr += b / dt * e;
+        e = mel - t->f_el; t->f_el += a * e; t->f_elr += b / dt * e;
+        e = mr  - t->f_r;  t->f_r  += a * e; t->f_vr  += b / dt * e;
+        /* claimed doppler = direct range-rate on this fw (sign verified) */
+        if (have_vd && fabs(vd - t->f_vr) < OUTF_DOP_GATE)
+            t->f_vr += OUTF_DOP_GAIN * (vd - t->f_vr);
+        if (t->misses >= OUTF_REACQ_MISS) t->f_reacq = 1;
+    } else if (t->misses >= OUTF_REACQ_MISS) {
+        t->f_reacq = 1;
+    }
+    /* physics clamps (same limits the tracker itself lives under) */
+    if (t->f_r < R_MIN) t->f_r = R_MIN;
+    t->f_vr = clampd(t->f_vr, -SPEED_MAX, SPEED_MAX);
+    {
+        double valim = (SPEED_MAX / (t->f_r > 10.0 ? t->f_r : 10.0)) / DEG;
+        t->f_azr = clampd(t->f_azr, -valim, valim);
+        t->f_elr = clampd(t->f_elr, -valim, valim);
+    }
+    /* output angles: normal tracking follows the filter exactly; after a
+     * coast the output converges at <= OUTF_SLEW_DPS (+ the track's own
+     * rate) so the gimbal never sees a re-acquire teleport */
+    if (t->f_reacq) {
+        double caz = (OUTF_SLEW_DPS + fabs(t->f_azr)) * dt;
+        double cel = (OUTF_SLEW_DPS + fabs(t->f_elr)) * dt;
+        double daz = t->f_az - t->o_az, del = t->f_el - t->o_el;
+        if (fabs(daz) <= caz && fabs(del) <= cel) {
+            t->o_az = t->f_az; t->o_el = t->f_el; t->f_reacq = 0;
+        } else {
+            t->o_az += clampd(daz, -caz, caz);
+            t->o_el += clampd(del, -cel, cel);
+        }
+    } else {
+        t->o_az = t->f_az; t->o_el = t->f_el;
+    }
 }
 /* physical-coherence evidence over the trailing window of MEASURED positions
  * (radar_tracker.py guard_metrics): time-binned waypoints suppress per-frame
@@ -729,17 +839,20 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             hist_push(t, now_t, t->r, t->az, nmv_hit>0 ? vd : (double)NAN);
             refit_vel(t, now_t);
             hit_push(t, 1); t->misses=0; t->age++; t->hits_total++;
+            outf_step(t, dt, 1, 0, mr, maz, mel, nmv_hit>0, vd);
         } else {
-            double rad, cross;
+            double rad, cross; int parked=0;
             recent_motion(t, now_t, PARK_WIN, &rad, &cross);
             if(t->confirmed && t->moved_frames>=MOVE_CONFIRM
                && (now_t - t->last_moved_t) <= R->park_s
                && rad < PARK_DISP){
                 t->vr=0; t->va=0;    /* genuinely-moved target that stopped: hold */
+                parked=1;
             } else { t->r=PR[ti]; t->az=PAZ[ti]; }
             hit_push(t, 0); t->misses++; t->age++;
             t->mv_ewma*=0.85; if(t->mv_ewma<ST_MV_LO) t->st_frames++;
             t->liar_evid=0;
+            outf_step(t, dt, 0, parked, 0.0, 0.0, 0.0, 0, 0.0);
         }
     }
     /* ---- motion test (range-scaled, NON-latching) ---- */
@@ -925,6 +1038,8 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 t->sx=t->sy=t->sz=MIN_SIZE_M;
                 t->last_moved_t=now_t;
                 t->pass_r=crr;
+                t->f_az=caz; t->f_el=cel; t->f_r=crr;   /* output filter seed */
+                t->o_az=caz; t->o_el=cel; t->f_init=1;
                 if(any_unk) t->snr_unknown=1;
                 if(smax>-1e9
                    && !(now_t < R->flood_until && crr < FLOOD_R+FLOOD_MARGIN))
@@ -986,9 +1101,12 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
     static Track *etrk[RADAR_MAX_TARGETS];        /* tracks behind out[] */
     for(int i=0;i<ncand && nout<max_out;i++){
         Track *t=&R->tracks[ci[i]]; int dup=0;
-        /* spatial dedup against already-emitted (recover r,az from x,y) */
+        /* spatial dedup against already-emitted — RAW track positions on
+         * both sides (etrk[]): the wire below carries the smoothed output
+         * filter, and raw-vs-filtered comparisons drift apart (the reverted
+         * quad's dedup bug) */
         for(int e=0;e<nout;e++){
-            double ex=out[e].x, ey=out[e].y, er=hypot(ex,ey), eazd=atan2(ex,ey)/DEG;
+            double er=etrk[e]->r*cos(etrk[e]->el*DEG), eazd=etrk[e]->az;
             double cross=fabs((eazd-t->az)*DEG)*0.5*(er+t->r);
             if(cross<R->dedup_cross && fabs(er-t->r)<DEDUP_R){ dup=1; break; }
         }
@@ -997,8 +1115,13 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
          * is maintained below for every confirmed track; here it decides */
         if(t->shadow_s >= REFL_SHADOW_S) continue;      /* convicted copy */
         int suspect = t->shadow_s > 0.0;        /* on watch: emit, flagged */
-        double rr=t->r, a=t->az*DEG, e=t->el*DEG, rh=rr*cos(e);
-        double vrad=t->vr, vaz=t->va*DEG;
+        /* wire position/velocity = the guidance output filter (smoothed,
+         * slew-limited angles); raw medians stay internal. Association,
+         * dedup and lifecycle above all still run on the raw track state. */
+        double rr=t->f_init?t->f_r:t->r;
+        double a=(t->f_init?t->o_az:t->az)*DEG, e=(t->f_init?t->o_el:t->el)*DEG;
+        double rh=rr*cos(e);
+        double vrad=t->f_init?t->f_vr:t->vr, vaz=(t->f_init?t->f_azr:t->va)*DEG;
         RadarTarget *o=&out[nout++];
         o->tid=t->tid;
         o->x=(float)(rh*sin(a)); o->y=(float)(rh*cos(a)); o->z=(float)(rr*sin(e));
