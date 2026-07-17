@@ -84,8 +84,9 @@ void transcode_cancel(void)
  * v2 = capped 20 Mbit/s (fixed stall but too soft).
  * v3 = 50 Mbit/s + keyframe/s — high quality, still level-conformant, smooth seek.
  * v4 = (median-flag attempt — superseded).
- * v5 = hqdn3d denoise: kills night-grain shimmer that H.264 introduced. */
-#define TRANSCODE_VER 5
+ * v5 = hqdn3d denoise: kills night-grain shimmer that H.264 introduced.
+ * v6 = meter the tone map on the operator's recorded zoom crop (no full-frame blow-out). */
+#define TRANSCODE_VER 6
 
 /* An mp4 is usable only if it exists AND carries the current encoder version
  * (sidecar native.mp4.ver). Older recordings' mp4s have no marker (or a stale
@@ -158,6 +159,31 @@ static AirecIdxRow *load_idx(const char *dir, const char *chan, long *n)
     return rows;
 }
 
+/* Operator's recorded zoom + display dims from a representative eo_jpeg frame
+ * (meta {seq,dw,dh,zoom,res,0}), so the mp4 meters the tone map on the region the
+ * operator viewed — same as the live/replay path, or a full-frame night render
+ * blows out. Session-level (zoom is a stable AE decision). 0 => whole-frame. */
+static void read_meter_zoom(const char *dir, int *mz, int *mdw, int *mdh)
+{
+    *mz = *mdw = *mdh = 0;
+    long n = 0;
+    AirecIdxRow *rows = load_idx(dir, "eo_jpeg", &n);
+    if (!rows || n <= 0) { free(rows); return; }
+    AirecIdxRow *r = &rows[n / 2];               /* representative (mid-session) frame */
+    char sp[720];
+    snprintf(sp, sizeof sp, "%s/eo_jpeg/data.%05u.airec", dir, r->segment_no);
+    FILE *f = fopen(sp, "rb");
+    if (f) {
+        AirecRecHdr h;
+        if (fseek(f, (long)r->offset, SEEK_SET) == 0 &&
+            fread(&h, 1, sizeof h, f) == sizeof h && h.magic == AIREC_REC_MAGIC) {
+            *mdw = (int)h.meta[1]; *mdh = (int)h.meta[2]; *mz = (int)h.meta[3];
+        }
+        fclose(f);
+    }
+    free(rows);
+}
+
 /* Build native.mp4 for a session (blocking). pct (optional) tracks progress.
  * Unique tmp per caller so a replay-triggered build and an export build can't
  * clobber each other. Returns 0 on success. */
@@ -219,6 +245,7 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
     uint8_t *out8 = malloc((size_t)w * h);
     uint8_t *raw = malloc((size_t)w * h * 2);
     EoToneState st = { 0, 0, 0 };
+    int mz, mdw, mdh; read_meter_zoom(dir, &mz, &mdw, &mdh);   /* meter on the operator's zoom crop */
     FILE *cur = NULL; uint32_t cur_seg = 0xffffffff;   /* one segment open at a time */
     int ok = out8 && raw;
 
@@ -238,7 +265,7 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
             r->payload_len > (uint32_t)w * h * 2 ||
             fread(raw, 1, r->payload_len, cur) != r->payload_len) continue;
 
-        if (render_native_gray8(raw, r->payload_len, w, h, mode, 0, &st, i == 0, out8) == 0)
+        if (render_native_gray8(raw, r->payload_len, w, h, mode, 0, &st, i == 0, out8, mz, mdw, mdh) == 0)
             if (fwrite(out8, 1, (size_t)w * h, ff) != (size_t)w * h) { ok = 0; break; }
         if (pct) *pct = (int)((i + 1) * 100 / n);
     }

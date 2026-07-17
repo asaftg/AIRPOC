@@ -22,7 +22,7 @@ static void lut_init(void)
 
 void eo_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
                 uint8_t *out8, int ow, int oh, EoToneState *st,
-                uint16_t *sm, int *xs)
+                uint16_t *sm, int *xs, int mx, int my, int mw, int mh)
 {
     if (!g_lut_ready) lut_init();
     int npx = ow * oh;
@@ -46,9 +46,20 @@ void eo_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
     }
 
     /* p1/p99 percentile endpoints on the raw 10-bit, subsampled; EMA-smoothed
-     * across frames (anti-breathing); span floored (no noise blow-up). */
+     * across frames (anti-breathing); span floored (no noise blow-up). Metered over
+     * the whole output, OR (mw>0) only the mx,my,mw,mh sub-rect — replay meters the
+     * operator's zoom crop so a full-frame native render is exposed like their view
+     * instead of over-stretching on the dark periphery. */
     int hist[1024] = {0}, nh = 0;
-    for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }
+    if (mw <= 0 || mh <= 0) {
+        for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; }   /* whole output (unchanged) */
+    } else {
+        int x0 = mx < 0 ? 0 : mx, y0 = my < 0 ? 0 : my;
+        int x1 = mx + mw > ow ? ow : mx + mw, y1 = my + mh > oh ? oh : my + mh;
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x += 4) { hist[sm[(size_t)y * ow + x]]++; nh++; }
+        if (nh == 0) { for (int i = 0; i < npx; i += 4) { hist[sm[i]]++; nh++; } }  /* empty rect -> whole */
+    }
     int lo_t = (int)(nh * 0.01), hi_t = (int)(nh * 0.99);
     int a = 0, p_lo = 0, p_hi = 1023, got_lo = 0;
     for (int v = 0; v < 1024; v++) {
@@ -89,7 +100,7 @@ uint32_t eo_tonemap_hash(void)
         y16[2 * i] = (uint8_t)le; y16[2 * i + 1] = (uint8_t)(le >> 8);
     }
     EoToneState st = { 0, 0, 0 };
-    eo_tonemap(y16, W * 2, 0, 0, W, H, out, W, H, &st, sm, xs);
+    eo_tonemap(y16, W * 2, 0, 0, W, H, out, W, H, &st, sm, xs, 0, 0, 0, 0);
     uint32_t h = 2166136261u;               /* FNV-1a */
     for (int i = 0; i < N; i++) { h ^= out[i]; h *= 16777619u; }
     return h;

@@ -216,9 +216,11 @@ int  thumbs_generate(const char *dir);   /* 8 stills from eo_jpeg */
  * tone_state is an EoToneState* (opaque here); reseed=1 on a seek/jump. */
 int  render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
                         int median_on, void *tone_state, int reseed, int quality,
-                        uint8_t *out, uint32_t cap, uint32_t *outlen);
+                        uint8_t *out, uint32_t cap, uint32_t *outlen,
+                        int meter_z, int meter_dw, int meter_dh);
 int  render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
-                         int median_on, void *tone_state, int reseed, uint8_t *out8);
+                         int median_on, void *tone_state, int reseed, uint8_t *out8,
+                         int meter_z, int meter_dw, int meter_dh);
 int  render_decode_jpeg_gray(const uint8_t *jpg, uint32_t len, uint8_t *out, uint32_t cap,
                              int *ow, int *oh);
 int  render_selftest(void);

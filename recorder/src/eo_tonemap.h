@@ -36,10 +36,16 @@ typedef struct { double s_lo, s_hi; int seeded; } EoToneState;
  *   st : caller-owned EMA state (persist across frames for anti-breathing)
  *   sm : caller scratch, >= ow*oh uint16   (no per-call malloc on the hot path)
  *   xs : caller scratch, >= (ow+1) int
+ *   mx,my,mw,mh : metering sub-rect in OUTPUT (sm) coords — the p1/p99 stretch is
+ *     computed over only this rect, not the whole output. Pass mw<=0 (or mh<=0)
+ *     to meter the whole output (the byte-identical original behaviour, and what
+ *     eo_tonemap_hash uses). Replay uses this so a native full-frame render can be
+ *     exposed for the region the operator was actually viewing (their zoom crop),
+ *     instead of the whole mostly-dark frame over-stretching and blowing out.
  * For full-native output pass cx=cy=0, cw=ow=w, ch=oh=h. */
 void eo_tonemap(const uint8_t *y10, int bpl, int cx, int cy, int cw, int ch,
                 uint8_t *out8, int ow, int oh, EoToneState *st,
-                uint16_t *sm, int *xs);
+                uint16_t *sm, int *xs, int mx, int my, int mw, int mh);
 
 /* 3x3 median grain filter (edge-preserving), in place on an 8-bit image.
  * scratch: caller-owned, >= w*h bytes. */

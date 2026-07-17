@@ -49,6 +49,7 @@ static struct {
     RChan jpeg, radar, y10, det;
     int has_native, has_display, video_native;    /* video source selection */
     int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
+    int meter_z, meter_dw, meter_dh;               /* operator's recorded zoom + display dims — meter the native tone map on that crop */
     int tonemap_match;                             /* replay tone map == record-time tone map */
     int tm_vs_eo;                                  /* 0 not checked, 1 matches EO, -1 drift */
     double tm_vs_eo_diff;                          /* mean abs pixel diff of the check */
@@ -313,7 +314,7 @@ static void tonemap_verify_vs_display(void)
             if (!wraw) continue;
             warm_ok = render_native_gray8(wraw, wpl, nw, nh, g_rp.nat_mode,
                                           wi == ni ? median : 0,
-                                          &st, !seeded, nat) == 0;
+                                          &st, !seeded, nat, 0, 0, 0) == 0;   /* verify vs a zoom=1 display frame: whole-frame meter */
             seeded = 1;
             if (!warm_ok) break;
         }
@@ -403,7 +404,8 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
     }
     int reseed = (i != g_nat.tone_i + 1);        /* EMA advances on sequential play */
     int rc = render_native_jpeg(raw, plen, w, h, mode, median, &g_nat.tone, reseed, quality,
-                                buf, NAT_JPG_CAP, len);
+                                buf, NAT_JPG_CAP, len,
+                                g_rp.meter_z, g_rp.meter_dw, g_rp.meter_dh);
     if (rc == 0) {
         g_nat.tone_i = i;
         if (!g_nat.jpg) g_nat.jpg = malloc(NAT_JPG_CAP);
@@ -487,6 +489,21 @@ static int rp_open(const char *sid)
                 g_rp.tonemap_match = ((uint32_t)strtoul(v, NULL, 10) == eo_tonemap_hash());
             if (store_manifest_field(cj, "illum", v, sizeof v) == 0 && atoi(v) == 1)
                 g_rp.has_illum = 1;
+        }
+    }
+
+    /* Meter the native tone map on the region the operator was actually viewing:
+     * read the zoom + display dims from a representative recorded display frame
+     * (eo_jpeg meta = {seq,dw,dh,zoom,res,0}). Without this a full-frame native
+     * render meters the whole (mostly-dark night) frame and blows out the lit
+     * center. 0 => whole-frame meter (no display channel to read the zoom from). */
+    g_rp.meter_z = g_rp.meter_dw = g_rp.meter_dh = 0;
+    if (g_rp.jpeg.n > 0) {
+        uint32_t jl; const AirecRecHdr *jh;
+        if (rchan_payload(&g_rp.jpeg, g_rp.jpeg.n / 2, &jl, &jh) && jh) {
+            g_rp.meter_z  = (int)jh->meta[3];   /* zoom 1/2/4/8 */
+            g_rp.meter_dw = (int)jh->meta[1];   /* display width  */
+            g_rp.meter_dh = (int)jh->meta[2];   /* display height */
         }
     }
     nat_cache_drop();

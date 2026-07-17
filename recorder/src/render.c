@@ -46,12 +46,28 @@ static int encode_gray(const uint8_t *g, int w, int h, int quality,
     return rc;
 }
 
+/* The operator's zoom crop (verbatim of eo/pipeline/main.c:zoom_crop_43) — the
+ * region the live view metered its tone map on. We render the FULL native frame
+ * but meter the tone map on this crop, so a night frame's dark periphery doesn't
+ * over-stretch and blow out the illuminated center. mz<=1 with no dims => whole. */
+static void native_meter_rect(int sw, int sh, int mz, int mdw, int mdh,
+                              int *mx, int *my, int *mw, int *mh)
+{
+    if (mz <= 1 || mdw <= 0 || mdh <= 0) { *mx = *my = *mw = *mh = 0; return; }  /* whole frame */
+    int rw = sw / mz, rh = sh / mz;
+    int rh43 = rw * mdh / mdw;
+    if (rh43 > rh) { rh43 = rh; rw = rh43 * mdw / mdh; }
+    *mw = rw; *mh = rh43; *mx = (sw - rw) / 2; *my = (sh - rh43) / 2;
+}
+
 /* Reconstruct the native 8-bit frame via the shared tone map. st carries the
  * EMA across frames (same state on sequential frames = live anti-breathing;
  * reseed on a seek/jump). median_on applies the same 3x3 median the live feed
- * used. out8 must hold w*h bytes. */
+ * used. meter_z/meter_dw/meter_dh = the operator's recorded zoom + display dims;
+ * the tone map is metered on that crop (0/0/0 = whole frame). out8 holds w*h. */
 int render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
-                        int median_on, void *tone_state, int reseed, uint8_t *out8)
+                        int median_on, void *tone_state, int reseed, uint8_t *out8,
+                        int meter_z, int meter_dw, int meter_dh)
 {
     if (w < 16 || w > 8192 || h < 16 || h > 8192) return -1;   /* reject corrupt geometry before the size math overflows */
     uint32_t npx = (uint32_t)w * h;
@@ -83,7 +99,9 @@ int render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int
     if (sm && xs) {
         EoToneState *st = tone_state;
         if (reseed) st->seeded = 0;
-        eo_tonemap(y16, 2 * w, 0, 0, w, h, out8, w, h, st, sm, xs);
+        int mx, my, mw, mh;
+        native_meter_rect(w, h, meter_z, meter_dw, meter_dh, &mx, &my, &mw, &mh);
+        eo_tonemap(y16, 2 * w, 0, 0, w, h, out8, w, h, st, sm, xs, mx, my, mw, mh);
         if (median_on) { uint8_t *msc = malloc(npx); if (msc) { eo_median3(out8, w, h, msc); free(msc); } }
         rc = 0;
     }
@@ -94,12 +112,14 @@ int render_native_gray8(const uint8_t *payload, uint32_t plen, int w, int h, int
 /* Native JPEG for one frame (pause/step/scrub stills). */
 int render_native_jpeg(const uint8_t *payload, uint32_t plen, int w, int h, int mode,
                        int median_on, void *tone_state, int reseed, int quality,
-                       uint8_t *out, uint32_t cap, uint32_t *outlen)
+                       uint8_t *out, uint32_t cap, uint32_t *outlen,
+                       int meter_z, int meter_dw, int meter_dh)
 {
     uint32_t npx = (uint32_t)w * h;
     uint8_t *out8 = malloc(npx);
     if (!out8) return -1;
-    int rc = render_native_gray8(payload, plen, w, h, mode, median_on, tone_state, reseed, out8);
+    int rc = render_native_gray8(payload, plen, w, h, mode, median_on, tone_state, reseed, out8,
+                                 meter_z, meter_dw, meter_dh);
     if (rc == 0) rc = encode_gray(out8, w, h, quality, out, cap, outlen);
     free(out8);
     return rc;
@@ -143,7 +163,7 @@ int render_selftest(void)
     EoToneState st = {0};
     uint8_t out[16384];
     uint32_t len = 0;
-    int r = render_native_jpeg(raw, npx * 2, w, h, MODE_RAW16, 0, &st, 1, 85, out, sizeof out, &len);
+    int r = render_native_jpeg(raw, npx * 2, w, h, MODE_RAW16, 0, &st, 1, 85, out, sizeof out, &len, 0, 0, 0);
     free(raw);
     return (r == 0 && len > 100 && out[0] == 0xFF && out[1] == 0xD8) ? 0 : -1;
 }
