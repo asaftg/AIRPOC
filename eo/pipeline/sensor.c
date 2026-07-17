@@ -75,10 +75,17 @@ int sensor_apply(Sensor *s, int exp_lines, int gain, int vmax)
     /* REGHOLD on -> write VMAX + SHS1 + GAIN -> REGHOLD off: all latch together at
      * VSYNC, so a frame never sees a half-written 24-bit register (band-shift tear).
      * VMAX (0x3010) travels with SHS1 so their difference (= integration) stays valid. */
-    if (i2c_w(s, 0x3008, &on, 1))            return -1;   /* CTRL08 REGHOLD = 1 */
-    if (i2c_w(s, 0x3010, vm, 3))             return -1;   /* VMAX (24-bit LE)   */
-    if (i2c_w(s, 0x308d, sh, 3))             return -1;   /* SHS1 (24-bit LE)   */
-    if (i2c_w(s, 0x3204, gn, 2))             return -1;   /* GAIN (16-bit LE)   */
-    if (i2c_w(s, 0x3008, &off, 1))           return -1;   /* CTRL08 REGHOLD = 0 */
+    /* If a write fails AFTER REGHOLD is set, we must still clear it — otherwise the
+     * bracket stays latched and the sensor freezes ALL further register updates, with
+     * no recovery (WP02 Major 7). On any mid-bracket failure, fall through to a
+     * best-effort unhold before returning the error. */
+    if (i2c_w(s, 0x3008, &on, 1))            return -1;   /* REGHOLD=1 (nothing held yet) */
+    if (i2c_w(s, 0x3010, vm, 3))             goto unhold; /* VMAX (24-bit LE)   */
+    if (i2c_w(s, 0x308d, sh, 3))             goto unhold; /* SHS1 (24-bit LE)   */
+    if (i2c_w(s, 0x3204, gn, 2))             goto unhold; /* GAIN (16-bit LE)   */
+    if (i2c_w(s, 0x3008, &off, 1))           return -1;   /* REGHOLD=0          */
     return 0;
+unhold:
+    i2c_w(s, 0x3008, &off, 1);   /* best-effort: clear the hold so it can't stick */
+    return -1;
 }
