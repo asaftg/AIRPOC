@@ -177,8 +177,13 @@ static void *cap_thread(void *arg)
             uint32_t illum = (lon ? 1u : 0u) | (lpr ? 2u : 0u)
                            | (((uint32_t)lpw & 0xFFu) << 8)
                            | ((((uint32_t)(lfov * 10.0)) & 0x3FFu) << 16);
+            /* Record the APPLIED exposure/gain — what actually exposed THIS frame —
+             * not the just-commanded values. The sensor latches a REGHOLD write ~2
+             * frames later, so commanded values mis-attribute exposure around every AE
+             * step in replay/offline analysis (WP02 Major 4). app_exp/app_gain come from
+             * the retired pending queue above; vmax is operator-fixed (commanded==applied). */
             uint32_t meta[TAP_META_WORDS] = {
-                vseq, (uint32_t)g_ae.exp_lines, (uint32_t)g_ae.gain,
+                vseq, (uint32_t)app_exp, (uint32_t)app_gain,
                 (uint32_t)g_ae.vmax, illum, g_v4l2_drops
             };
             tap_slot_commit(&g_y10_tap, (uint32_t)g_cap.sizeimage, t_src, meta, 0);
