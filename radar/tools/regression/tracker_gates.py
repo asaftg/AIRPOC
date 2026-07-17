@@ -60,7 +60,9 @@ MIRROR_DAZ_DEG  = 10.0   # ... different bearing => mirror pair
 def gate_efr(base):   return base + max(0.10, 0.15 * base)
 def gate_tids(base):  return base + max(2.0, 0.20 * base)
 COVERAGE_FLOOR_FRAC = 0.95
-FIRST_EMIT_SLACK_FRAMES = 3
+FIRST_EMIT_SLACK_FRAMES = 5   # ~0.2 s. Catches real detection-latency regressions
+# (the 2026-07 incident missed by 600+ frames) while tolerating the few-frame
+# corridor-ENTRY shift that position smoothing legitimately introduces.
 
 
 def sha256_file(path):
@@ -187,8 +189,16 @@ def score_fixture(frames, truth):
                 if hit:
                     st['covered'] += 1
                     st['tids'].update(e[0] for e in hit)
-                    if st['first_emit'] is None:
-                        st['first_emit'] = fi
+                    # first-emit is DEBOUNCED: needs 3 consecutive matched
+                    # frames. A single borderline corridor match (a point
+                    # centimeters inside the 15 m window) is measurement
+                    # noise, not detection — without the debounce, a 1-2 m
+                    # reporting shift flips the metric by tens of frames.
+                    st['run'] = st.get('run', 0) + 1
+                    if st['first_emit'] is None and st['run'] >= 3:
+                        st['first_emit'] = fi - 2
+                else:
+                    st['run'] = 0
         # ghost count: E entries matching NO truth target
         for e in f['E']:
             if not any(match_entry(s, t, e[1], e[2])

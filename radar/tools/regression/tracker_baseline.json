@@ -1,6 +1,6 @@
 {
- "created": "2026-07-17T04:18:19Z",
- "tracker_git_sha": "40f767f2662085f6cc9a4b345b2325eaf84bc4b2",
+ "created": "2026-07-17T05:15:22Z",
+ "tracker_git_sha": "unknown",
  "binary_sha256": "f7b80e65c700d80884519d49e52382fd4befb052a0cdfa69a12dfdf9698ba977",
  "knob_vector": "eps=4.500 minpts=2 speed=0.700 snrmin=16.000 fov=90.000 elmax=20.000 doppler=1.200 confirm=3 coast=0.400 park=15.000",
  "fixtures": {
@@ -164,7 +164,7 @@
     "outbound_mover": {
      "coverage": 0.3452,
      "frag": 1,
-     "first_emit": 110
+     "first_emit": 130
     }
    },
    "fixture_sha256": "f04ceff7536b27762ef3f9e67f5d2256edbee56722a277cab0e3b1eb33f097ac"

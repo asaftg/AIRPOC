@@ -8,7 +8,8 @@
  *   K eps=.. minpts=.. speed=.. snrmin=.. fov=.. elmax=.. doppler=.. confirm=.. coast=.. park=..
  *   F <frame_idx> <t>
  *   C <tid> <r_m> <az_deg>                          (one per confirmed track, list order)
- *   E <tid> <r_m> <az_deg> <vr_mps> <snr_peak_db>   (one per emitted target)
+ *   E <tid> <r_m> <az_deg> <vr_mps> <snr_peak_db> <sus> <mv>  (one per emitted
+ *       target; sus=1 = suspected reflection copy, mv = walk-guard class 0/1/2)
  *
  * The single K header echoes the EFFECTIVE knob state (after clamping), so a
  * replay log always says what it actually ran with. E lines are the wire — the
@@ -190,8 +191,9 @@ int main(int argc, char **argv)
         for (int i = 0; i < nt; i++) {
             double r = hypot(tg[i].x, tg[i].y), az = atan2(tg[i].x, tg[i].y) / DEG;
             const Track *tk = find_track(c, tg[i].tid);
-            printf("E %d %.6f %.6f %.3f %.1f\n", tg[i].tid, r, az,
-                   tk ? tk->vr : 0.0, tk ? tk->snr_peak : 0.0);
+            printf("E %d %.6f %.6f %.3f %.1f %d %d\n", tg[i].tid, r, az,
+                   tk ? tk->vr : 0.0, tk ? tk->snr_peak : 0.0,
+                   tg[i].suspect, tg[i].mv_class);
         }
         frame++;
     }
