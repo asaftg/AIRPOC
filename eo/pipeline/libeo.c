@@ -105,7 +105,17 @@ static void *cap_thread(void *arg)
 
         int idx;
         const uint8_t *raw = cap_dqbuf(&g_cap, &idx);
-        if (!raw) break;
+        if (!raw) {
+            /* Camera fault or sensor stall. Do NOT limp on the last frame while /stats
+             * still reports connected — that silently freezes the EO feed forever and
+             * the detector keeps chewing a stale frame. Mark down and exit so systemd
+             * (Restart=always, RestartSec=2) relaunches with a fresh camera open
+             * (WP02 Bug 2). _Exit: immediate, no atexit/other-thread surprises; closing
+             * the fd releases /dev/video0 so the 2 s restart reopens cleanly. */
+            fprintf(stderr, "eo: capture failed — exiting for systemd restart\n");
+            g_connected = 0;
+            _Exit(1);
+        }
         memcpy(dst, raw, g_cap.sizeimage);   /* the one streaming copy off uncached DMA */
         cap_requeue(&g_cap, idx);
         g_connected = 1;
