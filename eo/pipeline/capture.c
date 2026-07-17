@@ -4,6 +4,7 @@
 #include "pipeline.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,11 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/videodev2.h>
+
+/* Max wait for a frame in cap_dqbuf before we call the sensor stalled. At 60 fps a
+ * frame is due every ~17 ms; the Tegra VI's own hard timeout is 2500 ms. 1000 ms is
+ * comfortably past a real frame interval yet catches a genuine hang quickly. */
+#define CAP_DQ_TIMEOUT_MS 1000
 
 static int xioctl(int fd, unsigned long req, void *arg)
 {
@@ -22,7 +28,7 @@ static int xioctl(int fd, unsigned long req, void *arg)
 int cap_open(Capture *c, const char *dev, int nbufs)
 {
     memset(c, 0, sizeof(*c));
-    c->fd = open(dev, O_RDWR);
+    c->fd = open(dev, O_RDWR | O_NONBLOCK);   /* O_NONBLOCK: cap_dqbuf gates on poll() */
     if (c->fd < 0) { perror("cap: open"); return -1; }
 
     struct v4l2_format fmt = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE };
@@ -57,6 +63,17 @@ int cap_open(Capture *c, const char *dev, int nbufs)
 
 const uint8_t *cap_dqbuf(Capture *c, int *index)
 {
+    /* Wait for a frame with a bounded timeout so a stalled sensor is DETECTED, not
+     * blocked on forever (an infinite block here would also deadlock pthread_join on
+     * shutdown). fd is O_NONBLOCK, so poll() gates the DQBUF; a timeout or poll error
+     * returns NULL, which the capture thread treats as a fault and exits for restart. */
+    struct pollfd pfd = { .fd = c->fd, .events = POLLIN };
+    int pr;
+    do { pr = poll(&pfd, 1, CAP_DQ_TIMEOUT_MS); } while (pr < 0 && errno == EINTR);
+    if (pr < 0)  { perror("cap: poll"); return NULL; }
+    if (pr == 0) { fprintf(stderr, "cap: no frame for %d ms — sensor stalled\n",
+                           CAP_DQ_TIMEOUT_MS); return NULL; }
+
     struct v4l2_buffer b = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP };
     if (xioctl(c->fd, VIDIOC_DQBUF, &b) < 0) { perror("cap: DQBUF"); return NULL; }
     *index = b.index;
