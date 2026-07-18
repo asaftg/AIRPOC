@@ -102,6 +102,8 @@ typedef struct Chan {
     /* tap side */
     AirTapSub sub;
     int sub_ok;
+    uint64_t tap_check_ns;                /* next ~1 Hz publisher-alive check */
+    uint64_t tap_reattach;                /* times the shm was replaced under us */
     /* live session state (heavy path) */
     int seg_fd;
     FILE *idx_f;
@@ -122,6 +124,8 @@ typedef struct Chan {
     int small_fd;
     /* counters (this session) */
     uint64_t records, bytes, drops_ring, drops_queue, next_seq_out;
+    uint64_t write_errors, bad_size;      /* disk write/index failures; records rejected on size validation */
+    uint64_t werr_reported;               /* write_errors already turned into an event */
     double   mb_s;                        /* EMA, /stats */
     uint64_t ema_bytes, ema_t_ns;
     uint64_t last_rec_ns;                /* when the last frame was recorded (loss watchdog) */

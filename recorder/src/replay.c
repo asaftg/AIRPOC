@@ -16,7 +16,11 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-#define MAX_EVS  65536
+/* Status events (5 Hz per source). The old 65536 cap silently truncated at ~1 h,
+ * so a long session's later frames lost their AE/median/illum context on replay. */
+#define MAX_EVS  262144
+
+static volatile unsigned long g_rp_crc_bad = 0;   /* recorded records failing their stored CRC */
 
 typedef struct { uint8_t *map; size_t len; } Seg;
 
@@ -166,9 +170,17 @@ static const uint8_t *rchan_payload(const RChan *c, long i, uint32_t *len, const
     if ((size_t)r->offset + sizeof(AirecRecHdr) + r->payload_len > s->len) return NULL;
     const AirecRecHdr *h = (const AirecRecHdr *)(s->map + r->offset);
     if (h->magic != AIREC_REC_MAGIC) return NULL;
+    const uint8_t *pay = s->map + r->offset + sizeof(AirecRecHdr);
+    /* Verify the stored CRC, don't just trust the magic — a corrupt record would
+     * otherwise be rendered/served as if it were good. Skip + count instead.
+     * (crc32c is hw-accelerated on aarch64; the replay read rates are modest.) */
+    if (h->crc32c != crc32c(0, pay, r->payload_len)) {
+        __atomic_fetch_add(&g_rp_crc_bad, 1, __ATOMIC_RELAXED);
+        return NULL;
+    }
     if (hdr) *hdr = h;
     *len = r->payload_len;
-    return s->map + r->offset + sizeof(AirecRecHdr);
+    return pay;
 }
 
 static void load_events(const char *dir)
@@ -380,9 +392,11 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
     }
     pthread_mutex_unlock(&g_nat.lk);
 
-    /* copy raw payload + params out from under g_rp.lk (mmap stable while open) */
-    static _Thread_local uint8_t *raw;
-    static _Thread_local uint32_t raw_cap;
+    /* copy raw payload + params out from under g_rp.lk (mmap stable while open).
+     * Plain malloc/free per call — NOT thread-local: the HTTP server runs a thread
+     * per connection, and a _Thread_local buffer is never freed at thread exit, so
+     * every /replay/frame (timeline hover fires these continuously) leaked ~3 MB. */
+    uint8_t *raw = NULL;
     pthread_mutex_lock(&g_rp.lk);
     if (!g_rp.open || i < 0 || i >= g_rp.y10.n) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     uint32_t plen;
@@ -399,7 +413,7 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
         if (rchan_payload(&g_rp.jpeg, jj, &jl, &jh) && jh) { mz = (int)jh->meta[3]; mdw = (int)jh->meta[1]; mdh = (int)jh->meta[2]; }
     }
     if (!p) { pthread_mutex_unlock(&g_rp.lk); return -1; }
-    if (plen > raw_cap) { free(raw); raw = malloc(plen); raw_cap = raw ? plen : 0; }
+    raw = malloc(plen);
     if (!raw) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     memcpy(raw, p, plen);
     pthread_mutex_unlock(&g_rp.lk);
@@ -408,6 +422,7 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
     if (g_nat.idx == i && g_nat.q == quality && g_nat.jpg) {   /* another thread just did it */
         memcpy(buf, g_nat.jpg, g_nat.len); *len = g_nat.len;
         pthread_mutex_unlock(&g_nat.lk);
+        free(raw);
         return 0;
     }
     int reseed = (i != g_nat.tone_i + 1);        /* EMA advances on sequential play */
@@ -421,6 +436,7 @@ static int nat_jpeg(long i, int quality, uint8_t *buf, uint32_t *len)
         }
     }
     pthread_mutex_unlock(&g_nat.lk);
+    free(raw);
     return rc;
 }
 
@@ -650,7 +666,7 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d,"
         "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d,"
         "\"tonemap_vs_eo\":\"%s\",\"tonemap_vs_eo_diff\":%.1f,"
-        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d%s}",
+        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d,\"crc_bad\":%lu%s}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
         (unsigned long long)((g_rp.t0_real + (uint64_t)t * 1000000ull) / 1000000ull),
@@ -659,7 +675,8 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         g_rp.has_native, g_rp.has_display, g_rp.nat_w, g_rp.nat_h,
         g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match,
         g_rp.tm_vs_eo == 1 ? "ok" : g_rp.tm_vs_eo < 0 ? "drift" : "unchecked",
-        g_rp.tm_vs_eo_diff, mp4_state, mp4_pct, illum);
+        g_rp.tm_vs_eo_diff, mp4_state, mp4_pct,
+        __atomic_load_n(&g_rp_crc_bad, __ATOMIC_RELAXED), illum);
 }
 
 void replay_state_json(char *buf, size_t len)

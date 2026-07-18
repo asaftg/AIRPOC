@@ -116,6 +116,11 @@ static AirecRecHdr *frame_begin(Chan *c, uint32_t payload_cap, uint64_t t0)
         c->seg_used = 0;
         frame_seg_hdr(c, t0);
     }
+    /* A record larger than a whole chunk can never fit: reject it instead of
+     * writing past the 4 MiB chunk buffer. (payload_cap comes from a world-writable
+     * shm header, so a corrupt/oversized value must not become a heap overflow —
+     * note `padded` above also wraps for values near UINT32_MAX.) */
+    if (payload_cap > CHUNK_BYTES || need > CHUNK_BYTES) return NULL;
     Chunk *k = get_fill(c);
     if (!k) return NULL;
     if (k->used + need > CHUNK_BYTES) {
@@ -158,6 +163,39 @@ static void frame_commit(Chan *c, AirecRecHdr *h, uint32_t payload_len,
     c->last_rec_ns = now_ns();           /* loss watchdog */
 }
 
+/* ---- publisher-gone detection ----
+ *
+ * A producer restart (or an external cleanup, e.g. the launcher rm'ing
+ * /dev/shm/airpoc.*) unlinks its shm and creates a NEW one. Our mapping stays
+ * valid but is orphaned: wseq never advances again. Before this, sub_ok was set
+ * once and never cleared, so the recorder sat there reporting the feed as
+ * connected while recording nothing — the recurring "feeds up, recording empty"
+ * failure. Poll the shm's identity ~1 Hz and re-attach when it changes.
+ * tap_open() re-seeds next_seq to the new publisher's cursor, so a re-attach
+ * costs the frames in flight, nothing more. */
+static void tap_recheck(Chan *c)
+{
+    if (!c->cfg->tap) return;                       /* internal channel (events) */
+    uint64_t now = now_ns();
+    if (now < c->tap_check_ns) return;
+    c->tap_check_ns = now + 1000000000ull;
+
+    if (c->sub_ok && !tap_stale(&c->sub)) return;   /* healthy: the common path */
+
+    if (c->sub_ok) {
+        tap_close(&c->sub);
+        c->sub_ok = 0;
+        c->tap_reattach++;
+        fprintf(stderr, "rec: %s tap replaced by publisher — re-attaching\n", c->cfg->name);
+        if (phase(c->id) == PH_ACTIVE) {
+            char m[128];
+            snprintf(m, sizeof m, "tap_reattach %s", c->cfg->name);
+            session_marker(m);                      /* make the hole visible in the recording */
+        }
+    }
+    if (tap_open(&c->sub, c->cfg->tap) == 0) c->sub_ok = 1;
+}
+
 /* ---- heavy drain thread ---- */
 
 static void *drain_heavy(void *arg)
@@ -167,9 +205,9 @@ static void *drain_heavy(void *arg)
 
     for (;;) {
         int ph = phase(c->id);
+        tap_recheck(c);                                           /* attach / re-attach, ~1 Hz */
         if (ph == PH_IDLE || ph == PH_FINALIZE) {
             if (c->sub_ok) c->sub.next_seq = tap_wseq(&c->sub);   /* track, no copy */
-            else if (tap_open(&c->sub, c->cfg->tap) == 0) c->sub_ok = 1;
             msleep_short();
             continue;
         }
@@ -179,7 +217,6 @@ static void *drain_heavy(void *arg)
             continue;
         }
         /* ACTIVE */
-        if (!c->sub_ok && tap_open(&c->sub, c->cfg->tap) == 0) c->sub_ok = 1;
         int got = 0;
         for (int burst = 0; c->sub_ok && burst < 8; burst++) {
             /* zero-copy peek: transform straight from the shm slot */
@@ -198,6 +235,14 @@ static void *drain_heavy(void *arg)
                 c->sub.next_seq++; c->drops_ring++; continue;
             }
             uint32_t plen = sl->payload_len, flags = 0;
+            /* payload_len lives in a writable shm header: clamp to the slot's real
+             * capacity. Unvalidated it could over-read the ring (pack10 walks
+             * plen/2 pixels) or, with the size math wrapping, overflow the chunk. */
+            if (!c->sub.t.h || plen > c->sub.t.h->slot_bytes) {
+                c->sub.next_seq++;
+                __atomic_fetch_add(&c->bad_size, 1, __ATOMIC_RELAXED);
+                continue;
+            }
             uint32_t meta[6]; memcpy(meta, sl->meta, sizeof meta);
             uint64_t t_src = sl->t_src_ns, t_pub = sl->t_pub_ns, seq = c->sub.next_seq;
             const uint8_t *src = (const uint8_t *)sl + sizeof(AirTapSlotHdr);
@@ -292,9 +337,14 @@ static void *writer_heavy(void *arg)
         }
         if (c->wr_seg_fd >= 0) {
             ssize_t n = pwrite(c->wr_seg_fd, k->buf, k->used, (off_t)k->seg_off);
-            if (n != (ssize_t)k->used)
+            if (n != (ssize_t)k->used) {
+                /* A failed/short write used to only hit stderr while the chunk was
+                 * still consumed and records/bytes kept climbing — /stats reported a
+                 * healthy recording full of holes. Count it so it is visible now. */
+                __atomic_fetch_add(&c->write_errors, 1, __ATOMIC_RELAXED);
                 fprintf(stderr, "rec: %s pwrite %u@%llu: %s\n", c->cfg->name, k->used,
                         (unsigned long long)k->seg_off, strerror(errno));
+            }
             c->wr_seg_used = k->seg_off + k->used;
             c->unsynced += k->used;
         }
@@ -313,6 +363,24 @@ static void *writer_heavy(void *arg)
 
 /* ---- small path ---- */
 
+/* Open the next segment for a small channel (caller holds c->small_lk). */
+static int small_rotate(Chan *c)
+{
+    char path[700];
+    if (c->small_fd >= 0) { fdatasync(c->small_fd); close(c->small_fd); c->small_fd = -1; }
+    c->seg_no++;
+    snprintf(path, sizeof path, "%s/%s/data.%05u.airec", g_rec.dir, c->cfg->name, c->seg_no);
+    c->small_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (c->small_fd < 0) { c->write_errors++; return -1; }
+    AirecSegHdr sh; memset(&sh, 0, sizeof sh);
+    sh.magic = AIREC_SEG_MAGIC; sh.version = AIREC_VERSION;
+    sh.channel_id = (uint32_t)c->id; sh.session_t0_mono_ns = g_rec.t0_mono_ns;
+    sh.segment_no = c->seg_no;
+    if (write(c->small_fd, &sh, sizeof sh) != sizeof sh) c->write_errors++;
+    c->seg_used = sizeof sh;
+    return 0;
+}
+
 void chan_submit(ChanId id, const void *payload, uint32_t len,
                  uint64_t t_src_ns, const uint32_t meta[6])
 {
@@ -321,23 +389,33 @@ void chan_submit(ChanId id, const void *payload, uint32_t len,
     static const uint32_t zmeta[6];
     if (!meta) meta = zmeta;
 
+    if (len > c->cfg->max_rec) { __atomic_fetch_add(&c->bad_size, 1, __ATOMIC_RELAXED); return; }
+
     pthread_mutex_lock(&c->small_lk);
-    /* small channels use a single segment; keep u32 index offsets valid */
-    if (c->small_fd >= 0 && c->seg_used < 0xF0000000ull) {
+    uint32_t padded = (len + 7u) & ~7u;
+    uint64_t need = sizeof(AirecRecHdr) + padded;
+    /* Rotate to a new segment before the u32 index offset would overflow. This used
+     * to just stop appending past ~3.75 GB — silently, with no counter or event, so
+     * a long radar session went dead and the loss watchdog blamed the feed. */
+    if (c->small_fd >= 0 && c->seg_used + need > 0xF0000000ull) small_rotate(c);
+    if (c->small_fd >= 0) {
         AirecRecHdr h = { AIREC_REC_MAGIC, crc32c(0, payload, len),
                           c->records, t_src_ns, now_ns(), len, 0,
                           { meta[0], meta[1], meta[2], meta[3], meta[4], meta[5] } };
-        uint32_t padded = (len + 7u) & ~7u;
         static const uint8_t zpad[8];
-        AirecIdxRow row = { h.seq, h.t_pub_ns, 0, (uint32_t)c->seg_used, len, 0 };  /* timeline = t_pub */
+        AirecIdxRow row = { h.seq, h.t_pub_ns, c->seg_no, (uint32_t)c->seg_used, len, 0 };  /* timeline = t_pub */
         if (write(c->small_fd, &h, sizeof h) == sizeof h &&
             write(c->small_fd, payload, len) == (ssize_t)len &&
             (padded == len || write(c->small_fd, zpad, padded - len) == (ssize_t)(padded - len))) {
-            fwrite(&row, sizeof row, 1, c->idx_f);
+            if (fwrite(&row, sizeof row, 1, c->idx_f) != 1) c->write_errors++;
             c->seg_used += sizeof h + padded;
             c->records++;
             c->bytes += sizeof h + padded;
             c->last_rec_ns = now_ns();       /* loss watchdog */
+        } else {
+            /* disk error (ENOSPC/EIO): do NOT count it as recorded — /stats must not
+             * report a healthy recording that is full of holes */
+            c->write_errors++;
         }
     }
     pthread_mutex_unlock(&c->small_lk);
@@ -352,22 +430,21 @@ static void *drain_small(void *arg)
     AirTapRec r;
 
     for (;;) {
-        if (!c->sub_ok) {
-            if (tap_open(&c->sub, c->cfg->tap) == 0) c->sub_ok = 1;
-            else { msleep_short(); continue; }
-        }
+        tap_recheck(c);                              /* attach / re-attach, ~1 Hz */
+        if (!c->sub_ok) { msleep_short(); continue; }
         if (phase(c->id) != PH_ACTIVE) {
             c->sub.next_seq = tap_wseq(&c->sub);
             msleep_short();
             continue;
         }
-        int got = 0;
-        while (tap_read(&c->sub, buf, c->cfg->max_rec, &r)) {
+        int got = 0, rc;
+        while ((rc = tap_read(&c->sub, buf, c->cfg->max_rec, &r)) > 0) {
             if (r.gap_before) c->drops_ring += r.gap_before;
             chan_submit(c->id, buf, r.payload_len > c->cfg->max_rec ? c->cfg->max_rec : r.payload_len,
                         r.t_src_ns, r.meta);
             got = 1;
         }
+        if (rc < 0) c->sub_ok = 0;                   /* detached: tap_recheck reopens */
         if (!got) msleep_short();
     }
     return NULL;
@@ -381,6 +458,18 @@ static void *housekeeper(void *arg)
         sleep(1);
         for (int i = 0; i < CH_N; i++) {
             Chan *c = &g_chan[i];
+            /* A failed write means this recording has a hole. Say so in the
+             * session's own event stream (and in the manifest at stop) instead
+             * of only in a counter nobody reads. Reported here, off the write
+             * path, so a failing disk can't also stall the writer. */
+            uint64_t we = __atomic_load_n(&c->write_errors, __ATOMIC_RELAXED);
+            if (we != c->werr_reported && phase((ChanId)i) == PH_ACTIVE) {
+                char m[128];
+                snprintf(m, sizeof m, "write_error %s n=%llu",
+                         c->cfg->name, (unsigned long long)we);
+                c->werr_reported = we;
+                session_marker(m);
+            }
             if (!c->cfg->heavy && phase((ChanId)i) != PH_IDLE) {
                 pthread_mutex_lock(&c->small_lk);
                 if (c->small_fd >= 0) fdatasync(c->small_fd);

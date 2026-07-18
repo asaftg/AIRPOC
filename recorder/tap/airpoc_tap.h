@@ -70,6 +70,7 @@ typedef struct {
     AirTap    t;                /* same mapping, read-only view             */
     uint64_t  next_seq;         /* next record we want                      */
     uint64_t  gaps;             /* records lost to lapping (cumulative)     */
+    uint64_t  shm_dev, shm_ino; /* identity of the mapped shm (see tap_stale) */
 } AirTapSub;
 
 typedef struct {
@@ -204,9 +205,29 @@ static inline int tap_open(AirTapSub *s, const char *name)
     s->t.stride = tap__stride(h->slot_bytes);
     s->t.map_len = (size_t)st.st_size;
     s->t.ok = 1;
+    s->shm_dev = (uint64_t)st.st_dev;      /* identity, for tap_stale() */
+    s->shm_ino = (uint64_t)st.st_ino;
     /* start at the freshest data, not the historical backlog */
     s->next_seq = __atomic_load_n(&h->wseq, __ATOMIC_ACQUIRE);
     return 0;
+}
+
+/* Has the publisher REPLACED the shm behind our mapping (unlink + recreate on a
+ * producer restart, or an external cleanup)? Our mapping stays valid but is
+ * orphaned — frozen forever — so a reader that doesn't check this reads a dead
+ * ring indefinitely while still looking "connected". Returns 1 = stale/gone.
+ * Cheap: one shm_open + fstat, meant to be polled ~1 Hz while idle. */
+static inline int tap_stale(const AirTapSub *s)
+{
+    if (!s->t.ok) return 1;
+    int fd = shm_open(s->t.name, O_RDONLY, 0);
+    if (fd < 0) return 1;                                  /* unlinked: publisher gone */
+    struct stat st;
+    int bad = (fstat(fd, &st) != 0) ||
+              (uint64_t)st.st_ino != s->shm_ino ||
+              (uint64_t)st.st_dev != s->shm_dev;           /* recreated: different inode */
+    close(fd);
+    return bad;
 }
 
 /* Position of the publisher's write cursor (for idle tracking without copying). */
@@ -215,11 +236,13 @@ static inline uint64_t tap_wseq(const AirTapSub *s)
     return s->t.ok ? __atomic_load_n(&s->t.h->wseq, __ATOMIC_ACQUIRE) : 0;
 }
 
-/* Copy the next record into buf. Returns 1 = copied, 0 = nothing new.
- * Lap losses are counted in s->gaps and reported in rec->gap_before. */
+/* Copy the next record into buf. Returns 1 = copied, 0 = nothing new,
+ * -1 = not attached (caller should re-open; see tap_stale).
+ * Lap losses are counted in s->gaps and reported in rec->gap_before.
+ * NOTE: callers must test > 0, not truthiness. */
 static inline int tap_read(AirTapSub *s, void *buf, uint32_t buf_cap, AirTapRec *rec)
 {
-    if (!s->t.ok) return 0;
+    if (!s->t.ok) return -1;
     const AirTapHdr *h = s->t.h;
     uint64_t gap = 0;
 

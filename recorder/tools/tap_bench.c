@@ -61,7 +61,7 @@ static int run_sub(const char *name, double secs)
 
     while (g_run && (!end || tap_now_ns() < end)) {
         int n = tap_read(&s, buf, s.t.h->slot_bytes, &r);
-        if (!n) { struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL); continue; }
+        if (n <= 0) { struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL); continue; }
         const uint64_t *p = (const uint64_t *)buf;
         for (uint32_t i = 0; i < r.payload_len / 8; i++)
             if (p[i] != r.seq) { bad++; break; }

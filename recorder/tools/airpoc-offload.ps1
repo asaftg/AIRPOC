@@ -67,11 +67,22 @@ foreach ($s in $sids) {
   Write-Host "  pulled -> $(Join-Path $Dest $s)"
 
   if ($PruneNativeAfter -and $Tier -eq "full") {
-    if (Test-Path (Join-Path $Dest "$s\eo_y10\index.bin")) {
-      Write-Host "  verified local native present — freeing raw on the Jetson"
+    # Deleting the Jetson's only full-quality copy demands a REAL integrity check,
+    # not "the index file exists". Run the same CRC verify gate offload_pull.sh uses.
+    $verify = Join-Path $PSScriptRoot "airec_dump.py"
+    $sess   = Join-Path $Dest $s
+    $ok = $false
+    if ((Test-Path $verify) -and (Get-Command python -ErrorAction SilentlyContinue)) {
+      & python $verify $sess --verify --chan eo_y10 *> $null
+      $ok = ($LASTEXITCODE -eq 0)
+    } else {
+      Write-Host "  cannot run airec_dump.py --verify (need python) — NOT pruning" -ForegroundColor Yellow
+    }
+    if ($ok) {
+      Write-Host "  local native VERIFIED (crc) — freeing raw on the Jetson"
       ssh $RemoteHost "curl -s 'http://127.0.0.1:$RecorderPort/ctl?purge_native=$s' >/dev/null"
     } else {
-      Write-Host "  native missing locally — NOT pruning (safety)" -ForegroundColor Yellow
+      Write-Host "  local native failed verify — NOT pruning (safety)" -ForegroundColor Yellow
     }
   }
 }

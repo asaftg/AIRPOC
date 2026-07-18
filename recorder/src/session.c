@@ -83,18 +83,22 @@ static void manifest_write(const char *dir, const char *sid, const char *state,
     json_escape(name, en, sizeof en);
     json_escape(note, eno, sizeof eno);
 
-    uint64_t recs = 0, bytes = 0, drops = 0;
-    char chans[1024];
+    uint64_t recs = 0, bytes = 0, drops = 0, werr = 0;
+    char chans[2048];
     size_t co = 0;
     co += (size_t)snprintf(chans + co, sizeof chans - co, "[");
     for (int i = 0; i < CH_N; i++) {
         Chan *c = &g_chan[i];
         co += (size_t)snprintf(chans + co, sizeof chans - co,
-            "%s{\"name\":\"%s\",\"records\":%llu,\"bytes\":%llu,\"drops\":%llu}",
+            "%s{\"name\":\"%s\",\"records\":%llu,\"bytes\":%llu,\"drops\":%llu,"
+            "\"write_errors\":%llu,\"bad_size\":%llu,\"tap_reattach\":%llu}",
             i ? "," : "", c->cfg->name,
             (unsigned long long)c->records, (unsigned long long)c->bytes,
-            (unsigned long long)(c->drops_ring + c->drops_queue));
+            (unsigned long long)(c->drops_ring + c->drops_queue),
+            (unsigned long long)c->write_errors, (unsigned long long)c->bad_size,
+            (unsigned long long)c->tap_reattach);
         recs += c->records; bytes += c->bytes; drops += c->drops_ring + c->drops_queue;
+        werr += c->write_errors;
     }
     snprintf(chans + co, sizeof chans - co, "]");
 
@@ -108,6 +112,7 @@ static void manifest_write(const char *dir, const char *sid, const char *state,
         "\"dur_ms\":%llu,\"stopped_reason\":\"%s\",\n"
         "\"mode\":\"%s\",\"keep\":%d,\n"
         "\"totals\":{\"bytes\":%llu,\"records\":%llu,\"drops\":%llu},\n"
+        "\"damaged\":%d,\n"          /* a disk write failed: this recording has holes */
         "\"channels\":%s,\n"
         "\"config_at_start\":{\"eo_stats\":%s,\"radar_stats\":%s}}\n",
         sid, state, en, tags_json, eno,
@@ -117,6 +122,7 @@ static void manifest_write(const char *dir, const char *sid, const char *state,
         g_rec.mode == MODE_Y10P ? "y10p" : g_rec.mode == MODE_Y8 ? "y8" : "raw16",
         g_rec.keep,
         (unsigned long long)bytes, (unsigned long long)recs, (unsigned long long)drops,
+        werr != 0,
         chans,
         g_cfg_eo[0] ? g_cfg_eo : "null", g_cfg_rd[0] ? g_cfg_rd : "null");
 
@@ -506,11 +512,14 @@ void session_stats_json(char *buf, size_t len)
         Chan *c = &g_chan[i];
         o += (size_t)snprintf(buf + o, len - o,
             "%s{\"name\":\"%s\",\"connected\":%d,\"records\":%llu,\"bytes\":%llu,"
-            "\"mb_s\":%.1f,\"drops_ring\":%llu,\"drops_queue\":%llu,\"lost\":%d}",
+            "\"mb_s\":%.1f,\"drops_ring\":%llu,\"drops_queue\":%llu,\"lost\":%d,"
+            "\"write_errors\":%llu,\"bad_size\":%llu,\"tap_reattach\":%llu}",
             i ? "," : "", c->cfg->name,
             c->cfg->tap ? c->sub_ok : 1,
             (unsigned long long)c->records, (unsigned long long)c->bytes, c->mb_s,
-            (unsigned long long)c->drops_ring, (unsigned long long)c->drops_queue, c->lost);
+            (unsigned long long)c->drops_ring, (unsigned long long)c->drops_queue, c->lost,
+            (unsigned long long)c->write_errors, (unsigned long long)c->bad_size,
+            (unsigned long long)c->tap_reattach);
     }
     snprintf(buf + o, len - o, "]}\n");
 }

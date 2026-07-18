@@ -266,13 +266,19 @@ static void handle_ctl(int fd, const char *qs)
         send_json(fd, 200, "{\"ok\":1}");
         return;
     }
+    /* Format/decimation are per-SESSION (the manifest records only the starting
+     * format). Applying a change mid-recording re-packs the very next frame and
+     * silently corrupts replay, so refuse while a session is open — which is what
+     * the docs already promised ("next session"). */
     if (query_get(qs, "mode", v, sizeof v) == 0) {
+        if (chan_recording()) { send_json(fd, 409, "{\"err\":\"stop the recording first (format applies to the next session)\"}"); return; }
         VideoMode m = !strcmp(v, "raw16") ? MODE_RAW16 : !strcmp(v, "y8") ? MODE_Y8 : MODE_Y10P;
         __atomic_store_n((int *)&g_rec.mode, (int)m, __ATOMIC_RELAXED);
         send_json(fd, 200, "{\"ok\":1}");
         return;
     }
     if (query_get(qs, "keep", v, sizeof v) == 0) {
+        if (chan_recording()) { send_json(fd, 409, "{\"err\":\"stop the recording first (decimation applies to the next session)\"}"); return; }
         int k = atoi(v);
         __atomic_store_n(&g_rec.keep, k > 0 ? k : 1, __ATOMIC_RELAXED);
         send_json(fd, 200, "{\"ok\":1}");
@@ -443,6 +449,14 @@ static void *accept_thread(void *arg)
         if (fd < 0) { if (errno == EINTR) continue; break; }
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+        /* A client that opens a socket and then stops reading (phone sleeps, WiFi
+         * drops mid-stream) used to pin its handler thread forever. Bound both
+         * directions: 20 s to send us a request, 30 s of no progress on a write.
+         * Streaming endpoints (MJPEG/SSE) push far more often than that, so this
+         * only ever fires on a client that is genuinely gone. */
+        struct timeval rt = { 20, 0 }, st = { 30, 0 };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rt, sizeof rt);
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &st, sizeof st);
         Client *c = malloc(sizeof *c);
         if (!c) { close(fd); continue; }             /* OOM: drop this connection, keep serving */
         c->fd = fd;

@@ -83,14 +83,17 @@ int store_manifest_field(const char *json, const char *key, char *out, size_t ou
 
 int store_manifest_set_state(const char *dir, const char *state)
 {
-    char buf[16384], cur[32];
+    /* 24576 to match manifest_edit_prefix/library: a manifest with two ~8 KB config
+     * snapshots exceeds 16 KB, and a short read here rewrote it truncated mid-JSON,
+     * making the session unparseable/invisible in the library. */
+    char buf[24576], cur[32];
     if (store_manifest_read(dir, buf, sizeof buf) < 0) return -1;
     if (store_manifest_field(buf, "state", cur, sizeof cur) != 0) return -1;
 
     char *p = strstr(buf, "\"state\":\"");
     if (!p) return -1;
     p += 9;
-    char out[16384];
+    char out[24576];
     size_t head = (size_t)(p - buf);
     int n = snprintf(out, sizeof out, "%.*s%s%s", (int)head, buf, state, p + strlen(cur));
     if (n < 0 || (size_t)n >= sizeof out) return -1;

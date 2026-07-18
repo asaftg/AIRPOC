@@ -1,6 +1,9 @@
 [Unit]
 Description=AIRPOC record & replay daemon (:8093)
 After=network.target data.mount
+# Hard dependency on the recording volume: without this a failed data.mount let the
+# daemon start anyway and "record" into an empty root-fs path — silent data loss.
+RequiresMountsFor=/data/recordings
 
 [Service]
 Type=simple
