@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
             }
         }
         static uint8_t clibuf[8192];
-        size_t clilen = 0;
+        size_t clilen = 0, cli_off = 0;   /* cli_off: bytes of the query already written */
         double cli_last = 0.0, cli_sent = 0.0;
         while (g_run) {
             if (cli_fd >= 0) {
@@ -327,21 +327,21 @@ int main(int argc, char **argv) {
                             tap_write(&ctx.cli_tap, clibuf, (uint32_t)clilen, tap_now_ns(), NULL);
                         clilen = 0; cli_sent = 0.0;
                     }
-                } else if (now_s() - cli_last >= 1.0) {   /* time to ask again */
-                    cli_last = now_s();
-                    /* A non-blocking write may send only PART of the command.
-                     * Treating any positive return as success truncates it —
-                     * the chip then answers "'q' is not recognized". Push the
-                     * whole string (bounded retries; 16 bytes to a tty never
-                     * needs many) and only await a reply if it all went out. */
-                    const char *q = "queryDemoStatus\n";
-                    size_t len = strlen(q), off = 0;
-                    for (int a = 0; a < 16 && off < len; a++) {
-                        ssize_t w = write(cli_fd, q + off, len - off);
-                        if (w > 0) off += (size_t)w;
-                        else if (errno != EAGAIN && errno != EINTR) break;
-                    }
-                    if (off == len) cli_sent = now_s();
+                } else if (cli_off > 0 || now_s() - cli_last >= 1.0) {
+                    /* Send the query, RESUMING across loop iterations. A
+                     * non-blocking write can accept only part of it; retrying
+                     * in a tight spin does not help because the tty buffer has
+                     * had no time to drain, and abandoning it leaves a partial
+                     * command the chip rejects ("'q' is not recognized"). So
+                     * keep the offset and continue next pass — the loop runs at
+                     * frame rate, so it completes within a few ms. */
+                    static const char QCMD[] = "queryDemoStatus\n";
+                    const size_t qlen = sizeof(QCMD) - 1;
+                    if (cli_off == 0) cli_last = now_s();
+                    ssize_t w = write(cli_fd, QCMD + cli_off, qlen - cli_off);
+                    if (w > 0) cli_off += (size_t)w;
+                    else if (errno != EAGAIN && errno != EINTR) cli_off = 0;  /* give up this round */
+                    if (cli_off >= qlen) { cli_off = 0; cli_sent = now_s(); }
                 }
             }
             ssize_t n = read(fd, buf, sizeof(buf));
