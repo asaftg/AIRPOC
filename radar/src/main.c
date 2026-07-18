@@ -20,6 +20,7 @@
 #include "http.h"
 #include "sim.h"
 #include "airpoc_tap.h"   /* vendored from recorder/tap (protocol v1) — recorder taps */
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
@@ -328,8 +329,19 @@ int main(int argc, char **argv) {
                     }
                 } else if (now_s() - cli_last >= 1.0) {   /* time to ask again */
                     cli_last = now_s();
+                    /* A non-blocking write may send only PART of the command.
+                     * Treating any positive return as success truncates it —
+                     * the chip then answers "'q' is not recognized". Push the
+                     * whole string (bounded retries; 16 bytes to a tty never
+                     * needs many) and only await a reply if it all went out. */
                     const char *q = "queryDemoStatus\n";
-                    if (write(cli_fd, q, strlen(q)) > 0) cli_sent = now_s();
+                    size_t len = strlen(q), off = 0;
+                    for (int a = 0; a < 16 && off < len; a++) {
+                        ssize_t w = write(cli_fd, q + off, len - off);
+                        if (w > 0) off += (size_t)w;
+                        else if (errno != EAGAIN && errno != EINTR) break;
+                    }
+                    if (off == len) cli_sent = now_s();
                 }
             }
             ssize_t n = read(fd, buf, sizeof(buf));
