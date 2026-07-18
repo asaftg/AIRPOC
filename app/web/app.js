@@ -575,8 +575,36 @@
     for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
     return TARGET_COLORS[((h % 20) + 20) % 20];
   }
+  /* ── scope palette ──────────────────────────────────────────────────────────────────────
+   * The radar scope is a DRAWN display, not video, so it follows the theme: bright marks on a
+   * black face at night, dark marks on a bright face in day. (The EO panel stays black in both
+   * — that one shows the real sensor image, and inverting it would misrepresent the picture.)
+   * Meanings are preserved across themes: red = closing, blue = opening, grey = static,
+   * champagne = the fixed 100/250 m reference rings. */
+  function isDay() { return theme === "day"; }
+  function scopePal() {
+    return isDay()
+      ? { ring: "rgba(90,96,104,0.30)",  ringTxt: "rgba(64,70,80,0.80)",
+          ref:  "rgba(154,123,69,0.85)", refTxt:  "rgba(116,91,46,0.95)",
+          wedge:"rgba(70,80,95,0.07)",   edge:    "rgba(70,80,95,0.34)", bore: "rgba(60,70,85,0.55)" }
+      : { ring: "rgba(150,157,168,0.16)", ringTxt: "rgba(170,175,185,0.55)",
+          ref:  "rgba(193,161,115,0.65)", refTxt:  "rgba(216,189,144,0.95)",
+          wedge:"rgba(150,157,168,0.06)", edge:    "rgba(150,157,168,0.24)", bore: "rgba(150,157,168,0.5)" };
+  }
+  /* Track colours are chosen bright for the black EO video; on the day scope's bright face they
+   * would wash out. Darken them there — same hue, so a track still reads as the same colour
+   * across the scope, the target list and the EO overlay. */
+  function scopeCol(hex) {
+    if (!isDay() || hex.charAt(0) !== "#") return hex;
+    var n = parseInt(hex.slice(1), 16);
+    return "rgb(" + (((n >> 16) & 255) * 0.5 | 0) + "," + (((n >> 8) & 255) * 0.5 | 0) + "," + ((n & 255) * 0.5 | 0) + ")";
+  }
   function pointStyle(v, snr) {
     var s = (typeof snr === "number" && isFinite(snr)) ? Math.max(0.3, Math.min(1, (snr - 12) / 28)) : 0.7;
+    if (isDay()) {
+      if (Math.abs(v) < 0.2) return "rgba(72,80,92," + (s * 0.65) + ")";      /* static → graphite */
+      return v > 0 ? "rgba(186,26,26," + s + ")" : "rgba(20,84,190," + s + ")";
+    }
     if (Math.abs(v) < 0.2) return "rgba(150,157,168," + (s * 0.55) + ")";   /* static → titanium */
     return v > 0 ? "rgba(255,85,85," + s + ")" : "rgba(80,170,255," + s + ")";  /* doppler in/out (functional) */
   }
@@ -613,7 +641,7 @@
     var f = fit($("radar-cv")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
     ctx.clearRect(0, 0, w, h);
     var maxR0 = Math.max(20, Math.min(h - 16 * dpr, w / 2 - 6 * dpr));
-    var dim = css("--dim");
+    var dim = css("--dim"), P = scopePal();
     /* view mapping. default = forward half-circle from bottom-centre. radarROI (a drawn
      * world rectangle) pans+zooms: cx,cy = screen pos of the radar origin (0,0). */
     var cx, cy, scale, Reff;
@@ -635,29 +663,29 @@
     var step = [10, 25, 50, 100, 250, 500, 1000].filter(function (s) { return s >= Reff / 4.5; })[0] || 1000;
     for (var rm = step; rm <= Reff * 1.02; rm += step) {
       var gr = rm * scale;
-      ctx.strokeStyle = "rgba(150,157,168,0.16)"; ctx.lineWidth = 1 * dpr;
+      ctx.strokeStyle = P.ring; ctx.lineWidth = 1 * dpr;
       ctx.beginPath(); ctx.arc(cx, cy, gr, Math.PI, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = "rgba(170,175,185,0.55)"; ctx.fillText(rm + " m", cx + 5 * dpr, cy - gr + 13 * dpr);
+      ctx.fillStyle = P.ringTxt; ctx.fillText(rm + " m", cx + 5 * dpr, cy - gr + 13 * dpr);
     }
     /* constant amber reference rings at 100 m + 250 m on every zoom (when in range) */
     [100, 250].forEach(function (m) {
       if (m > Reff * 1.02) return;
       var rr = m * scale;
-      ctx.strokeStyle = "rgba(193,161,115,0.65)"; ctx.lineWidth = 1.4 * dpr;
+      ctx.strokeStyle = P.ref; ctx.lineWidth = 1.4 * dpr;
       ctx.beginPath(); ctx.arc(cx, cy, rr, Math.PI, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = "rgba(216,189,144,0.95)"; ctx.textAlign = "right";
+      ctx.fillStyle = P.refTxt; ctx.textAlign = "right";
       ctx.fillText(m + " m", cx - 6 * dpr, cy - rr + 13 * dpr); ctx.textAlign = "left";
     });
     /* FOV wedge from the daemon's live fov_half_deg (tracks the FOV knob) + boresight */
     var fovDeg = (radar && typeof radar.fov_half_deg === "number") ? radar.fov_half_deg : 90;
     var fr = fovDeg * Math.PI / 180;
     var inFov = function (x, y) { return Math.abs(Math.atan2(x, y)) <= fr; };   /* azimuth within ±FOV */
-    ctx.fillStyle = "rgba(150,157,168,0.06)"; ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.fillStyle = P.wedge; ctx.beginPath(); ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, maxR, -Math.PI / 2 - fr, -Math.PI / 2 + fr, false); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "rgba(150,157,168,0.24)"; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.strokeStyle = P.edge; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
     [-1, 1].forEach(function (s) { var a = -Math.PI / 2 + s * fr; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * maxR, cy + Math.sin(a) * maxR); ctx.stroke(); });
     ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(150,157,168,0.5)"; ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = P.bore; ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - maxR); ctx.stroke(); ctx.lineWidth = dpr;
 
     if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText((replaying && !replayHasRadar) ? "NO RADAR RECORDED" : "NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
@@ -678,7 +706,7 @@
     ctx.font = (11 * dpr) + "px ui-monospace, monospace";
     targets(radar).forEach(function (t) {
       if (!inFov(t.x, t.y)) return;                 /* hide targets outside the FOV */
-      var tc = W2C(t.x, t.y), col = tcolor(t.tid), rr = 10 * dpr;
+      var tc = W2C(t.x, t.y), col = scopeCol(tcolor(t.tid)), rr = 10 * dpr;
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5 * dpr;
       ctx.beginPath(); ctx.arc(tc[0], tc[1], rr, 0, 2 * Math.PI); ctx.stroke();
       ctx.beginPath(); ctx.arc(tc[0], tc[1], 1.6 * dpr, 0, 2 * Math.PI); ctx.fill();

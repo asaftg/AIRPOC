@@ -17,6 +17,7 @@ body{
  * --amber is kept as the var name but now carries CHAMPAGNE (the brand accent). */
 body.night{
   --bg:#0a0a0c;--panel:#131316;--head:#17171b;--sub:#0f0f12;--canvas:#08080a;
+  --scope:#08080a;--scopechip:rgba(10,12,16,.72);
   --bd:#26262b;--bd2:#303036;--bd3:#3b3b42;
   --fg:#e9e5dd;--muted:#9a968e;--dim:#5f5c56;
   --amber:#c1a173;--ambert:#d8bd90;--on:#6cdf8a;--err:#d9736b;--cyan:#8f9298;
@@ -26,6 +27,9 @@ body.night{
  * the dark sensor image, so those accent vars stay vivid in both modes. */
 body.day{
   --bg:#e9e5dd;--panel:#f2efe9;--head:#faf8f4;--sub:#ddd8cd;--canvas:#08080a;
+  /* the scope is a drawn display, not video, so it goes bright in DAY (--canvas stays black:
+   * that one backs the EO image, and inverting real sensor video would misrepresent it) */
+  --scope:#f4f1ea;--scopechip:rgba(250,248,244,.82);
   --bd:#cbc5b8;--bd2:#b3ac9d;--bd3:#948b7a;
   --fg:#1a1815;--muted:#4c473f;--dim:#736d62;
   --amber:#9a7b45;--ambert:#c1a173;--on:#2e8f52;--err:#c0463c;--cyan:#5a6068;
@@ -93,11 +97,11 @@ body.day{
   background:var(--head);border-bottom:1px solid var(--bd)}
 .panel-title{font-size:11px;letter-spacing:1.2px;color:var(--amber);font-weight:600}
 .hz{font-size:11px;color:var(--muted);margin-left:auto}
-.rwrap{position:relative;width:100%;background:var(--canvas)}   /* height set by JS (2:1) */
+.rwrap{position:relative;width:100%;background:var(--scope)}   /* height set by JS (2:1) */
 #radar-cv{position:absolute;inset:0;width:100%;height:100%}
 /* radar range selector — AUTO (adaptive) + fixed 50/100/250/500 m, overlaid top-left */
 .rrange{position:absolute;top:6px;left:6px;z-index:2;display:flex;border:1px solid var(--bd3);
-  border-radius:3px;overflow:hidden;background:rgba(10,12,16,.72)}
+  border-radius:3px;overflow:hidden;background:var(--scopechip)}
 .rrange button{background:transparent;border:0;border-right:1px solid var(--bd3);color:var(--muted);
   font:inherit;font-size:10px;letter-spacing:.5px;padding:3px 7px;cursor:pointer}
 .rrange button:last-child{border-right:0}
