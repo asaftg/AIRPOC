@@ -6,19 +6,32 @@ Custom **`mmw_demoDDM`** build (TI mmWave mcuplus SDK 4.7.2.1) for the
 AWR2944P. On-chip range/Doppler FFT + CFAR + AoA; emits the mmw_demo TLV
 point cloud over the data UART.
 
-The chip runs the **V2 `agv2` image** (sha `173f622a`; binary + exact sources
-packaged at [`radar/v2/fw/`](../v2/README.md)). On top of the V1 interleave
-base it adds: the **overload crash fix** — a frame exceeding the UART budget
-is deferred + counted instead of silently bricking the chip (450-pt frame
-clamp, ISR-safe crash record in `queryDemoStatus`) — the DDMA **empty-band
-comb gate** (`emptyBandGateCfg` CLI; see the pitfall below), and periodic RF
-calibration re-enabled.
+The chip runs the **`agv3` image** (sha `e26c7460`; binary + exact sources
+packaged at [`radar/v3/fw/`](../v3/fw/), flashed 2026-07-17). Cumulative over
+the V1 interleave base:
+
+| from | adds |
+|---|---|
+| `agv2` | **overload crash fix** — a frame exceeding the UART budget is deferred + counted instead of silently bricking the chip (450-pt frame clamp, ISR-safe crash record in `queryDemoStatus`); periodic RF calibration re-enabled; the DDMA **empty-band comb gate** CLI |
+| `agv3` | fixes the comb gate's dB→raw threshold scale (on `agv2` it was 2^14 too small, so the bar landed near 0 dB); adds **observe-only mode** and per-detection **margin telemetry** in `queryDemoStatus`; optional raw-LSB threshold override |
+
+**The comb gate** rejects candidates whose winning DDM band sits too close to
+the two sub-bands that carry no transmitter — a real echo leaves those quiet, a
+comb artifact leaks into them. It currently runs in **observe mode (2)**: it
+measures and reports, and rejects nothing. Arming it is gated on calibration
+(see [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) step 7).
 
 > Pitfall: `emptyBandGateCfg` must appear **after** the doppler `cfarCfg` line
-> in the cfg (`cfarCfg` memsets the struct — earlier placement is silently
-> off). Known open: the gate currently does **not** activate at runtime even
-> when enabled — root-cause in progress; do not rely on it
-> (see [`ROADMAP.md`](ROADMAP.md)).
+> in the cfg — `cfarCfg` memsets the struct, so earlier placement is silently
+> off.
+> Pitfall: on `agv1`/`agv2` the command still parses but **arms** the filter
+> with the broken scale, silently deleting detections with no counter. Never
+> ship that line on pre-`agv3` firmware.
+> Pitfall: an armed line already pushed to the chip survives a daemon restart.
+> It clears only on a 12V power-cycle plus a fresh cfg push.
+
+Measured on-chip, so the dB↔raw conversion is pinned rather than derived:
+**`lsbPerDb = 87081.6`** (read from `queryDemoStatus`).
 
 Emits TLVs **{1, 7, 6, 9}** — DetectedPoints (1), **SideInfo / per-point SNR
 (7)**, stats (6), temperature (9). (The range-profile TLV (2) is switched off

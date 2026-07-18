@@ -45,21 +45,31 @@ night-quiet / ~**200 m** day-busy — scene-noise limited, not sensor-limited;
 vehicle radial echoes to ~**424 m**. Crossing (tangential) traffic is still
 blind — physics (Doppler ≈ 0), the Phase-3 item.
 
-**Known open (V2):**
-- **The comb gate does not activate at runtime** — enabling `emptyBandGateCfg`
-  has no observed effect; root-cause analysis is in progress. Until it works,
-  junk points remain ~250/frame at 16 dB (the guard keeps the *emitted tracks*
-  clean; the junk loads the tracker input and the UART budget).
+**Known open:**
+- The point budget is nearly full: the chip emits **~420 points/frame against a
+  450 hard clamp**, and about half of that is spent beyond 200 m on detections
+  sitting at the 16 dB threshold. A faint far target is the same strength as
+  the junk around it, so no strength-based filter separates them — and lowering
+  the CFAR bar makes it worse, because the clamp then evicts the weak far
+  returns. This is the current ceiling on far-range performance.
 - Logged ship acceptances: tangential queue/junction traffic weak until
   Phase 3; far-standing drift >15 m only partially held; +0.3 s confirm
   latency (EO remains the fast channel).
 
+**Resolved:** the comb gate not activating was the `agv2` dB→raw threshold
+scale being 2^14 too small. `agv3` (flashed 2026-07-17) fixes the scale and
+adds an observe mode; the gate now runs in observe and reports per-detection
+margins.
+
 ## V3 / next — three items, in order
 
-1. **Fix + calibrate the comb gate.** Root-cause why the gate is inert, then
-   the enablement recipe already written: corner-reflector LSB/dB calibration,
-   margin sweep 3/6/12/24 dB on a comb-heavy scene, A/B vs gate-off on the
-   regression corpus — [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) step 7.
+1. **Calibrate, then arm, the comb gate.** The gate is flashed and observing.
+   What remains is the measurement: capture the margin distribution on an open
+   scene (static + a walking human), decide where the bar goes, and confirm a
+   *far* human sits above it before switching mode 2 → 1 —
+   [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) step 7. Margins are recorded in
+   every session via the `airpoc.radar_cli` tap, so this is now an offline
+   analysis rather than a live-at-the-bench one.
 2. **Bar-ladder max-range session.** 16 → 15 → 14 → 13 dB, same walk each
    step, gate ON first (junk flood at 14/13 dB can evict weak far targets via
    the 450-pt clamp) — [`SHIP_RUNBOOK_V2.md`](SHIP_RUNBOOK_V2.md) step 8,

@@ -1,8 +1,9 @@
 # Radar module
 
 TI **AWR2944PEVM** (77 GHz, 4TX/4RX), **no DCA1000**. The chip runs our
-mmw_demoDDM firmware (**V2 `agv2`** — crash-proof under point-flood overload;
-see [`docs/FIRMWARE.md`](docs/FIRMWARE.md)) and emits a TLV point cloud over
+mmw_demoDDM firmware (**`agv3`** — crash-proof under point-flood overload, with
+the empty-band comb gate in observe mode; see
+[`docs/FIRMWARE.md`](docs/FIRMWARE.md)) and emits a TLV point cloud over
 UART; this module pushes the profile, parses that stream with **zero frame
 loss**, runs a **temporal multi-target tracker** producing **class-less**
 target boxes, and serves a PPI previewer. Person/vehicle labelling is **not**
