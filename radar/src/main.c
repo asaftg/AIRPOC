@@ -70,6 +70,7 @@ typedef struct {
     unsigned long   drops;
     AirTap          raw_tap;     /* airpoc.radar_raw — every UART read(), pre-parse */
     AirTap          wire_tap;    /* airpoc.radar_wire — SSE frame JSON, verbatim */
+    AirTap          cli_tap;     /* airpoc.radar_cli — chip CLI telemetry, 1 Hz */
 } Ctx;
 
 /* Called once per complete radar frame by the parser. */
@@ -224,6 +225,16 @@ int main(int argc, char **argv) {
     if (tap_create(&ctx.wire_tap, "airpoc.radar_wire", 16, 256 * 1024,
                    "{\"name\":\"radar_wire\"}") < 0)
         fprintf(stderr, "radar_preview: radar_wire tap unavailable — recording disabled for it\n");
+    /* radar_cli: the chip's own CLI telemetry (queryDemoStatus), polled at 1 Hz.
+     * This data exists ONLY on the CLI UART — it is not in the TLV stream — so
+     * without this tap it is unrecoverable after a recording is made, and every
+     * question about it needs someone live at the bench. Carries the empty-band
+     * comb-gate margin histogram (how we separate real targets from DDM comb
+     * artifacts), sensor state, UART deferred-frame count, RF calibration status
+     * and chip temperature. Cheap: ~1 KB/s. */
+    if (tap_create(&ctx.cli_tap, "airpoc.radar_cli", 64, 8192,
+                   "{\"name\":\"radar_cli\"}") < 0)
+        fprintf(stderr, "radar_preview: radar_cli tap unavailable — telemetry not recorded\n");
 
     /* We push the cfg AT MOST ONCE, and only if the chip is silent. Re-pushing
      * against a live chip sends `sensorStop`, and this firmware won't restart
@@ -281,7 +292,34 @@ int main(int argc, char **argv) {
             cfg_settled = 1;
         }
         fprintf(stderr, "radar_preview: data %s @ %d baud — streaming\n", data_dev, data_baud);
+        /* CLI telemetry poller. cfg_push (above) closed its own fd, so the CLI
+         * UART is free while streaming. Fully non-blocking: write the query, then
+         * collect the reply across later loop iterations, so frame reading is
+         * never stalled waiting on the chip. */
+        int cli_fd = serial_open(cli_dev, cli_baud);
+        if (cli_fd < 0)
+            fprintf(stderr, "radar_preview: CLI %s unavailable — telemetry not recorded\n", cli_dev);
+        static uint8_t clibuf[8192];
+        size_t clilen = 0;
+        double cli_last = 0.0, cli_sent = 0.0;
         while (g_run) {
+            if (cli_fd >= 0) {
+                if (cli_sent > 0.0) {                     /* collecting a reply */
+                    ssize_t r = read(cli_fd, clibuf + clilen, sizeof(clibuf) - clilen - 1);
+                    if (r > 0) clilen += (size_t)r;
+                    clibuf[clilen] = 0;
+                    if ((clilen > 0 && strstr((char *)clibuf, "Done") != NULL)
+                        || now_s() - cli_sent > 1.5) {
+                        if (clilen > 0)
+                            tap_write(&ctx.cli_tap, clibuf, (uint32_t)clilen, tap_now_ns(), NULL);
+                        clilen = 0; cli_sent = 0.0;
+                    }
+                } else if (now_s() - cli_last >= 1.0) {   /* time to ask again */
+                    cli_last = now_s();
+                    const char *q = "queryDemoStatus\n";
+                    if (write(cli_fd, q, strlen(q)) > 0) cli_sent = now_s();
+                }
+            }
             ssize_t n = read(fd, buf, sizeof(buf));
             if (n > 0) {
                 /* Recorder tap (WI-RD-1): raw bytes BEFORE the parser, so capture
@@ -298,12 +336,14 @@ int main(int argc, char **argv) {
             }
         }
         close(fd);
+        if (cli_fd >= 0) close(cli_fd);
         ctx.have_last = 0;                   /* reset drop tracking across reconnects */
     }
 
     fprintf(stderr, "radar_preview: shutting down\n");
     tap_destroy(&ctx.raw_tap);
     tap_destroy(&ctx.wire_tap);
+    tap_destroy(&ctx.cli_tap);
     tlv_stream_free(stream);
     cluster_free(ctx.clust);
     free(ctx.json);

@@ -41,6 +41,15 @@ best-effort — logs once and runs unchanged if shm creation fails):
   parser (both read sites). No `meta`.
 - `airpoc.radar_wire` — **16 × 256 KiB**, the `/stream` frame JSON byte-verbatim.
   `meta[6] = {frameNumber, n_points, n_targets, 0, 0, 0}`.
+- `airpoc.radar_cli` — **64 × 8 KiB**, the chip's own CLI telemetry: the plain-text
+  reply to `queryDemoStatus`, polled once per second. No `meta`. Carries the
+  empty-band comb-gate margin histogram, sensor state, UART deferred-frame count,
+  and RF calibration status + chip temperature.
+
+  > Pitfall: this telemetry exists **only** on the CLI UART — it is not in the TLV
+  > point stream. A recording made without this tap cannot answer any question
+  > about comb margins afterwards; it needs someone live at the bench. That is why
+  > it is recorded rather than merely displayed.
 
 Frame JSON (stable — the GUI/fusion consume this unchanged):
 ```
