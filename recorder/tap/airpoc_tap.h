@@ -64,13 +64,16 @@ typedef struct {
     size_t     map_len;
     char       name[TAP_NAME_MAX];
     int        ok;
+    uint64_t   shm_dev, shm_ino; /* identity of the object behind name[]:
+                                    publishers use it to avoid unlinking a peer's
+                                    tap (tap_destroy), readers to notice theirs was
+                                    replaced (tap_stale) */
 } AirTap;
 
 typedef struct {
     AirTap    t;                /* same mapping, read-only view             */
     uint64_t  next_seq;         /* next record we want                      */
     uint64_t  gaps;             /* records lost to lapping (cumulative)     */
-    uint64_t  shm_dev, shm_ino; /* identity of the mapped shm (see tap_stale) */
 } AirTapSub;
 
 typedef struct {
@@ -110,6 +113,8 @@ static inline int tap_create(AirTap *t, const char *name, uint32_t n_slots,
     int fd = shm_open(t->name, O_RDWR | O_CREAT, 0666);
     if (fd < 0) { fprintf(stderr, "tap: shm_open(%s) failed, publishing disabled\n", t->name); return -1; }
     if (ftruncate(fd, (off_t)len) != 0) { close(fd); return -1; }
+    struct stat cst;
+    if (fstat(fd, &cst) != 0) { close(fd); return -1; }
     void *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (m == MAP_FAILED) { fprintf(stderr, "tap: mmap(%s) failed, publishing disabled\n", t->name); return -1; }
@@ -118,6 +123,8 @@ static inline int tap_create(AirTap *t, const char *name, uint32_t n_slots,
     t->base = (uint8_t *)m + TAP_HDR_BYTES;
     t->stride = stride;
     t->map_len = len;
+    t->shm_dev = (uint64_t)cst.st_dev;
+    t->shm_ino = (uint64_t)cst.st_ino;
 
     /* (Re)initialize: readers key on magic last so they never see a half header. */
     __atomic_store_n(&t->h->magic, 0, __ATOMIC_RELAXED);
@@ -177,7 +184,26 @@ static inline int tap_write(AirTap *t, const void *buf, uint32_t len,
 
 static inline void tap_destroy(AirTap *t)
 {
-    if (t->h) { munmap((void *)t->h, t->map_len); shm_unlink(t->name); }
+    if (t->h) {
+        munmap((void *)t->h, t->map_len);
+        /* Unlink ONLY if the name still refers to the object WE created. A
+         * restarted instance of this producer may have already recreated the
+         * tap; unlinking then deletes a LIVE tap, and because a producer only
+         * creates its tap at startup, every reader loses that feed until the
+         * producer is restarted again. That is the "producers alive, no
+         * /dev/shm/airpoc.* present, recordings empty" failure. The launcher's
+         * kill-and-wait narrows the window; this closes it regardless of
+         * ordering, which is the only way it stays closed. */
+        int fd = shm_open(t->name, O_RDONLY, 0);
+        if (fd >= 0) {
+            struct stat st;
+            int ours = fstat(fd, &st) == 0 &&
+                       (uint64_t)st.st_ino == t->shm_ino &&
+                       (uint64_t)st.st_dev == t->shm_dev;
+            close(fd);
+            if (ours) shm_unlink(t->name);
+        }
+    }
     memset(t, 0, sizeof *t);
 }
 
@@ -205,8 +231,8 @@ static inline int tap_open(AirTapSub *s, const char *name)
     s->t.stride = tap__stride(h->slot_bytes);
     s->t.map_len = (size_t)st.st_size;
     s->t.ok = 1;
-    s->shm_dev = (uint64_t)st.st_dev;      /* identity, for tap_stale() */
-    s->shm_ino = (uint64_t)st.st_ino;
+    s->t.shm_dev = (uint64_t)st.st_dev;      /* identity, for tap_stale() */
+    s->t.shm_ino = (uint64_t)st.st_ino;
     /* start at the freshest data, not the historical backlog */
     s->next_seq = __atomic_load_n(&h->wseq, __ATOMIC_ACQUIRE);
     return 0;
@@ -224,8 +250,8 @@ static inline int tap_stale(const AirTapSub *s)
     if (fd < 0) return 1;                                  /* unlinked: publisher gone */
     struct stat st;
     int bad = (fstat(fd, &st) != 0) ||
-              (uint64_t)st.st_ino != s->shm_ino ||
-              (uint64_t)st.st_dev != s->shm_dev;           /* recreated: different inode */
+              (uint64_t)st.st_ino != s->t.shm_ino ||
+              (uint64_t)st.st_dev != s->t.shm_dev;           /* recreated: different inode */
     close(fd);
     return bad;
 }
