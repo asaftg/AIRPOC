@@ -222,16 +222,12 @@
       ctl("ae=" + b.dataset.ae);
       if (auto) {   /* returning to AUTO resets the sensor to defaults */
         ctl("gaincap=" + EXP_DEFAULTS.gaincap); $("s-gcap").value = EXP_DEFAULTS.gaincap; $("o-gcap").textContent = EXP_DEFAULTS.gaincap;
-        var md = document.querySelector('#md-btns [data-md="' + EXP_DEFAULTS.median + '"]'); if (md) setSeg("md-btns", md); ctl("median=" + EXP_DEFAULTS.median);
+        ctl("median=" + EXP_DEFAULTS.median);   /* no MEDIAN control any more — just keep it off */
       }
     };
   });
-  document.querySelectorAll("#md-btns [data-md]").forEach(function (b) {
-    b.onclick = function () { setSeg("md-btns", b); ctl("median=" + b.dataset.md); };
-  });
-  document.querySelectorAll("#dn-btns [data-dn]").forEach(function (b) {
-    b.onclick = function () { setSeg("dn-btns", b); ispTouch = Date.now(); ctl("denoise=" + b.dataset.dn); if (b.dataset.dn === "0") $("o-dn").textContent = ""; };
-  });
+  /* MEDIAN and DENOISE have no controls any more — the operator keeps both off, so the console
+   * just pushes them off on load (see the defaults block at the bottom) and never shows a knob. */
   document.querySelectorAll("#disp-btns [data-disp]").forEach(function (b) {
     b.onclick = function () { setSeg("disp-btns", b); ispTouch = Date.now(); ctl("disp_fps=" + b.dataset.disp); };
   });
@@ -239,12 +235,10 @@
   /* Each knob is live only in the mode where it means something:
    *  - EXP ms / GAIN: MANUAL only — in AUTO the exposure loop owns them.
    *  - AUTO-CAP: AUTO only — it's the ceiling the loop may raise gain to; in MANUAL gain
-   *    is set directly, so a cap does nothing.
-   *  - MEDIAN: a denoise, independent of exposure — always live. */
+   *    is set directly, so a cap does nothing. */
   function setExpMode(auto) {
     $("s-exp").disabled = auto; $("s-gain").disabled = auto;
     $("s-gcap").disabled = !auto;
-    document.querySelectorAll("#md-btns button").forEach(function (x) { x.disabled = false; });
   }
   /* moving EXP or GAIN drops the feed to MANUAL — reflect that optimistically */
   $("s-exp").oninput  = function () { $("o-exp").textContent = (+this.value).toFixed(2); manualAE(); ctl("expms=" + this.value); };
@@ -254,22 +248,12 @@
   var ispTouch = 0, fpsTouch = 0;
 
   /* stream bandwidth levers — res (display size) + fps cap, both live on the EO feed */
-  /* link auto-quality — OPT-IN: when the link is saturated (SAT), step QUALITY down one
-   * rung until the video flows again, and probe back up when the link stays clean; the
-   * operator's chosen QUALITY is the ceiling AUTO never exceeds. MANUAL (default) never
-   * touches settings. Persisted per browser. */
-  var linkAuto = 0, linkCeil = "high", lkSatN = 0, lkCleanN = 0, lkStepT = 0, lkUpHold = 0;
-  try { var lks = JSON.parse(localStorage.getItem("linkAuto") || "{}");
-        if (lks.a === 0 || lks.a === 1) linkAuto = lks.a;
-        if (typeof lks.c === "string") linkCeil = lks.c; } catch (x) {}
-  function saveLka() { try { localStorage.setItem("linkAuto", JSON.stringify({ a: linkAuto, c: linkCeil })); } catch (x) {} }
-  function initLka() { var b = document.querySelector('#lka-btns [data-lka="' + linkAuto + '"]'); if (b) setSeg("lka-btns", b); }
-  document.querySelectorAll("#lka-btns [data-lka]").forEach(function (b) {
-    b.onclick = function () { linkAuto = parseInt(b.dataset.lka, 10); setSeg("lka-btns", b); saveLka(); };
-  });
-
+  /* QUALITY is always MANUAL — the operator's pick stands until they change it. (There used to
+   * be a LINK MANUAL/AUTO toggle that stepped QUALITY down on a saturated link and probed back
+   * up; removed at the operator's request — unused, and silently moving their setting is worse
+   * than a visibly degraded picture.) */
   document.querySelectorAll("#res-btns [data-res]").forEach(function (b) {
-    b.onclick = function () { setSeg("res-btns", b); linkCeil = b.dataset.res; saveLka(); ctl("res=" + b.dataset.res); };
+    b.onclick = function () { setSeg("res-btns", b); ctl("res=" + b.dataset.res); };
   });
   $("s-fps").oninput = function () { $("o-fps").textContent = this.value; fpsTouch = Date.now(); ctl("fps=" + this.value); };
 
@@ -314,7 +298,7 @@
     { key: "conf",        fmt: function (v) { return v.toFixed(2); } },
     { key: "nms",         fmt: function (v) { return v.toFixed(2); } },
     { key: "cadence",     fmt: function (v) { return String(v | 0); } },
-    { key: "max_dets",    fmt: function (v) { return String(v | 0); } },
+    /* max_dets has no control — fixed at MAX_DETS below, pushed on load. */
     { key: "mot_k",        fmt: function (v) { return v.toFixed(1); } },
     { key: "mot_persist",  fmt: function (v) { return String(v | 0); } },
     { key: "mot_window_s", fmt: function (v) { return v.toFixed(1) + " s"; } }
@@ -395,20 +379,46 @@
   }
 
   /* ── radar→EO overlay settings — pure client-side render (not fusion). AZ/EL trim is
-   * the radar↔camera mount alignment in degrees; persisted per browser. No stored rig
-   * calibration exists yet (radar README: calibration is the consumer's job), so the
-   * defaults are 0 — dial the trims until a mark sits on its real object. ── */
+   * the radar↔camera mount alignment in degrees. No stored rig calibration exists yet (radar
+   * README: calibration is the consumer's job), so the defaults are 0 — dial the trims until a
+   * mark sits on its real object, then press SAVE.
+   *
+   * The trim is a property of the RIG, so it is stored ON THE JETSON (/uiprefs), not in the
+   * browser. It used to be localStorage, which is per-origin: the same rig read back different
+   * trims depending on whether you opened the console as 192.168.55.1, orin-nano.lan or
+   * 10.42.0.1, and any new device started at zero. Now it's one value everywhere, and it
+   * survives a reboot. OVERLAY on/off stays per-browser — that's a viewing preference. ── */
   var radarOv = { on: 1, az: 0, el: 0 };
   try { var rvs = JSON.parse(localStorage.getItem("radarOv") || "{}");
-        if (typeof rvs.on === "number") radarOv.on = rvs.on;
-        if (typeof rvs.az === "number") radarOv.az = rvs.az;
-        if (typeof rvs.el === "number") radarOv.el = rvs.el; } catch (x) {}
-  function saveRadarOv() { try { localStorage.setItem("radarOv", JSON.stringify(radarOv)); } catch (x) {} }
-  function initRadarOv() {
-    var b = document.querySelector('#rov-btns [data-rov="' + radarOv.on + '"]'); if (b) setSeg("rov-btns", b);
+        if (typeof rvs.on === "number") radarOv.on = rvs.on; } catch (x) {}
+  function saveRadarOv() { try { localStorage.setItem("radarOv", JSON.stringify({ on: radarOv.on })); } catch (x) {} }
+  function showTrims() {
     $("rov-az").value = radarOv.az; $("rovv-az").textContent = radarOv.az.toFixed(1) + "°";
     $("rov-el").value = radarOv.el; $("rovv-el").textContent = radarOv.el.toFixed(1) + "°";
   }
+  function initRadarOv() {
+    var b = document.querySelector('#rov-btns [data-rov="' + radarOv.on + '"]'); if (b) setSeg("rov-btns", b);
+    showTrims();
+    /* pull the rig's saved trim off the Jetson */
+    fetch("/uiprefs").then(function (r) { return r.json(); }).then(function (p) {
+      if (p && typeof p.az === "number") radarOv.az = p.az;
+      if (p && typeof p.el === "number") radarOv.el = p.el;
+      showTrims(); drawEO();
+    }).catch(function () {});
+  }
+  /* SAVE writes the current trim to the Jetson. Until it's pressed a change is session-only,
+   * so nudging a slider mid-mission can't silently rewrite the rig's stored alignment. */
+  $("rov-savebtn").onclick = function () {
+    var btn = this;
+    fetch("/uiprefs?set=" + encodeURIComponent(JSON.stringify({ az: radarOv.az, el: radarOv.el })))
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function () {
+        $("rovv-saved").textContent = "saved";
+        btn.classList.add("on"); setTimeout(function () { btn.classList.remove("on"); }, 900);
+        setTimeout(function () { $("rovv-saved").textContent = ""; }, 2500);
+      })
+      .catch(function () { $("rovv-saved").textContent = "save failed"; });
+  };
   document.querySelectorAll("#rov-btns [data-rov]").forEach(function (b) {
     b.onclick = function () { radarOv.on = parseInt(b.dataset.rov, 10); setSeg("rov-btns", b); saveRadarOv(); drawEO(); };
   });
@@ -421,8 +431,9 @@
   document.querySelectorAll("#dst-btns [data-dst]").forEach(function (b) {
     b.onclick = function () { detStyle = b.dataset.dst; setSeg("dst-btns", b); try { localStorage.setItem("detStyle", detStyle); } catch (x) {} drawEO(); };
   });
-  $("rov-az").oninput = function () { radarOv.az = parseFloat(this.value); $("rovv-az").textContent = radarOv.az.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
-  $("rov-el").oninput = function () { radarOv.el = parseFloat(this.value); $("rovv-el").textContent = radarOv.el.toFixed(1) + "°"; saveRadarOv(); drawEO(); };
+  /* Moving a trim applies immediately but is NOT stored until SAVE (see rov-savebtn). */
+  $("rov-az").oninput = function () { radarOv.az = parseFloat(this.value); $("rovv-az").textContent = radarOv.az.toFixed(1) + "°"; $("rovv-saved").textContent = "unsaved"; drawEO(); };
+  $("rov-el").oninput = function () { radarOv.el = parseFloat(this.value); $("rovv-el").textContent = radarOv.el.toFixed(1) + "°"; $("rovv-saved").textContent = "unsaved"; drawEO(); };
 
   /* ── canvas ── */
   /* Size the backing store from the element's LAYOUT box (offsetWidth), not getBoundingClientRect
@@ -781,19 +792,7 @@
       var sat = !replaying && eoc && typeof d.tx_fps === "number" && prodFps > 0 && d.tx_fps < prodFps * 0.5;
       $("p-link").classList.toggle("sat", !!sat);
       $("v-sat").textContent = sat ? "SAT" : "";
-      /* LINK AUTO (opt-in): ~2s of SAT → step QUALITY down a rung; ~20s clean → probe one
-       * rung back up (never above the operator's chosen ceiling; 60s hold after a step
-       * down so probing can't flap) */
-      if (linkAuto && !replaying && eoc) {
-        if (sat) { lkSatN++; lkCleanN = 0; } else { lkCleanN++; lkSatN = 0; }
-        var ORD = ["low", "med", "high", "native"], cur = ORD.indexOf(eo.res), ceil = ORD.indexOf(linkCeil), nowL = Date.now();
-        if (ceil < 0) ceil = 2;
-        if (lkSatN >= 12 && cur > 0 && nowL - lkStepT > 3000) {
-          lkStepT = nowL; lkUpHold = nowL + 60000; lkSatN = 0; ctl("res=" + ORD[cur - 1]);
-        } else if (lkCleanN >= 125 && cur >= 0 && cur < ceil && nowL > lkUpHold && nowL - lkStepT > 3000) {
-          lkStepT = nowL; lkCleanN = 0; ctl("res=" + ORD[cur + 1]);
-        }
-      } else { lkSatN = 0; lkCleanN = 0; }
+      /* SAT is reported, never acted on: QUALITY is the operator's call (see res-btns above). */
       $("v-batt").textContent = num(d.batt, 0, "%"); $("v-alt").textContent = num(d.alt, 0);
       /* live EO telemetry on the EO display: EFFECTIVE resolution (real sensor detail in
        * view) + zoom + FOV on line 1; sensor fps/exposure/gain on line 2. Prefer the feed's
@@ -914,19 +913,12 @@
     if (typeof eo.exp_ms === "number" && idle($("s-exp")) && settled) { $("s-exp").value = eo.exp_ms; $("o-exp").textContent = eo.exp_ms.toFixed(2); }
     if (typeof eo.gain === "number" && idle($("s-gain")) && settled) { $("s-gain").value = eo.gain; $("o-gain").textContent = eo.gain; }
     if (typeof eo.gaincap === "number" && idle($("s-gcap"))) { $("s-gcap").value = eo.gaincap; $("o-gcap").textContent = eo.gaincap; }
-    if (typeof eo.median === "number") { var m = document.querySelector('#md-btns [data-md="' + (eo.median ? 1 : 0) + '"]'); if (m) setSeg("md-btns", m); }
-    if (typeof eo.denoise === "number" && settled) { var d = document.querySelector('#dn-btns [data-dn="' + (eo.denoise ? 1 : 0) + '"]'); if (d) setSeg("dn-btns", d); }
+    /* median/denoise have no controls — the console forces both off on load, nothing to read back. */
     /* DISPLAY 30/60 is gated on the EO feed exposing disp_fps — the row stays hidden until then. */
     if (typeof eo.disp_fps === "number") {
       $("dispfps-row").style.display = "";
       if (settled) { var df = document.querySelector('#disp-btns [data-disp="' + eo.disp_fps + '"]'); if (df) setSeg("disp-btns", df); }
     }
-    /* Live indicator: ● only while the denoiser is actually running (night); its per-frame cost beside it. */
-    var dnOn = document.querySelector('#dn-btns button.on');
-    if (dnOn && dnOn.dataset.dn === "1" && eo.dn_active)
-      $("o-dn").innerHTML = '<span class="dn-dot"></span>' + (typeof eo.dn_ms === "number" ? " " + eo.dn_ms.toFixed(1) + " ms" : "");
-    else
-      $("o-dn").textContent = "";
   }
 
   /* ═══════════════════════ RECORDER / REPLAY ═══════════════════════ */
@@ -1519,21 +1511,24 @@
   setInterval(poll, 160); poll();
   openRadarStream();   /* live = SSE push; replay opens its own radar SSE (poll fallback) in openReplay */
   openDetStream();                                  /* EO detector boxes (SSE push, live); replay opens its own det SSE (poll fallback) in openReplay */
-  initRadarOv();                                    /* radar→EO overlay toggle + trims (persisted) */
+  initRadarOv();                                    /* overlay toggle (browser) + AZ/EL trim (from the Jetson) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
-  initLka();                                        /* link MANUAL/AUTO quality mode (persisted) */
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();
-  /* Console-enforced defaults on load (operator request): EO MEDIAN off + DENOISE off, detector
-   * MOTION on, radar FOV ±60° + EL ±20°. Push once the feeds are up; set the touch guards so the
-   * /stats readback doesn't revert the control before the feed/daemon applies the change. */
+  /* Console-enforced defaults on load (operator request). These have no controls in DEV any more
+   * — they're fixed values the operator never changes, so the console just asserts them and the
+   * panel stays uncluttered: EO MEDIAN off + DENOISE off, detector MAX DETS 25, MOTION on,
+   * radar FOV ±60° + EL ±20°. Touch guards stop the /stats readback fighting the push. */
+  var MAX_DETS = 25;
   setTimeout(function () {
     if (replaying) return;
     ispTouch = Date.now();
-    ctl("median=0");  var md = document.querySelector('#md-btns [data-md="0"]'); if (md) setSeg("md-btns", md);
-    ctl("denoise=0"); var dn = document.querySelector('#dn-btns [data-dn="0"]'); if (dn) setSeg("dn-btns", dn); $("o-dn").textContent = "";
-    dtTouch = Date.now(); ctl("det_motion=1"); var mb = document.querySelector('#mot-btns [data-mot="1"]'); if (mb) setSeg("mot-btns", mb);
+    ctl("median=0");
+    ctl("denoise=0");
+    dtTouch = Date.now();
+    ctl("det_max_dets=" + MAX_DETS);
+    ctl("det_motion=1"); var mb = document.querySelector('#mot-btns [data-mot="1"]'); if (mb) setSeg("mot-btns", mb);
     rcTouch = Date.now();
     ctl("radar_fov=60");   $("rd-fov").value = 60;   $("rv-fov").textContent = "60°";
     ctl("radar_elmax=20"); $("rd-elmax").value = 20; $("rv-elmax").textContent = "20°";

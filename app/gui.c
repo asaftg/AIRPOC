@@ -16,6 +16,7 @@
 #include "det.h"
 #include "web_assets.h"
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <ifaddrs.h>
 #include <pthread.h>
 #include <signal.h>
@@ -475,6 +476,65 @@ static void handle_ctl(const char *req)
         if (strstr(query, EO_KEYS[k])) { eo_ctl(query); break; }   /* forward EO controls */
 }
 
+/* ── operator UI preferences, stored ON THE JETSON ──────────────────────────────────────
+ * The radar→EO AZ/EL trim is a physical mount alignment: it belongs to the RIG, not to
+ * whichever laptop or phone happens to be looking at it. It used to live in the browser's
+ * localStorage, which is scoped per-origin — so the same rig read back different trims
+ * depending on whether you opened the console as 192.168.55.1 (USB), orin-nano.lan (WiFi)
+ * or 10.42.0.1 (field AP), and a fresh device started at zero. Keeping it here means one
+ * value, every device, surviving a Jetson reboot.
+ *
+ * Deliberately dumb: the console stores one small opaque JSON blob the front-end hands it,
+ * and hands it straight back. No schema here — the console is a proxy, not a settings
+ * engine, and this way new prefs need no C change. */
+#define UIPREF_MAX 1024
+static const char *uipref_path(void)
+{
+    /* /var/lib/airpoc is where the launcher already keeps rig state and survives reboots;
+     * fall back to the working directory if it isn't writable (e.g. run from a checkout). */
+    static char p[256];
+    if (!p[0]) {
+        FILE *t = fopen("/var/lib/airpoc/.wtest", "a");
+        if (t) { fclose(t); remove("/var/lib/airpoc/.wtest"); snprintf(p, sizeof p, "/var/lib/airpoc/ui-prefs.json"); }
+        else snprintf(p, sizeof p, "ui-prefs.json");
+    }
+    return p;
+}
+static void handle_uiprefs(int fd, const char *req)
+{
+    char body[UIPREF_MAX] = "{}";
+    const char *q = strstr(req, "set=");
+    if (q) {                                   /* SAVE: percent-decode the blob and persist it */
+        q += 4;
+        char dec[UIPREF_MAX]; size_t o = 0;
+        for (size_t i = 0; q[i] && q[i] != '&' && q[i] != ' ' && o < sizeof(dec) - 1; i++) {
+            if (q[i] == '%' && isxdigit((unsigned char)q[i + 1]) && isxdigit((unsigned char)q[i + 2])) {
+                char h[3] = { q[i + 1], q[i + 2], 0 };
+                dec[o++] = (char)strtol(h, NULL, 16); i += 2;
+            } else dec[o++] = q[i] == '+' ? ' ' : q[i];
+        }
+        dec[o] = 0;
+        FILE *f = fopen(uipref_path(), "w");
+        if (f) { fputs(dec, f); fclose(f); }
+        snprintf(body, sizeof body, "%s", dec);
+    } else {                                   /* LOAD */
+        FILE *f = fopen(uipref_path(), "r");
+        if (f) {
+            size_t r = fread(body, 1, sizeof(body) - 1, f);
+            body[r] = 0;
+            fclose(f);
+            if (!r) snprintf(body, sizeof body, "{}");
+        }
+    }
+    char hdr[256];
+    int hn = snprintf(hdr, sizeof hdr,
+                      "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                      "Cache-Control: no-store\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                      strlen(body));
+    ssize_t w1 = write(fd, hdr, (size_t)hn);    (void)w1;
+    ssize_t w2 = write(fd, body, strlen(body)); (void)w2;
+}
+
 static void stream_mjpeg(int fd)
 {
     const char *hdr = "HTTP/1.0 200 OK\r\n"
@@ -526,6 +586,7 @@ static void *client(void *arg)
     else if (has(req, "/radar"))     handle_radar(fd);
     else if (has(req, "/det/stream")) handle_det_stream(fd);
     else if (has(req, "/dstats"))    handle_dstats(fd);
+    else if (has(req, "/uiprefs"))   handle_uiprefs(fd, req);
     else if (has(req, "/det"))       handle_det(fd);
     else if (has(req, "/ctl")) {
         handle_ctl(req);
