@@ -2,3 +2,8 @@
 app
 *.o
 web_assets.h
+
+# runtime state, never source: operator UI prefs (radar AZ/EL trim). Normally written to
+# /var/lib/airpoc/ui-prefs.json; this covers the fallback when that path isn't writable, so a
+# running console can't leave the checkout dirty and trip the deploy's git reset.
+ui-prefs.json

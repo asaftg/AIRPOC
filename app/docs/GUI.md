@@ -109,10 +109,22 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   colour, labelled `R#tid range` (size-coding by the tracker's sx/sy was tried and pulsed —
   those estimates jitter; position is stable). No engaged/LOCK styling on the EO — all
   marks are equal until the tracking phase exists. Off-frame targets are not drawn.
-- **DEV → RADAR ON EO**: OVERLAY on/off + **AZ TRIM / EL TRIM** (±10°, 0.1° steps) — the
-  radar↔camera mount alignment, persisted per browser (localStorage). No rig calibration
-  is stored anywhere yet (the radar module's README leaves radar↔EO calibration to the
-  consumer), so defaults are 0 — nudge until a mark sits on its real object.
+- **DEV → RADAR ON EO**: OVERLAY on/off + **AZ TRIM / EL TRIM** (±10°, 0.1° steps) + **SAVE** —
+  the radar↔camera mount alignment. No rig calibration is stored anywhere else yet (the radar
+  module's README leaves radar↔EO calibration to the consumer), so defaults are 0 — nudge until
+  a mark sits on its real object, then SAVE.
+  - **The trim is stored on the Jetson**, not in the browser: `GET /uiprefs` reads it,
+    `GET /uiprefs?set=<json>` writes it, persisted to `/var/lib/airpoc/ui-prefs.json` (falls
+    back to the app's cwd if that isn't writable). It was `localStorage`, which is scoped
+    **per origin** — the same rig read back different trims depending on whether the console
+    was opened as `192.168.55.1` (USB), `orin-nano.lan` (WiFi) or `10.42.0.1` (field AP), and
+    any new phone/laptop started at zero. Trim is a property of the **rig**, so it lives with
+    the rig: one value on every device, surviving a reboot.
+  - Moving a slider applies immediately but is **session-only until SAVE** (the row shows
+    `unsaved` → `saved`), so nudging a trim mid-mission can't silently rewrite the stored
+    alignment.
+  - OVERLAY on/off stays per-browser (`localStorage`) — that's a viewing preference, not
+    calibration.
 - Works in replay too (video + radar both come from the recording), and the trim knobs
   stay usable there — aligning against a recording is the calibration workflow.
 
@@ -182,34 +194,38 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native). Measured
   bitrates: PANIC@15fps ≈ 2 Mb/s · PANIC@60 ≈ 8 · DEFAULT@60 ≈ 28 · NATIVE@60 ≈ 123 Mb/s —
   NATIVE does not fit the USB tether (~25 Mb/s) or a weak AP moment; pair it with a low
-  FPS CAP. **LINK MANUAL/AUTO**: when the link chip shows **SAT** (delivered < half of
-  produced — the "frozen EO" symptom), AUTO steps QUALITY down a rung after ~2 s and
-  probes back up after ~20 s clean, never above the operator's chosen QUALITY (the
-  ceiling); MANUAL (default) never touches settings. **DISPLAY 30/60** (forwarded as
+  FPS CAP. QUALITY is **always the operator's pick** — the console never changes it by itself.
+  When the link chip shows **SAT** (delivered < half of produced — the "frozen EO" symptom)
+  that is reported and nothing more; an earlier LINK MANUAL/AUTO mode that stepped QUALITY
+  down and probed back up was removed at the operator's request (unused, and silently moving
+  their setting is worse than a visibly degraded picture). **DISPLAY 30/60** (forwarded as
   `disp_fps`) caps only the *preview* rate reaching this screen — the detector, tracker,
   and recorder always run on the full sensor rate, so it never affects detection,
   targeting, or recording (distinct from FPS CAP, which sets the sensor rate). Unlike FPS
-  CAP it's a hard 30/60 decimation, not a link-ease knob. The row is **hidden until the EO
-  feed exposes `disp_fps` in `/stats`** (thin-proxy gate — no button for a control the feed
-  doesn't yet support); it auto-appears once EO's half lands.
-- **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP, MEDIAN, DENOISE (→ EO feed `/ctl`).
-  The console pushes its chosen default on load: **MEDIAN off**. **DENOISE** is a display-only
-  night denoiser owned by the EO feed (defaults **on**; the console doesn't override it): the
-  toggle reflects `denoise`, and beside it a **●** + live per-frame `dn_ms` show only while it's
-  actually running (`dn_active` — it self-gates to high-gain night, dormant at zero cost in day).
+  CAP it's a hard 30/60 decimation, not a link-ease knob. The row only renders once the EO
+  feed reports `disp_fps` in `/stats` (thin-proxy gate — no button for a control the feed
+  can't honour); EO shipped its half, so it is live.
+- **EO SENSOR** — EXPOSURE auto/man, EXP ms, GAIN, AUTO-CAP (→ EO feed `/ctl`).
+  **MEDIAN and DENOISE have no controls**: the operator keeps both off, so the console simply
+  asserts `median=0` + `denoise=0` on load and the panel stays uncluttered. (DENOISE is the EO
+  feed's display-only night denoiser — it self-gates to high-gain night and reports `dn_active`
+  / `dn_ms`; measured cost is inside the pipeline's noise floor, not the extra core it was once
+  suspected of. It remains available on the feed's own `/ctl` if it is ever wanted back.)
 - **ILLUMINATOR** — MODE auto/man, PWR, BEAM (→ EO feed `/ctl`).
-- **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM (client-side only; see *Radar → EO overlay*).
+- **RADAR ON EO** — OVERLAY on/off + AZ/EL TRIM + **SAVE** (see *Radar → EO overlay*). The
+  render is client-side, but the trim is **stored on the Jetson** via `/uiprefs`.
 - **DETECTOR** — MARK box/seeker (display-only), CONF (min confidence, default 0.5),
   NMS (box-merge overlap threshold, default 0.45 — lower merges duplicates harder),
   CADENCE (model runs every Nth frame, measured rate shown beside it), MOTION on/off
   (the dashed-mover safety net — **default ON** by operator request; it can flood while the
-  camera itself moves until ego-motion compensation exists), MAX DETS, MOT SENS (`mot_k`),
+  camera itself moves until ego-motion compensation exists), MOT SENS (`mot_k`),
   MOT HOLD (`mot_persist`, 1–5 — confirmation strength: how much of the last ~1 s a mover must
   persist), **MOT MEM** (`mot_window_s`, 1–60 s step 0.5, default 15 — the motion
   rolling-background window: how far back the static scene is modelled; shorter adapts faster,
   longer forgets a stopped object slower). All except MARK forwarded namespaced `det_<key>=` →
   detection daemon `/ctl`; readback from `/dstats` (values under `knobs`). The console pushes
-  **MOTION on** as its load default.
+  **MOTION on** and **MAX DETS 25** as load defaults — MAX DETS has no slider, it's a fixed
+  value the operator doesn't change.
 - **RADAR** — the daemon's **ten** tracker knobs: FOV ± (azimuth gate), **EL ±** (`elmax` —
   elevation gate, 5–90°, the antenna's physical elevation beam edge; 90 = off), MIN SNR,
   MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
@@ -217,8 +233,10 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   1–6), COAST (seconds a track survives a dropout, 0–3), PARK HOLD (seconds a stopped mover is
   held, 0–60). All forward to the **daemon** namespaced `radar_<key>=` (the app strips the
   prefix → daemon `/ctl`); sliders read back the **applied (clamped)** value from the daemon's
-  `/stats`. The console pushes **no** radar control on load (it used to force `radar_fov=60`,
-  which overrode the daemon during radar testing — removed).
+  `/stats`. The console pushes the operator's chosen radar defaults on load: **FOV ±60°** and
+  **EL ±20°**. (These were briefly *not* pushed — an earlier auto-`radar_fov=60` was removed
+  because it overrode the daemon mid-test — but the operator asked for a defined default, so
+  they are asserted again. Nothing else on the radar is touched.)
 - **SYSTEM** — Jetson **TEMP** (junction/`tj` thermal zone), **CPU %** (aggregate, plus
   core-equivalents `x/N`), **GPU %** (Tegra load). RETURN TO CONTROL → the launcher (`:8088`).
 
@@ -233,6 +251,7 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
 | `/det` | the detector's latest message verbatim (one-shot poll) |
 | `/dstats` | the detector's `/stats` (health + `knobs`) for slider init |
 | `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
+| `/uiprefs` | operator UI prefs stored **on the Jetson** (`/var/lib/airpoc/ui-prefs.json`): plain `GET` reads, `?set=<url-encoded json>` writes. Currently the radar→EO AZ/EL trim — rig-level state that must not depend on which browser or which IP the console was opened from. Deliberately schema-less: the console stores the blob the page hands it, so new prefs need no C change |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |
 | `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/denoise/disp_fps/fps/res`) → the EO feed |
 | `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export` (offload `.tar`), `/rec/replay/*` (incl. `/rec/replay/state` with `native_mp4` status, `/rec/replay/{radar,det}/stream` SSE, `/rec/replay/transcode?sid=` HD build) |

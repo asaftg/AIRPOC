@@ -58,13 +58,18 @@ daemon with `-s` (simulation) in front of an operator.
 - **Radar** — proxies the real daemon; renders the sector scope (rings, cyan FOV wedge,
   doppler returns, class-less target boxes with velocity, GUI display-persistence). No
   coasting in the wire (that's the tracker's job). Cluster ε / min-pts forward to the
-  daemon's `/ctl`; slider reflects the applied (clamped) value.
+  daemon's `/ctl`; slider reflects the applied (clamped) value. Console load defaults:
+  **FOV ±60°, EL ±20°**.
+- **Radar → EO overlay** — radar marks drawn on the video, with **AZ/EL trim + SAVE**. The
+  trim is the radar↔camera mount alignment, so it's stored **on the Jetson** (`/uiprefs` →
+  `/var/lib/airpoc/ui-prefs.json`), not per browser: same value from every device and every
+  address (USB / WiFi / field AP), surviving a reboot. Changes are session-only until SAVE.
 - **Tracking** — `TRACK` AUTO/MANUAL: AUTO engages the most important target (fused →
   nearer → confidence); MANUAL engages the tapped target. Green LOCK; `engage` flows to
   `/ctl`/`/stats` for the future gimbal.
 - **EO detector** — proxies the detection daemon (`:8094`, `/det/stream`); draws classified
   boxes (human cyan / vehicle amber) + motion-only movers (dashed). MARK box/seeker style.
-  Console load defaults: **MOTION on, MEDIAN off**. Full knob set in DEV incl. MOT MEM
+  Console load defaults: **MOTION on, MAX DETS 25**. Full knob set in DEV incl. MOT MEM
   (`mot_window_s`, 1–60 s).
 - **Illuminator** — the EO feed owns it; the console's LIGHT/PWR/BEAM + AUTO-fit forward
   to the EO feed's `/ctl`.
