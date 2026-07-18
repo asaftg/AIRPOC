@@ -52,6 +52,19 @@ best-effort — logs once and runs unchanged if shm creation fails):
   > about comb margins afterwards; it needs someone live at the bench. That is why
   > it is recorded rather than merely displayed.
 
+  Read it back out of a recording with
+  [`tools/comb_margin.py`](tools/comb_margin.py) (`--from/--to` split one movie
+  into its static and moving parts).
+
+  > Pitfall: **start the recording within ~1 minute of START.** Measured
+  > 2026-07-18: every `/dev/shm/airpoc.*` tap — not just this one — is unlinked
+  > roughly 100–150 s after the stack starts, while the producers stay alive and
+  > healthy. After that the recorder captures almost nothing (radar_raw stops at
+  > ~12 KB) even though the live view still works. A recording begun promptly
+  > captures normally for its duration: verified 57 telemetry samples, 13 MB
+  > radar_raw and 9.9 GB eo_y10 over 90 s. This is the known tap gremlin in the
+  > launcher/tap area (see `app/docs/GUI.md`), not a radar-module fault.
+
 Frame JSON (stable — the GUI/fusion consume this unchanged):
 ```
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
