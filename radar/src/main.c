@@ -140,16 +140,27 @@ static volatile int g_cfg_busy = 0;   /* set while cfg_push owns the CLI UART */
 
 static void *cli_poll_thread(void *arg) {
     CliPoll *cp = arg;
-    int logged_ok = 0, logged_err = 0;
+    int logged_ok = 0, logged_err = 0, fd = -1;
     while (g_run) {
         sleep(1);
         if (!g_run) break;
-        if (g_cfg_busy) continue;                 /* cfg_push owns the port */
-        int fd = serial_open(cp->dev, cp->baud);
+        if (g_cfg_busy) {                         /* cfg_push owns the port */
+            if (fd >= 0) { close(fd); fd = -1; }
+            continue;
+        }
+        /* Hold the port open across polls. Opening a tty toggles its control
+         * lines, and doing that every second made the chip see spurious bytes
+         * and answer "'q' is not recognized" — measured 7 rejects to 5 good
+         * replies in 25 s. Open once, reopen only after an error. */
+        if (fd < 0) fd = serial_open(cp->dev, cp->baud);
         if (fd < 0) {
             if (!logged_err) { logged_err = 1;
                 fprintf(stderr, "radar_preview: CLI %s unavailable — telemetry off\n", cp->dev); }
             continue;
+        }
+        { /* drain anything stale so a reply is never mixed with old output */
+            uint8_t junk[512];
+            while (read(fd, junk, sizeof junk) > 0) { }
         }
         static const char q[] = "queryDemoStatus\n";
         size_t qlen = sizeof(q) - 1, off = 0;
@@ -176,9 +187,11 @@ static void *cli_poll_thread(void *arg) {
                 if (!logged_ok) { logged_ok = 1;
                     fprintf(stderr, "radar_preview: CLI telemetry recording (%zu B/poll)\n", len); }
             }
+        } else {
+            close(fd); fd = -1;                   /* write failed: reopen next poll */
         }
-        close(fd);
     }
+    if (fd >= 0) close(fd);
     return NULL;
 }
 
