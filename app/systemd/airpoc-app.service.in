@@ -1,17 +1,20 @@
 [Unit]
-Description=AIRPOC operator console (EO + illuminator GUI)
+Description=AIRPOC operator console (thin proxy: EO + radar + recorder + detector)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=@DIR@
-ExecStart=@BIN@ -d /dev/video0 -p 8080 -i /dev/sg-ir850
+# Flags must match app/main.c getopt "p:e:r:c:d:" — port, EO, radar, reCorder, detector.
+# (The old line passed "-d /dev/video0 -i /dev/sg-ir850" from the pre-proxy era: -d is now the
+# DETECTOR address, so a device path made it fail to connect, and -i no longer exists at all.)
+ExecStart=@BIN@ -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094
 Restart=on-failure
 RestartSec=2
 User=@USER@
-# camera (video) + illuminator serial (dialout) access via groups
-SupplementaryGroups=video dialout
+# No SupplementaryGroups: the console is a thin proxy and opens no devices — the camera and
+# illuminator belong to the EO feed, which has its own process.
 
 [Install]
 WantedBy=multi-user.target

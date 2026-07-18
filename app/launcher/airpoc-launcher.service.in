@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=asaftg
-WorkingDirectory=/home/asaftg/AIRPOC/app/launcher
-ExecStart=/home/asaftg/AIRPOC/app/launcher/airpoc-launcher 8088
+User=@USER@
+WorkingDirectory=@HOME@/AIRPOC/app/launcher
+ExecStart=@HOME@/AIRPOC/app/launcher/airpoc-launcher 8088
 Restart=always
 RestartSec=2
 # children spawned by start.sh (EO camera + illuminator/radar serial) need these

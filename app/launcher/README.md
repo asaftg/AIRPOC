@@ -48,6 +48,21 @@ up. Reachable from any phone/laptop/tablet on the network — no install, no SSH
 The launcher never dies with the stack — STOP leaves the launcher (and the recorder,
 its own service) running so you can always press START again.
 
+**Two things that used to break this, now fixed:**
+- **The heal path was silently dead.** `start.sh` takes a lock so two starts can't race. That
+  lock lived on a file descriptor which every daemon it launched inherited and held for life, so
+  the *next* start.sh always concluded "a start is already in progress" and did nothing. STOP →
+  START still worked (STOP kills the holders), but healing **without** a stop — `/reattach`,
+  `/resume`, and pressing START to recover one dead producer while the others ran — quietly did
+  nothing. The lock is now closed in the launched children (`9>&-` on the launch subshell), so
+  it dies with start.sh while two genuinely concurrent starts are still serialized.
+- **One silent visitor wedged the whole service.** The server handles one client at a time and
+  used to block forever on a client that connected and sent nothing — a captive-portal probe, a
+  speculative browser connection, a port scan. Since it also binds :80 for captive-portal checks,
+  that was routine. Accepted sockets now carry a send/receive deadline and the request is read to
+  completion or timed out, so START/STOP/SHUTDOWN stay reachable. `/stop` also runs in the
+  background now; it used to freeze every other request for the duration of the shutdown.
+
 ## Install (once, on the Jetson)
 
 ```
@@ -79,7 +94,7 @@ open the control page. Copy one to your desktop and double-click.
 | file | what |
 |---|---|
 | `airpoc-launcher.c`       | the always-on :8088 control server + embedded page |
-| `airpoc-launcher.service` | systemd unit (User=asaftg, Restart=always) |
+| `airpoc-launcher.service.in` | systemd unit template (user/home filled in by `install.sh`) |
 | `start.sh`                | idempotent stack start (eo/radar/app, skips what's up) |
 | `stop.sh`                 | stops eo/radar/app; leaves launcher + recorder |
 | `install.sh`              | build + install + enable the service |

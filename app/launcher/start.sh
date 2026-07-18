@@ -35,11 +35,19 @@ ensure_gone() {
   pkill -9 -x "$1" 2>/dev/null; sleep 0.5
 }
 
+# NOTE the `9>&-` on the subshell: fd 9 is the start lock (above). Open fds are inherited
+# across fork/exec, and a flock lives as long as ANY fd on that open file description stays
+# open — so without this every daemon we launch (and its children) would hold the lock for
+# its whole life. The next start.sh would then hit `flock -n`, say "another start already in
+# progress" and silently do nothing: /reattach, /resume, and START-to-recover-one-dead-producer
+# would all become no-ops. Closing it on the SUBSHELL (not just on `setsid`) is what actually
+# works — the intermediate shell holds fd 9 too. Verified: after this, no process holds the
+# lock once start.sh exits, while two genuinely concurrent starts are still serialized.
 launch() { # port  dir  cmd...
   local port="$1" dir="$2"; shift 2
   [ -d "$dir" ] || { echo ":$port SKIP — missing $dir"; return 1; }
   echo "starting :$port  ($*)"
-  ( cd "$dir" && setsid "$@" >"/tmp/airpoc-$port.log" 2>&1 </dev/null & )
+  ( cd "$dir" && setsid "$@" >"/tmp/airpoc-$port.log" 2>&1 </dev/null & ) 9>&-
 }
 
 restarted=0

@@ -7,12 +7,18 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cc -O2 -Wall -o "$DIR/airpoc-launcher" "$DIR/airpoc-launcher.c"
 chmod +x "$DIR/start.sh" "$DIR/stop.sh"
 
-sudo cp "$DIR/airpoc-launcher.service" /etc/systemd/system/airpoc-launcher.service
+# The unit runs as, and out of the home of, the install user. This is substituted rather than
+# hardcoded so the same unit works for a user who isn't "asaftg" — the sudoers rule below is
+# written for the SAME user, and the two silently disagreeing is a nasty way to lose the recorder
+# bounce and the shutdown button.
+LU="${AIRPOC_LAUNCHER_USER:-$(id -un)}"
+LH="$(getent passwd "$LU" | cut -d: -f6)"; LH="${LH:-/home/$LU}"
+sed -e "s|@USER@|$LU|g" -e "s|@HOME@|$LH|g" \
+    "$DIR/airpoc-launcher.service.in" | sudo tee /etc/systemd/system/airpoc-launcher.service >/dev/null
 
 # scoped passwordless sudo so the launcher user can (a) bounce the recorder to re-attach
 # its shm taps after (re)starting the EO/radar feeds, and (b) power the Jetson off from the
 # control page.
-LU="${AIRPOC_LAUNCHER_USER:-asaftg}"
 printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl restart airpoc-recorder, /bin/systemctl restart airpoc-recorder, /usr/bin/systemctl poweroff, /bin/systemctl poweroff\n' "$LU" \
   | sudo tee /etc/sudoers.d/airpoc-recorder >/dev/null
 sudo chmod 0440 /etc/sudoers.d/airpoc-recorder

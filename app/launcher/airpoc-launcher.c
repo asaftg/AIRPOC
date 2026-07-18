@@ -122,7 +122,10 @@ static const char *PAGE =
 "<button id=w-home onclick=setwifi('home')>WIFI</button>"
 "<button id=w-ap onclick=setwifi('ap')>AP</button>"
 "</div><div class=wsub id=wsub></div></div>"
-"<button class=danger onclick=shutdownJetson()>\\u23fb SHUTDOWN JETSON</button>"
+/* &#x23FB; = the power symbol. This one is plain HTML markup, so a JS-style \u escape would
+ * render literally as "⏻" — the \uXXXX escapes further down are fine, they're inside
+ * <script>, where JavaScript actually decodes them. */
+"<button class=danger onclick=shutdownJetson()>&#x23FB; SHUTDOWN JETSON</button>"
 "<script>"
 "function poll(){fetch('/status').then(r=>r.json()).then(d=>{"
 "var n=(d.app?1:0)+(d.eo?1:0)+(d.radar?1:0)+(d.det?1:0);var dot=document.getElementById('dot');"
@@ -159,12 +162,40 @@ static void reply204(int fd)   /* what Android's captivity check wants: no inter
     dprintf(fd, "HTTP/1.0 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
 }
 
+/* SIGCHLD is SIG_IGN (auto-reap), which makes system()'s internal waitpid() fail with ECHILD,
+ * so system() returns -1 even when the command ran fine. There is therefore nothing useful to
+ * check — don't pretend to. The assignment + (void) is only to satisfy warn_unused_result. */
+static void run_sh(const char *cmd)
+{
+    int rc = system(cmd);
+    (void)rc;
+}
+
+/* Read the request with a deadline. The old code did ONE blocking read() with no timeout on a
+ * single-threaded accept loop: a client that connected and sent nothing (a captive-portal probe,
+ * a browser's speculative connection, a port scan) wedged the whole launcher forever, so
+ * START/STOP/SHUTDOWN went unreachable until someone SSH'd in. We bind :80 for captive-portal
+ * checks, so silent connections are routine, not exotic. Read until we have the blank line that
+ * ends the headers (or at least a full request line) and let SO_RCVTIMEO break a stalled peer. */
+static ssize_t read_request(int fd, char *buf, size_t cap)
+{
+    size_t n = 0;
+    while (n < cap - 1) {
+        ssize_t r = read(fd, buf + n, cap - 1 - n);
+        if (r <= 0) break;                       /* peer closed, or the recv timeout fired */
+        n += (size_t)r;
+        buf[n] = 0;
+        if (strstr(buf, "\r\n\r\n") || strstr(buf, "\n\n")) break;   /* headers complete */
+        if (memchr(buf, '\n', n) && n > 3) break;                    /* request line is enough */
+    }
+    buf[n] = 0;
+    return (ssize_t)n;
+}
+
 static void handle_conn(int fd)
 {
     char req[512];
-    ssize_t n = read(fd, req, sizeof req - 1);
-    if (n <= 0) return;
-    req[n] = 0;
+    if (read_request(fd, req, sizeof req) <= 0) return;
 
     /* Captive-portal / connectivity checks: make the phone treat this open AP as a real
      * network so it stops preferring cellular. Android wants a 204; Apple wants "Success". */
@@ -183,10 +214,10 @@ static void handle_conn(int fd)
                  (rad && rec_chan_up("radar_raw")) ? "true" : "false");
         reply(fd, "application/json", b);
     } else if (ep(req, "GET /start")) {
-        if (system("bash ./start.sh >/tmp/airpoc-start.log 2>&1 &") == -1) {}
+        run_sh("bash ./start.sh >/tmp/airpoc-start.log 2>&1 &");
         reply(fd, "application/json", "{\"ok\":1}");
     } else if (ep(req, "GET /stop")) {
-        if (system("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1") == -1) {}
+        run_sh("bash ./stop.sh >/tmp/airpoc-stop.log 2>&1 &");   /* backgrounded: a synchronous stop.sh froze every other request */
         reply(fd, "application/json", "{\"ok\":1}");
     } else if (ep(req, "GET /reattach")) {
         /* Re-bind the recorder's shm taps to the live feeds, on demand: the operator hits
@@ -196,7 +227,7 @@ static void handle_conn(int fd)
          * THEN bounce the recorder so it attaches to the fresh shm. A recorder-only restart
          * is NOT enough (and can orphan a working attach): the producers pin the old shm, so
          * the new recorder ring has no writer and stays connected=0. Verified on-device. */
-        if (system("bash ./start.sh >/tmp/airpoc-reattach.log 2>&1 &") == -1) {}
+        run_sh("bash ./start.sh >/tmp/airpoc-reattach.log 2>&1 &");
         reply(fd, "application/json", "{\"ok\":1}");
     } else if (ep(req, "GET /suspend")) {
         /* Reviewing a recording needs no live sensors, so STOP the producers to free the box
@@ -206,15 +237,15 @@ static void handle_conn(int fd)
          * socket still answers connect() so start.sh's health check thinks it's up and never
          * recovers it. A clean stop leaves them cleanly DOWN, which START/resume always
          * relaunches. Straggler cleanup happens in start.sh's ensure_gone on the next start. */
-        if (system("pkill -TERM -x eo_pipeline; pkill -TERM -x radar_preview; pkill -TERM -x detectiond") == -1) {}
+        run_sh("pkill -TERM -x eo_pipeline; pkill -TERM -x radar_preview; pkill -TERM -x detectiond");
         reply(fd, "application/json", "{\"ok\":1,\"live\":\"stopped\"}");
     } else if (ep(req, "GET /resume")) {
         /* Back to live: relaunch the stopped producers and re-attach the recorder (start.sh). */
-        if (system("bash ./start.sh >/tmp/airpoc-resume.log 2>&1 &") == -1) {}
+        run_sh("bash ./start.sh >/tmp/airpoc-resume.log 2>&1 &");
         reply(fd, "application/json", "{\"ok\":1,\"live\":\"starting\"}");
     } else if (ep(req, "GET /shutdown")) {
         reply(fd, "application/json", "{\"ok\":1}");   /* answer first — the box is about to go down */
-        if (system("sudo -n systemctl poweroff >/dev/null 2>&1 &") == -1) {}
+        run_sh("sudo -n systemctl poweroff >/dev/null 2>&1 &");
 
     } else if (ep(req, "GET /wifi/status")) {
         char b[256];
@@ -222,7 +253,13 @@ static void handle_conn(int fd)
             snprintf(b, sizeof b, "{\"mode\":\"auto\",\"ap\":false,\"net\":\"\",\"ip\":\"\",\"clients\":0}");
         reply(fd, "application/json", b);
     } else if (ep(req, "GET /wifi")) {
-        const char *m = strstr(req, "mode="), *set = "auto";
+        /* Parse mode= from the REQUEST LINE only. Searching the whole buffer let any header
+         * (a Referer carrying "?mode=ap", say) silently switch the network out from under us. */
+        char line[256];
+        size_t ll = strcspn(req, "\r\n");
+        if (ll >= sizeof line) ll = sizeof line - 1;
+        memcpy(line, req, ll); line[ll] = 0;
+        const char *m = strstr(line, "mode="), *set = "auto";
         if (m) { m += 5; if (!strncmp(m, "ap", 2)) set = "ap"; else if (!strncmp(m, "home", 4)) set = "home"; }
         set_wifi_mode(set);
         char b[64]; snprintf(b, sizeof b, "{\"ok\":1,\"mode\":\"%s\"}", set);
@@ -266,6 +303,12 @@ int main(int argc, char **argv)
             if (!(pfds[i].revents & POLLIN)) continue;
             int fd = accept(pfds[i].fd, NULL, NULL);
             if (fd < 0) continue;
+            /* Deadlines on every accepted socket. This loop is single-threaded and serves one
+             * client at a time, so a peer that connects and then goes quiet must NOT be able to
+             * hold it: without these, one idle connection wedged START/STOP/SHUTDOWN for good. */
+            struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
             handle_conn(fd);
             close(fd);
         }
