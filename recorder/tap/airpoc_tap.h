@@ -28,6 +28,7 @@
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #define TAP_MAGIC       0x3130504154524941ULL   /* "AIRTAP01" LE */
 #define TAP_VERSION     1
@@ -110,7 +111,19 @@ static inline int tap_create(AirTap *t, const char *name, uint32_t n_slots,
     size_t stride = tap__stride(slot_bytes);
     size_t len = TAP_HDR_BYTES + stride * n_slots;
 
-    int fd = shm_open(t->name, O_RDWR | O_CREAT, 0666);
+    /* Always create a FRESH object rather than adopting whatever sits at this
+     * name. Adopting it meant a restarted producer shared an inode with the
+     * instance it replaced, so the old one's exit-unlink deleted the new one's
+     * live tap (and readers silently saw wseq reset under them mid-stream).
+     * With a distinct object per instance, the identity check in tap_destroy()
+     * can tell them apart, and readers notice the swap via tap_stale() and
+     * re-attach. Unlinking here only orphans the old object; anyone still
+     * mapped to it keeps reading until they re-attach. */
+    int fd = shm_open(t->name, O_RDWR | O_CREAT | O_EXCL, 0666);
+    if (fd < 0 && errno == EEXIST) {
+        shm_unlink(t->name);
+        fd = shm_open(t->name, O_RDWR | O_CREAT | O_EXCL, 0666);
+    }
     if (fd < 0) { fprintf(stderr, "tap: shm_open(%s) failed, publishing disabled\n", t->name); return -1; }
     if (ftruncate(fd, (off_t)len) != 0) { close(fd); return -1; }
     struct stat cst;
