@@ -225,6 +225,50 @@ continuity should come from the LLR confirm path plus a patience-style
 detector, not from widening what a track may claim. Do not re-introduce
 without replay evidence on this corpus.
 
+## Measured limits — read this before tuning anything
+
+Measured on the 2026-07-16 night walk (a person out to ~385 m and back, plus a
+vehicle), scored against the operator's marked path. **Some of what looks like
+tracker failure is not fixable in the tracker.** Check which regime you are in
+before touching a knob.
+
+| where | what happens | why |
+|---|---|---|
+| below ~220 m | the person is held ~**81 %** of the frames they are clearly detectable in | the target is **+3.8 points/frame above clutter** — a real cluster |
+| 220–280 m | patchy | **+1.2 points/frame** — marginal |
+| beyond ~280 m | essentially not held (**~3 %**) | **+0.5 points/frame** — the target is the *same strength as the junk around it* |
+
+The far case is a **detection** limit, not a tracking one. At 280 m+ the person
+sits at the 16 dB CFAR threshold, and so does the surrounding junk, so nothing
+that sorts by strength can separate them. Loosening association or the guard to
+reach that far does not find the target — it finds clutter. Measured: widening
+the azimuth gate to cover far-range jitter emitted **107 ghost detections** in a
+scene that must produce zero, while far coverage got *worse*.
+
+Two things do help, and they are the honest levers:
+
+- **Temporal recurrence.** Per frame the far target is invisible; across a few
+  seconds it is not, because a real mover leaves a self-consistent trail and
+  clutter does not. Chaining detections that agree over ~6 s recovers the far
+  out-climb to ~350 m, which no per-frame rule reaches. Cost: the target must
+  hold a roughly steady course for the length of the window, and evidence
+  arrives late.
+- **Reduce the junk at the source.** The chip emits ~420 points/frame against a
+  450 clamp, over half of it threshold-level junk beyond 200 m. That budget is
+  what starves the far target. This is the comb gate's job, not the tracker's.
+
+> Pitfall: the consistency guard kills a track whose radial progress stalls —
+> deliberately, because that is how a multipath ghost behaves. A real target
+> that pauses, turns, or moves across the beam looks identical to it from
+> range alone. Do not "fix" this by exempting bright or long-lived tracks:
+> both were tried and both reopened ghosts on the regression corpus without
+> improving real coverage.
+
+> Pitfall: score against a ground truth derived from the data, not a hand-drawn
+> line. A hand-drawn path was ~18 m off on the return leg, which made a
+> correctly-tracked target read as a miss and sent tuning in the wrong
+> direction.
+
 ## Re-tuning (as we get more recordings)
 
 The numbers above fit **one** scene. Different scenes (open field vs. clutter,
