@@ -68,7 +68,11 @@ typedef struct {
 
 /* ---- channels ---- */
 
-typedef enum { CH_EO_Y10, CH_EO_JPEG, CH_RADAR_RAW, CH_RADAR_WIRE, CH_DET_WIRE, CH_EVENTS, CH_N } ChanId;
+/* APPEND ONLY. The numeric value is written into every segment header on disk
+ * (AirecSegHdr.channel_id), so inserting in the middle silently relabels the
+ * channels inside every recording already on the NVMe. */
+typedef enum { CH_EO_Y10, CH_EO_JPEG, CH_RADAR_RAW, CH_RADAR_WIRE, CH_DET_WIRE, CH_EVENTS,
+               CH_RADAR_CLI, CH_N } ChanId;
 typedef enum { MODE_Y10P, MODE_RAW16, MODE_Y8 } VideoMode;
 
 /* per-frame illuminator, packed by the EO tap into eo_y10 meta[4] (present only

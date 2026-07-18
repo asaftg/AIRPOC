@@ -11,8 +11,10 @@ any session through the operator console exactly as it looked live.
   (bit-perfect UART bytes, ✅ live), `airpoc.radar_wire` (the exact SSE
   frame JSON, ✅ live), `airpoc.eo_y10` (native Y10 + frame-synchronous AE
   meta, ✅ live), `airpoc.eo_jpeg` (the display JPEGs the operator saw, ✅ live),
-  and `airpoc.det_wire` (the EO-detector frame JSON, verbatim, ✅ live —
-  replays through `/replay/det`). Absent taps degrade to `connected:0` in
+  `airpoc.det_wire` (the EO-detector frame JSON, verbatim, ✅ live —
+  replays through `/replay/det`), and `airpoc.radar_cli` (the radar chip's
+  CLI telemetry, raw ASCII ~1 Hz — recorded for offline parsing, not
+  replayed). Absent taps degrade to `connected:0` in
   `/stats`; a session records whatever channels exist and replays exactly that.
 - The modules' documented `/stats` surfaces (`:8091`, `:8092`, `:8080`),
   polled at 5 Hz into the events channel.

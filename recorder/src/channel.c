@@ -28,6 +28,12 @@ const ChanCfg g_chan_cfg[CH_N] = {
     { "radar_wire", "airpoc.radar_wire", "json", "frame_number,n_points,n_targets,0,0,0",                   0,  256 * 1024 },
     { "det_wire",   "airpoc.det_wire",   "json", "frame_id,n_dets,n_movers,0,0,0",                           0,  256 * 1024 },
     { "events",     NULL,                "json", "0,0,0,0,0,0",                                             0,   64 * 1024 },
+    /* radar chip CLI telemetry (queryDemoStatus replies, ~1 Hz ASCII). Exists
+     * ONLY on the CLI UART -- not in the TLV/point stream -- so if it isn't
+     * recorded here it is gone. Carries the empty-band comb-gate margin
+     * histogram, sensor state, UART deferred-frame count, RF cal status and
+     * chip temperature. Rows must stay in ChanId order. */
+    { "radar_cli",  "airpoc.radar_cli",  "text", "0,0,0,0,0,0",                                             0,   64 * 1024 },
 };
 
 Chan g_chan[CH_N];
