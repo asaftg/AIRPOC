@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <pthread.h>
 #include <limits.h>
 #include <math.h>
 #include <signal.h>
@@ -119,6 +120,66 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
     if (stats)
         http_set_timing(stats->interframe_proc_us, stats->interframe_margin_us,
                         stats->active_cpu_pct, stats->interframe_cpu_pct);
+}
+
+/* ---- CLI telemetry poller -------------------------------------------------
+ * Once a second: open the CLI UART, ask `queryDemoStatus`, read the reply, tap
+ * it, close. Runs in its OWN thread on purpose — the reply takes ~100 ms to
+ * arrive, and any wait for it inside the frame loop starves the data UART and
+ * drops frames (measured: 26 Hz -> 6 Hz). Here a blocking read costs nothing.
+ * Opening per poll (rather than holding the port) keeps the tty state clean and
+ * cannot leave a half-written command behind. Best-effort throughout: any
+ * failure just means this second has no telemetry. */
+typedef struct {
+    AirTap     *tap;
+    const char *dev;
+    int         baud;
+} CliPoll;
+
+static volatile int g_cfg_busy = 0;   /* set while cfg_push owns the CLI UART */
+
+static void *cli_poll_thread(void *arg) {
+    CliPoll *cp = arg;
+    int logged_ok = 0, logged_err = 0;
+    while (g_run) {
+        sleep(1);
+        if (!g_run) break;
+        if (g_cfg_busy) continue;                 /* cfg_push owns the port */
+        int fd = serial_open(cp->dev, cp->baud);
+        if (fd < 0) {
+            if (!logged_err) { logged_err = 1;
+                fprintf(stderr, "radar_preview: CLI %s unavailable — telemetry off\n", cp->dev); }
+            continue;
+        }
+        static const char q[] = "queryDemoStatus\n";
+        size_t qlen = sizeof(q) - 1, off = 0;
+        while (off < qlen) {                      /* blocking fd: completes */
+            ssize_t w = write(fd, q + off, qlen - off);
+            if (w > 0) { off += (size_t)w; continue; }
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (off == qlen) {
+            /* VMIN=0/VTIME=1 => each read returns within ~100 ms. Collect until
+             * the chip says Done, or ~1.5 s, whichever comes first. */
+            static uint8_t rb[8192];
+            size_t len = 0;
+            double t0 = now_s();
+            while (now_s() - t0 < 1.5 && len < sizeof(rb) - 1) {
+                ssize_t r = read(fd, rb + len, sizeof(rb) - len - 1);
+                if (r > 0) { len += (size_t)r; rb[len] = 0;
+                             if (strstr((char *)rb, "Done")) break; }
+                else if (r < 0 && errno != EAGAIN && errno != EINTR) break;
+            }
+            if (len > 0) {
+                tap_write(cp->tap, rb, (uint32_t)len, tap_now_ns(), NULL);
+                if (!logged_ok) { logged_ok = 1;
+                    fprintf(stderr, "radar_preview: CLI telemetry recording (%zu B/poll)\n", len); }
+            }
+        }
+        close(fd);
+    }
+    return NULL;
 }
 
 /* Resolve `rel` against the directory of THIS executable, so the default cfg and
@@ -244,6 +305,15 @@ int main(int argc, char **argv) {
      * kills the stream. `-n` forces "already configured" (never push). */
     int cfg_settled = skip_cfg;
 
+    /* Telemetry poller (own thread — see cli_poll_thread). Best-effort: if it
+     * cannot start, the daemon runs exactly as before, just without telemetry. */
+    static CliPoll cli_poll;
+    cli_poll.tap = &ctx.cli_tap; cli_poll.dev = cli_dev; cli_poll.baud = cli_baud;
+    pthread_t cli_tid;
+    int cli_thread_ok = (pthread_create(&cli_tid, NULL, cli_poll_thread, &cli_poll) == 0);
+    if (!cli_thread_ok)
+        fprintf(stderr, "radar_preview: CLI telemetry thread failed — telemetry off\n");
+
     uint8_t buf[8192];
     while (g_run) {
         int fd = serial_open(data_dev, data_baud);
@@ -274,6 +344,7 @@ int main(int argc, char **argv) {
                 /* Wait for the CLI node: the board can enumerate a few seconds
                  * after boot, and both ACM ports may appear late. Retry ~10 s
                  * before giving up rather than skipping the push outright. */
+                g_cfg_busy = 1;
                 int cli = -1;
                 for (int a = 0; a < 20 && g_run; a++) {
                     cli = serial_open(cli_dev, cli_baud);
@@ -286,11 +357,13 @@ int main(int argc, char **argv) {
                     if (cfg_push(cli, cfg) < 0)
                         fprintf(stderr, "radar_preview: cfg push had errors — continuing\n");
                     close(cli);
+                    g_cfg_busy = 0;
                 } else {
                     fprintf(stderr, "radar_preview: CLI %s unavailable after retries — "
                             "chip may be unconfigured (pass -C for the right node)\n", cli_dev);
                 }
             }
+            g_cfg_busy = 0;
             cfg_settled = 1;
         }
         fprintf(stderr, "radar_preview: data %s @ %d baud — streaming\n", data_dev, data_baud);
@@ -298,52 +371,7 @@ int main(int argc, char **argv) {
          * UART is free while streaming. Fully non-blocking: write the query, then
          * collect the reply across later loop iterations, so frame reading is
          * never stalled waiting on the chip. */
-        int cli_fd = serial_open(cli_dev, cli_baud);
-        if (cli_fd < 0) {
-            fprintf(stderr, "radar_preview: CLI %s unavailable — telemetry not recorded\n", cli_dev);
-        } else {
-            /* MUST be non-blocking. serial_open sets VTIME=1, so a plain read()
-             * on a quiet CLI blocks 100 ms — inside this loop that starves the
-             * data UART and drops frames (measured: 26 Hz -> 6 Hz). Telemetry is
-             * strictly best-effort and must never cost a frame. */
-            int fl = fcntl(cli_fd, F_GETFL, 0);
-            if (fl < 0 || fcntl(cli_fd, F_SETFL, fl | O_NONBLOCK) < 0) {
-                fprintf(stderr, "radar_preview: CLI non-blocking failed — telemetry off\n");
-                close(cli_fd); cli_fd = -1;
-            }
-        }
-        static uint8_t clibuf[8192];
-        size_t clilen = 0, cli_off = 0;   /* cli_off: bytes of the query already written */
-        double cli_last = 0.0, cli_sent = 0.0;
         while (g_run) {
-            if (cli_fd >= 0) {
-                if (cli_sent > 0.0) {                     /* collecting a reply */
-                    ssize_t r = read(cli_fd, clibuf + clilen, sizeof(clibuf) - clilen - 1);
-                    if (r > 0) clilen += (size_t)r;
-                    clibuf[clilen] = 0;
-                    if ((clilen > 0 && strstr((char *)clibuf, "Done") != NULL)
-                        || now_s() - cli_sent > 1.5) {
-                        if (clilen > 0)
-                            tap_write(&ctx.cli_tap, clibuf, (uint32_t)clilen, tap_now_ns(), NULL);
-                        clilen = 0; cli_sent = 0.0;
-                    }
-                } else if (cli_off > 0 || now_s() - cli_last >= 1.0) {
-                    /* Send the query, RESUMING across loop iterations. A
-                     * non-blocking write can accept only part of it; retrying
-                     * in a tight spin does not help because the tty buffer has
-                     * had no time to drain, and abandoning it leaves a partial
-                     * command the chip rejects ("'q' is not recognized"). So
-                     * keep the offset and continue next pass — the loop runs at
-                     * frame rate, so it completes within a few ms. */
-                    static const char QCMD[] = "queryDemoStatus\n";
-                    const size_t qlen = sizeof(QCMD) - 1;
-                    if (cli_off == 0) cli_last = now_s();
-                    ssize_t w = write(cli_fd, QCMD + cli_off, qlen - cli_off);
-                    if (w > 0) cli_off += (size_t)w;
-                    else if (errno != EAGAIN && errno != EINTR) cli_off = 0;  /* give up this round */
-                    if (cli_off >= qlen) { cli_off = 0; cli_sent = now_s(); }
-                }
-            }
             ssize_t n = read(fd, buf, sizeof(buf));
             if (n > 0) {
                 /* Recorder tap (WI-RD-1): raw bytes BEFORE the parser, so capture
@@ -360,13 +388,13 @@ int main(int argc, char **argv) {
             }
         }
         close(fd);
-        if (cli_fd >= 0) close(cli_fd);
         ctx.have_last = 0;                   /* reset drop tracking across reconnects */
     }
 
     fprintf(stderr, "radar_preview: shutting down\n");
     tap_destroy(&ctx.raw_tap);
     tap_destroy(&ctx.wire_tap);
+    if (cli_thread_ok) pthread_join(cli_tid, NULL);
     tap_destroy(&ctx.cli_tap);
     tlv_stream_free(stream);
     cluster_free(ctx.clust);
