@@ -20,6 +20,7 @@
 #include "http.h"
 #include "sim.h"
 #include "airpoc_tap.h"   /* vendored from recorder/tap (protocol v1) — recorder taps */
+#include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
 #include <math.h>
@@ -297,8 +298,19 @@ int main(int argc, char **argv) {
          * collect the reply across later loop iterations, so frame reading is
          * never stalled waiting on the chip. */
         int cli_fd = serial_open(cli_dev, cli_baud);
-        if (cli_fd < 0)
+        if (cli_fd < 0) {
             fprintf(stderr, "radar_preview: CLI %s unavailable — telemetry not recorded\n", cli_dev);
+        } else {
+            /* MUST be non-blocking. serial_open sets VTIME=1, so a plain read()
+             * on a quiet CLI blocks 100 ms — inside this loop that starves the
+             * data UART and drops frames (measured: 26 Hz -> 6 Hz). Telemetry is
+             * strictly best-effort and must never cost a frame. */
+            int fl = fcntl(cli_fd, F_GETFL, 0);
+            if (fl < 0 || fcntl(cli_fd, F_SETFL, fl | O_NONBLOCK) < 0) {
+                fprintf(stderr, "radar_preview: CLI non-blocking failed — telemetry off\n");
+                close(cli_fd); cli_fd = -1;
+            }
+        }
         static uint8_t clibuf[8192];
         size_t clilen = 0;
         double cli_last = 0.0, cli_sent = 0.0;
