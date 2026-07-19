@@ -12,8 +12,9 @@ Turns the **FPV drone-strikes Lebanon** video catalog into a train-ready
 object-detection dataset for the AIRPOC EO detector: **grayscale** frames +
 **COCO** labels, two classes — **vehicle** and **human** — with each strike's
 final dive densely sampled (the small, closing-target case the detector most
-needs). Auto-labeled by two independent models, confident agreements
-auto-accepted, only a capped pile of genuinely hard boxes sent to a human.
+needs). Auto-labeled by two independent models, confident agreements auto-accepted, only
+a capped pile of genuinely hard **frames** sent to a human (the cap counts frames,
+not boxes — see SPEC).
 
 This is **offline tooling** (Python, per the engineering guidelines — nothing
 here runs on the seeker). It produces files; it is not part of the on-device
@@ -64,12 +65,14 @@ ds_merge.py           --root $R        # route/auto-accept; build capped review 
 ds_label.py --rescan  --root $R        # harder pass on empty terminal frames
 ds_merge.py           --root $R        # (re-run after the rescan)
 
-# human pass (optional but recommended)
+# human pass — NOT optional unless you pass --pending drop below
+#   (ds_pack defaults to --pending fail and aborts on any unreviewed box)
 python ../review_app/ds_review_server.py --root $R   # accept/fix/reject in a browser
 
 # finalize + gate
 ds_split.py    --root $R               # class-aware split BY VIDEO
 ds_pack.py     --root $R               # assemble COCO, re-assert invariants
+#   ... or: ds_pack.py --root $R --pending drop   (drop unreviewed, ledgered)
 ds_stats.py    --root $R               # class + box-size histograms
 ds_manifest.py --root $R --version X.Y.Z
 ds_validate.py --root $R               # the gate — must pass before training use
