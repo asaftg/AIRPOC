@@ -1,5 +1,13 @@
 # datasets — training-set builder (offline bench module)
 
+> **Status: designed and unit-tested — not yet run for real.** Every stage that
+> touches the outside world (catalog fetch, download, probe, frame extraction,
+> GPU auto-labelling, the rescan loop, the review app) has **never been executed**.
+> What has run is the non-GPU spine — merge, split, pack, stats, manifest,
+> validate — against the synthetic fixture in `tools/tests/`. There are no real
+> numbers in this module yet: no video count, no frame count, no class counts.
+> Read the build order below as a design, not a runbook.
+
 Turns the **FPV drone-strikes Lebanon** video catalog into a train-ready
 object-detection dataset for the AIRPOC EO detector: **grayscale** frames +
 **COCO** labels, two classes — **vehicle** and **human** — with each strike's
