@@ -28,6 +28,7 @@
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #define TAP_MAGIC       0x3130504154524941ULL   /* "AIRTAP01" LE */
 #define TAP_VERSION     1
@@ -64,6 +65,10 @@ typedef struct {
     size_t     map_len;
     char       name[TAP_NAME_MAX];
     int        ok;
+    uint64_t   shm_dev, shm_ino; /* identity of the object behind name[]:
+                                    publishers use it to avoid unlinking a peer's
+                                    tap (tap_destroy), readers to notice theirs was
+                                    replaced (tap_stale) */
 } AirTap;
 
 typedef struct {
@@ -106,9 +111,23 @@ static inline int tap_create(AirTap *t, const char *name, uint32_t n_slots,
     size_t stride = tap__stride(slot_bytes);
     size_t len = TAP_HDR_BYTES + stride * n_slots;
 
-    int fd = shm_open(t->name, O_RDWR | O_CREAT, 0666);
+    /* Always create a FRESH object rather than adopting whatever sits at this
+     * name. Adopting it meant a restarted producer shared an inode with the
+     * instance it replaced, so the old one's exit-unlink deleted the new one's
+     * live tap (and readers silently saw wseq reset under them mid-stream).
+     * With a distinct object per instance, the identity check in tap_destroy()
+     * can tell them apart, and readers notice the swap via tap_stale() and
+     * re-attach. Unlinking here only orphans the old object; anyone still
+     * mapped to it keeps reading until they re-attach. */
+    int fd = shm_open(t->name, O_RDWR | O_CREAT | O_EXCL, 0666);
+    if (fd < 0 && errno == EEXIST) {
+        shm_unlink(t->name);
+        fd = shm_open(t->name, O_RDWR | O_CREAT | O_EXCL, 0666);
+    }
     if (fd < 0) { fprintf(stderr, "tap: shm_open(%s) failed, publishing disabled\n", t->name); return -1; }
     if (ftruncate(fd, (off_t)len) != 0) { close(fd); return -1; }
+    struct stat cst;
+    if (fstat(fd, &cst) != 0) { close(fd); return -1; }
     void *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (m == MAP_FAILED) { fprintf(stderr, "tap: mmap(%s) failed, publishing disabled\n", t->name); return -1; }
@@ -117,6 +136,8 @@ static inline int tap_create(AirTap *t, const char *name, uint32_t n_slots,
     t->base = (uint8_t *)m + TAP_HDR_BYTES;
     t->stride = stride;
     t->map_len = len;
+    t->shm_dev = (uint64_t)cst.st_dev;
+    t->shm_ino = (uint64_t)cst.st_ino;
 
     /* (Re)initialize: readers key on magic last so they never see a half header. */
     __atomic_store_n(&t->h->magic, 0, __ATOMIC_RELAXED);
@@ -176,7 +197,26 @@ static inline int tap_write(AirTap *t, const void *buf, uint32_t len,
 
 static inline void tap_destroy(AirTap *t)
 {
-    if (t->h) { munmap((void *)t->h, t->map_len); shm_unlink(t->name); }
+    if (t->h) {
+        munmap((void *)t->h, t->map_len);
+        /* Unlink ONLY if the name still refers to the object WE created. A
+         * restarted instance of this producer may have already recreated the
+         * tap; unlinking then deletes a LIVE tap, and because a producer only
+         * creates its tap at startup, every reader loses that feed until the
+         * producer is restarted again. That is the "producers alive, no
+         * /dev/shm/airpoc.* present, recordings empty" failure. The launcher's
+         * kill-and-wait narrows the window; this closes it regardless of
+         * ordering, which is the only way it stays closed. */
+        int fd = shm_open(t->name, O_RDONLY, 0);
+        if (fd >= 0) {
+            struct stat st;
+            int ours = fstat(fd, &st) == 0 &&
+                       (uint64_t)st.st_ino == t->shm_ino &&
+                       (uint64_t)st.st_dev == t->shm_dev;
+            close(fd);
+            if (ours) shm_unlink(t->name);
+        }
+    }
     memset(t, 0, sizeof *t);
 }
 
@@ -204,9 +244,29 @@ static inline int tap_open(AirTapSub *s, const char *name)
     s->t.stride = tap__stride(h->slot_bytes);
     s->t.map_len = (size_t)st.st_size;
     s->t.ok = 1;
+    s->t.shm_dev = (uint64_t)st.st_dev;      /* identity, for tap_stale() */
+    s->t.shm_ino = (uint64_t)st.st_ino;
     /* start at the freshest data, not the historical backlog */
     s->next_seq = __atomic_load_n(&h->wseq, __ATOMIC_ACQUIRE);
     return 0;
+}
+
+/* Has the publisher REPLACED the shm behind our mapping (unlink + recreate on a
+ * producer restart, or an external cleanup)? Our mapping stays valid but is
+ * orphaned — frozen forever — so a reader that doesn't check this reads a dead
+ * ring indefinitely while still looking "connected". Returns 1 = stale/gone.
+ * Cheap: one shm_open + fstat, meant to be polled ~1 Hz while idle. */
+static inline int tap_stale(const AirTapSub *s)
+{
+    if (!s->t.ok) return 1;
+    int fd = shm_open(s->t.name, O_RDONLY, 0);
+    if (fd < 0) return 1;                                  /* unlinked: publisher gone */
+    struct stat st;
+    int bad = (fstat(fd, &st) != 0) ||
+              (uint64_t)st.st_ino != s->t.shm_ino ||
+              (uint64_t)st.st_dev != s->t.shm_dev;           /* recreated: different inode */
+    close(fd);
+    return bad;
 }
 
 /* Position of the publisher's write cursor (for idle tracking without copying). */
@@ -215,11 +275,13 @@ static inline uint64_t tap_wseq(const AirTapSub *s)
     return s->t.ok ? __atomic_load_n(&s->t.h->wseq, __ATOMIC_ACQUIRE) : 0;
 }
 
-/* Copy the next record into buf. Returns 1 = copied, 0 = nothing new.
- * Lap losses are counted in s->gaps and reported in rec->gap_before. */
+/* Copy the next record into buf. Returns 1 = copied, 0 = nothing new,
+ * -1 = not attached (caller should re-open; see tap_stale).
+ * Lap losses are counted in s->gaps and reported in rec->gap_before.
+ * NOTE: callers must test > 0, not truthiness. */
 static inline int tap_read(AirTapSub *s, void *buf, uint32_t buf_cap, AirTapRec *rec)
 {
-    if (!s->t.ok) return 0;
+    if (!s->t.ok) return -1;
     const AirTapHdr *h = s->t.h;
     uint64_t gap = 0;
 
