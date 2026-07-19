@@ -56,8 +56,9 @@ at a time:
 
 ## What's behind the surface (may change any time — do not depend on it)
 
-Auto-exposure ("expose don't gain": lengthen exposure / drop fps before adding gain,
-gain capped), the p1/p99 tone-map, the 3×3 median, sensor registers, thread layout.
+Auto-exposure ("expose don't gain": lengthen exposure, then add gain up to the cap —
+the frame rate is operator-set and the AE never changes it), the p1/p99 tone-map,
+the 3×3 median, sensor registers, thread layout.
 Bench/preview controls (manual gain/exposure sweep, telemetry) are in `eo_bench.h`,
 which is **explicitly unstable** and for the preview only — production consumers must
 not include it.
