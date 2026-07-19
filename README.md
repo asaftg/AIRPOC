@@ -21,8 +21,8 @@ first**, then [`docs/SYSTEM_OVERVIEW.md`](docs/SYSTEM_OVERVIEW.md).
 ```
 
 - **EO camera** — visible mono global-shutter imaging (this repo's camera bring-up).
-- **NIR illuminator** — pulsed near-IR light so the EO camera can see and freeze
-  motion in low light.
+- **NIR illuminator** — near-IR light so the EO camera can see and freeze
+  motion in low light. Continuous-on, not pulsed.
 - **Radar** — range/velocity detection, all-weather, day/night; the **EO-blind fallback**: must acquire/track/guide **standalone** when EO is hazed or dead (see [System Overview](docs/SYSTEM_OVERVIEW.md) dataflow).
 - **Detection** — find candidate targets in each sensor stream.
 - **Fusion** — combine EO + thermal + radar into one target picture.
@@ -38,12 +38,13 @@ Each is a module folder below. Modules not yet started are listed in the
 ```
 docs/          system-level docs (overview, engineering guidelines)
 jetson/        compute-platform bring-up: flash JetPack, base config, fan
-eo/            EO camera module: driver, tools, streaming, EO docs
+eo/            EO camera module: driver, pipeline, streaming, EO docs
 illuminator/   NIR illuminator module: controller + docs
 radar/         radar module: AWR2944P C daemon + PPI previewer + docs
 detection/     EO object detector: TensorRT model + CPU motion worker (C/CUDA/C++)
 recorder/      record & replay module: NVMe session recorder + library + replay
-app/           the main process + operator console (field GUI)
+app/           the main process + operator console (field GUI) + launcher
+datasets/      offline training-set builder (bench only, never runs on the seeker)
 ```
 
 ## Status (high level)
@@ -57,6 +58,7 @@ app/           the main process + operator console (field GUI)
 | Radar | ✅ **V2 shipped 2026-07-11** — 77 GHz mmWave (AWR2944P) detecting moving vehicles, drones, and people by range and Doppler. Crash-proof firmware (survives point-flood overload), temporal tracker with ghost-killing consistency guard, **26 Hz / 0 drops**, feeding the console. Measured: human ~300 m night / ~200 m day, vehicles radially to ~424 m. Firmware `agv3` (2026-07-17) fixes the comb-gate threshold scale and adds an observe mode — the junk filter now measures every detection and is awaiting its calibration before being armed. **Open:** the chip's 450-point-per-frame budget runs ~420 full, half of it spent on threshold-level junk past 200 m, which caps far-range performance; crossing traffic Doppler-blind (Phase 3); angle accuracy for EO-blind standalone guidance — see [`radar/`](radar/README.md) + [`radar/docs/ROADMAP.md`](radar/docs/ROADMAP.md) |
 | Record & replay (`recorder/`) | 🟡 records the whole mission to the NVMe — full-resolution camera, radar, **detections**, and all metadata — without slowing the live system or dropping frames, and replays it looking just like the live screen: **full-resolution native video (denoised, smoothly seekable), radar scope + detection boxes in sync**, pause/step/scrub. Recordings can be browsed, tagged, **converted to a shareable HD movie**, and **offloaded to a laptop**. **On-device with the real camera + radar: EO/radar/detection recording, native replay, HD-convert, and offload all verified.** Next: console-side polish — native `<video>` playback + the live-rate radar/detection replay streams — see [`recorder/`](recorder/README.md) |
 | Detection (`detection/`) | 🟡 EO object detector live on :8094 — TensorRT model at native 1440×1088 + a permissive CPU **motion safety-net** (native res, on the model's cadence; two selectable references — background-subtraction or frame-difference), merged to one box per target, feeding the console. Running a **stock COCO placeholder** (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending (data/training agent). Motion is **off by default** until ego-motion is wired (static/holding mount only). Stateless by design — temporal confirm/track **and mover-clutter rejection** are the EO tracker's job — see [`detection/`](detection/README.md) |
+| Training data (`datasets/`) | 🟡 offline bench pipeline turning FPV-strike footage into a COCO vehicle/human training set for the EO detector. Architecture, schemas and the non-GPU spine are unit-tested against a synthetic fixture; **every stage that touches real data (catalog fetch, download, probe, frame extraction, GPU auto-labelling, rescan, review app) has never been run** — see [`datasets/`](datasets/README.md) |
 | Fusion, tracking, gimbal, guidance | ⬜ not started |
 
 A per-item production readiness review lives in the System Overview.
