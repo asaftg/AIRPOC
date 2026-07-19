@@ -61,4 +61,4 @@ datasets/      offline training-set builder (bench only, never runs on the seeke
 | Training data (`datasets/`) | 🟡 offline bench pipeline turning FPV-strike footage into a COCO vehicle/human training set for the EO detector. Architecture, schemas and the non-GPU spine are unit-tested against a synthetic fixture; **every stage that touches real data (catalog fetch, download, probe, frame extraction, GPU auto-labelling, rescan, review app) has never been run** — see [`datasets/`](datasets/README.md) |
 | Fusion, tracking, gimbal, guidance | ⬜ not started |
 
-A per-item production readiness review lives in the System Overview.
+Per-module maturity — what each module is proven to do, and on what evidence — is in the [System Overview](docs/SYSTEM_OVERVIEW.md#maturity).
