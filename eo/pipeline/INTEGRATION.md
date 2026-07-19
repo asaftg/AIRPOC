@@ -50,9 +50,19 @@ Build: `make libeo.a`, then link `libeo.a -ljpeg -lpthread -lm` (libeo itself ne
 `/dev/video0` allows exactly **one** opener. So exactly one process may `eo_start()`
 at a time:
 
-- **Production:** the GUI links `libeo` and owns the camera. The EO preview
-  (`eo_pipeline`) is a **bench tool** — run it only when the GUI is stopped.
-- The two never run at once. `eo_start()` returns `<0` if the camera is already held.
+- **Production: `eo_pipeline`.** It owns the camera and serves the module's HTTP
+  surface on `:8091` (systemd `eo-pipeline.service`, `Restart=always`). The
+  operator console (`app/`) does **not** link `libeo` — it is a thin HTTP proxy
+  that consumes `:8091` (`app/Makefile` links its own five objects, no libeo and
+  no libjpeg).
+- **`libeo.a` is the static library `eo_pipeline` is built from** (capture, sensor,
+  AE, ISP) and has **no consumer today**. Note what it does *not* contain: the
+  `/ctl`, `/stats` and `/stream` surface documented below, and the tone-map,
+  median, denoiser and illuminator controls, all live in the `eo_pipeline` binary
+  (`Makefile`: `LIBEO_SRC` vs `APP_SRC`). Linking `libeo.a` gets you frames and AE
+  only — not the control surface this document describes.
+- Only one process may hold the camera. `eo_start()` returns `<0` if it is already
+  held, so stop the service before running a second instance by hand.
 
 ## What's behind the surface (may change any time — do not depend on it)
 
