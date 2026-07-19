@@ -15,6 +15,15 @@ super-resolution (Nyquist-sampled sensor, nothing aliased to recover), pixel bin
 
 ## `tdn.c` — motion-adaptive temporal IIR (display-only)
 
+> **Not reachable at default settings.** The night gate opens only at applied gain
+> ≥ 200 (20 dB, `TDN_GATE_GAIN_ON`), and the AE's gain cap defaults to 120
+> (`EO_GAIN_CAP`), hard-clamped in `ae.c`. So with AE on and defaults untouched the
+> gate never opens, `dn_active` stays 0, and **none of the benefit described below
+> is what the operator is seeing.** It engages only if `gaincap` is raised above 200
+> (`/ctl?gaincap=`) or the camera is driven manually at gain ≥ 200. Whether the cap
+> or the gate is the number that should move is an open decision — the two were set
+> independently and have never met.
+
 Raw-domain (pre-tonemap, the noise is below the 8-bit floor), Q10.5 accumulator,
 ~3.3× static-scene noise cut, banding averages out. Key design points and why:
 
@@ -26,7 +35,7 @@ Raw-domain (pre-tonemap, the noise is below the 8-bit floor), Q10.5 accumulator,
 | Error-feedback accumulation | Q10.5 truncation dead-band = stuck sub-LSB bias × 6 stretch = fixed pattern |
 | Row offset vs the **accumulator reference**, static pixels only, ±3 LSB clamp; masked-out rows get **zero** correction | scene-referenced destripe eats horizontal structure (the reverted daytime-ghosting bug); neighbor-row interpolation injects uncorrelated noise |
 | Global-motion guard (>60 % blocks moving ⇒ pass-through + reseed) | slew/unmodeled events; static-mount instrument, **interim** until a warp-accumulation design for the tracking gimbal |
-| Night gate on **applied gain**, hysteresis | day = zero cost, byte-identical display path |
+| Night gate on **applied gain**, hysteresis (on ≥ 200, off ≤ 160, 8 consecutive frames) | day = zero cost, byte-identical display path. See the note above: the AE's default cap of 120 keeps the gate shut |
 
 **Display-only by red-team verdict:** temporal denoise attenuates the faint slow
 movers detection exists for (a 6 px slow drone keeps ~30 % contrast). The detector
