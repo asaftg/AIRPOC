@@ -275,4 +275,6 @@ reserved `null`: `batt`, `alt`, `brg`, `rng`; plus **`eo`** — the EO feed's `/
   `/dev/shm/airpoc.*` tap is gone → recordings come out empty. The launcher's `/status`
   reports this honestly (`eo_rec`/`radar_rec`); press START to re-attach.
 
-> Pitfall: `LIGHT` is live-fire (invisible 850 nm, eye hazard). The ON path confirms.
+> Pitfall: `LIGHT` is live-fire (invisible 850 nm, eye hazard). There is **no**
+> confirmation step — one click emits immediately, and the device resets to MAX
+> power every time it is switched on. Treat the aperture as live.
