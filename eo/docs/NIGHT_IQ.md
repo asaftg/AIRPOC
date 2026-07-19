@@ -15,14 +15,21 @@ super-resolution (Nyquist-sampled sensor, nothing aliased to recover), pixel bin
 
 ## `tdn.c` — motion-adaptive temporal IIR (display-only)
 
-> **Not reachable at default settings.** The night gate opens only at applied gain
-> ≥ 200 (20 dB, `TDN_GATE_GAIN_ON`), and the AE's gain cap defaults to 120
-> (`EO_GAIN_CAP`), hard-clamped in `ae.c`. So with AE on and defaults untouched the
-> gate never opens, `dn_active` stays 0, and **none of the benefit described below
-> is what the operator is seeing.** It engages only if `gaincap` is raised above 200
-> (`/ctl?gaincap=`) or the camera is driven manually at gain ≥ 200. Whether the cap
-> or the gate is the number that should move is an open decision — the two were set
-> independently and have never met.
+> **Not in service.** Two independent reasons:
+>
+> 1. **The operator console removed it.** The console has no denoise control and
+>    sends `denoise=0` on load (`app/web/app.js`). It was taken out of the GUI
+>    because the result was judged to hurt the picture (decision: Asaf,
+>    2026-07-18). The EO preview page still carries a `denoise` button.
+> 2. **The gate cannot open at defaults anyway.** It engages at applied gain
+>    ≥ 200 (`TDN_GATE_GAIN_ON`) while the AE gain cap defaults to 120
+>    (`EO_GAIN_CAP`, hard-clamped in `ae.c`), so with AE on `dn_active` stays 0.
+>    Reaching it needs `gaincap` raised above 200 or manual gain ≥ 200.
+>
+> The knob still defaults on inside the EO module (`tdn.c`, `g_on = 1`) and the
+> code is still in the build — deletion was ordered, then reversed. The design
+> notes below are the record of what was built and why. **They do not describe
+> what the operator is seeing.**
 
 Raw-domain (pre-tonemap, the noise is below the 8-bit floor), Q10.5 accumulator,
 ~3.3× static-scene noise cut, banding averages out. Key design points and why:
