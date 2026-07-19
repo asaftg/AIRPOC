@@ -40,7 +40,9 @@ CUDA/VPI). No Python on the device datapath.
 
 **Python is allowed for tools only** — offline focus/preview/bench/diagnostic
 utilities an engineer runs by hand, clearly labelled and kept out of the shipping
-pipeline (e.g. `eo/tools/`).
+pipeline (e.g. `radar/tools/`, `datasets/`). The former `eo/tools/` was retired
+on 2026-07-04 once the C pipeline superseded it — focus assist now lives in
+`eo_pipeline`.
 
 ## 4. No loose patch files
 
@@ -61,9 +63,14 @@ say so explicitly and link the path to the real fix.
 ```
 docs/            system-level docs: SYSTEM_OVERVIEW, this file
 jetson/          compute-platform bring-up (flash, base config, fan) — not a module
-eo/              electro-optical module: camera driver, tools, streaming, EO docs
+eo/              electro-optical module: camera driver, pipeline, streaming, docs
 illuminator/     NIR illuminator module: controller src + docs
-radar/ …         future modules (detection, fusion, tracking, gimbal, guidance)
+radar/           radar module: AWR2944P daemon, firmware trees, previewer, docs
+detection/       EO object detector: TensorRT model + CPU motion worker
+recorder/        record & replay: NVMe session recorder + library + replay
+app/             main process + operator console (field GUI) + launcher
+datasets/        offline training-set builder (bench only, not on the seeker)
+…                future modules: fusion, tracking, gimbal, guidance
 ```
 
 Each module folder owns its code **and** its docs (a `README.md` chapter, plus a
