@@ -17,7 +17,7 @@ points the head at the target.
   Thermal (optional)   ─┼─► detection ─┐
   Radar ───────────────┴──────────────┼─► fusion ─► tracking ─► gimbal pointing ─► guidance
     └── EO-blind fallback: radar acquires → tracks → guides STANDALONE ──────────┘
-  NIR illuminator ──(lights the EO scene, pulsed/synced)                 (effector)
+  NIR illuminator ──(lights the EO scene, continuous)                    (effector)
 ```
 
 Sensors produce detections; fusion merges them into one target picture; tracking
@@ -59,6 +59,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Firmware `agv3` (2026-07-17): comb gate fixed and observing, awaiting calibration before arming. Open: 450-pt/frame chip budget ~420 full (half spent on threshold-level junk past 200 m) caps far range, tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + CPU motion safety-net, one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Stateless — temporal/tracking is the EO tracker's | [`detection/`](../detection/README.md) |
+| Training data (`datasets/`) | — | 🟡 offline bench pipeline (Python; never runs on the seeker): FPV-strike footage → COCO vehicle/human set for the EO detector. Architecture + non-GPU spine unit-tested on a synthetic fixture; **the real-data stages have never been run** | [`datasets/`](../datasets/README.md) |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
 | Gimbal | — | ⬜ not started | — |
@@ -69,17 +70,21 @@ Waveshare IMX296-130 (Sony IMX296, mono global shutter) on the Jetson via a cust
 `nv_imx296` driver. Streams **Y10 mono 1440×1088 @ 60 fps** with working
 exposure/gain. The shipping datapath is C (`eo/pipeline/`): capture → flicker-free
 AE → ISP → detector hook, plus the **preview** (browser: stats overlay,
-digital zoom, focus assist, illuminator controls). Python tools remain for bench
-use. Global shutter (no rolling-shutter skew) suits fast-moving targets. Detail:
+digital zoom, focus assist, illuminator controls). The earlier Python bench tools
+(`eo/tools/`) were retired once the C pipeline superseded them. Global shutter
+(no rolling-shutter skew) suits fast-moving targets. Detail:
 [`eo/README.md`](../eo/README.md).
 
-### NIR illuminator (controls done; sync pending)
+### NIR illuminator (controls done; continuous-on)
 SG-IR850-8M 850 nm illuminator with motor zoom over TTL UART; C controller +
 `sgctl` CLI, **HW-verified**. On/off, drive power, and beam-FOV controls are **live
 in the EO preview** (`eo/pipeline/`, via the illuminator shim) and in the operator
 console. Purpose: light the EO scene so exposure can be short enough to freeze a
-moving target. The open item is **syncing the pulse to the camera exposure window**
-(see [`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md)). Detail:
+moving target. The fitted device is **continuous-on — its protocol has no strobe
+or trigger command** — so pulsing in step with the exposure needs a custom
+illuminator and is not planned for this unit.
+[`NIR_SYNC.md`](../illuminator/docs/NIR_SYNC.md) describes that future path; note
+it covers a separate NIR sensor board, not this flashlight. Detail:
 [`illuminator/`](../illuminator/README.md).
 
 ### Operator console (`app/`) — main process, a proxy (running on the Jetson)
