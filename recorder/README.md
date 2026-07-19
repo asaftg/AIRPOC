@@ -71,9 +71,14 @@ Full rate — Y10 1440×1088@60 packed 10-bit + display JPEGs + radar + events:
 the display-JPEG channel is always on regardless.
 
 > Pitfall: producers never wait for the recorder — rings overwrite oldest. If
-> the NVMe stalls >0.8 s, records are dropped **and counted** (`drops_*` in
-> `/stats`, `GAP_BEFORE` flags on disk). Silence in those counters means the
-> recording is complete.
+> the NVMe stalls, records are dropped **and counted** (`drops_ring` /
+> `drops_queue` in `/stats`, `GAP_BEFORE` flags on disk).
+>
+> **A clean `drops_*` does NOT mean the recording is complete.** A failed or
+> short write increments `write_errors`; a wrong-sized record increments
+> `bad_size`. Neither touches `drops_*`, and `records`/`bytes` keep climbing
+> either way. The complete-recording test is all four at zero:
+> `drops_ring + drops_queue + write_errors + bad_size == 0`.
 
 > Pitfall: sessions land as `pending` on REC-stop and are auto-purged after
 > 24 h unless saved. Saved sessions are never auto-deleted; `purge_native=`
