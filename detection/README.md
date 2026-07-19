@@ -28,10 +28,16 @@ Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRAT
 ## Status — running on the Jetson, verified
 - **Model:** stock COCO-pretrained **RTMDet-tiny** (Apache-2.0), exported raw-head
   (decode done in our C++, not in the engine). Verified correct on a known image.
-  This is a **placeholder** proving the pipeline; the trained mono model
-  (separate data/training agent) drops in with no code change — same format, same
-  endpoint. `human`/`vehicle` today (`vehicle` = car/bus/truck); `drone` comes
-  with the trained model.
+  This is a **placeholder** proving the pipeline. `human`/`vehicle` today
+  (`vehicle` = car/bus/truck); `drone` comes with the trained model.
+- **A trained 3-class model does NOT yet drop in unchanged.** `infer_open()`
+  identifies the output tensors by their last dimension (`== 4` -> boxes,
+  `> 4` -> scores; `src/infer.cpp`), so a 3-class head (`cls [1,N,3]`) matches
+  neither and the engine is rejected with `expected reg[.,4]+cls[.,C] outputs`.
+  `src/main.c` then logs one line and **continues model-less** (`model=none`,
+  no detections) while the daemon otherwise looks normal. The class remap in
+  `src/coco.h` is COCO-index based and is itself a documented placeholder.
+  Both need a code change before the trained model can be handed over.
 - **Motion:** worker with **two reference methods** (`mot_method`), validated offline
   across night/day recordings — both kept so the EO-tracker phase picks the winner:
   - `0` **background-subtraction** — median of the last `mot_window_s`. Best on a stable
