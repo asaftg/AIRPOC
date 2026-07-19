@@ -26,18 +26,19 @@
 #define EO_FRAME_US      (EO_VMAX * EO_LINE_US)           /* 16667 us        */
 #define EO_SHS1_MIN      8
 #define EO_MIN_EXP_LINES 5             /* ~0.074 ms integration floor        */
-/* VMAX (frame length) is now a control axis, not a constant: a longer frame =
- * lower fps = room for a longer exposure. The AE lengthens the frame (drops fps)
- * to gather light with TIME before it ever reaches for gain — the "expose, don't
- * gain" policy the seeker IMX568 bench uses. */
+/* VMAX (frame length) sets the frame rate and therefore the exposure ceiling.
+ * It is OPERATOR-SET ONLY: the AE reads it as a bound and never writes it.
+ * Within that frame the AE spends exposure first, then gain up to gaincap, and
+ * accepts a dim frame rather than dropping fps. Do NOT make the AE lengthen the
+ * frame to gather light — that behaviour is deliberately banned. */
 #define EO_VMAX_MIN      EO_VMAX       /* 1125 = 60 fps (shortest frame)     */
 #define EO_VMAX_MAX      5625          /* 12 fps (longest frame; ~83 ms exp) */
 #define EO_MAX_EXP_LINES (EO_VMAX_MIN - EO_SHS1_MIN)      /* 1117 (~16.5ms@60)*/
 #define EO_GAIN_MIN      0
 #define EO_GAIN_MAX      480           /* 0.1 dB/step (~48 dB max, = grain)  */
-#define EO_GAIN_CAP      120           /* AE gain ceiling ~12 dB: lengthen the
-                                        * frame first, accept dim, don't gain
-                                        * into 48 dB of noise.               */
+#define EO_GAIN_CAP      120           /* AE gain ceiling ~12 dB: spend the
+                                        * exposure the operator's fps allows,
+                                        * then accept dim — never drop fps.  */
 #define EO_FPS_OF_VMAX(v)  (67500.0 / (double)(v))        /* 74.25e6/1100/VMAX*/
 #define EO_VMAX_OF_FPS(f)  ((int)(67500.0 / (double)(f) + 0.5))
 
@@ -80,8 +81,9 @@ typedef struct {
 } AE;
 
 void ae_init(AE *ae);
-/* Feed the metered 10-bit mean; updates exp_lines/vmax/gain (expose-then-lengthen-
- * frame-then-gain, gain capped at gaincap so it accepts a dim frame over noise). */
+/* Feed the metered 10-bit mean; updates exp_lines and gain ONLY — vmax is
+ * operator-set and is never written here (expose-then-gain, gain capped at
+ * gaincap so it accepts a dim frame over noise). */
 void ae_update(AE *ae, double mean10, int gaincap);
 
 /* ---- V4L2 mmap capture ---- */
