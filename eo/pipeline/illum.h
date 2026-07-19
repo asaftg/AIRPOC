@@ -1,7 +1,7 @@
 /* Thread-safe shim over the SG-IR850 IR illuminator controller for the monitor
  * GUI. The illuminator is OPTIONAL: if not attached, illum_start() logs and every
  * setter no-ops so the EO pipeline runs normally. See
- * illuminator/docs/GUI_INTEGRATION.md. */
+ * illuminator/docs/PREVIEW_INTEGRATION.md. */
 #ifndef AIRPOC_EO_ILLUM_H
 #define AIRPOC_EO_ILLUM_H
 
