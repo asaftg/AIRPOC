@@ -197,7 +197,30 @@ current state, and a link to its module folder. (Tracking target *selection* liv
 `app/` today; the *tracker/gimbal pointing* is the future module — and it owns the
 temporal layer over the detection feed: confirm, smooth, coast, detect-slow/track-fast.)
 
-## Production readiness
+## Maturity
 
-Tracked here as modules mature (what is field-ready vs prototype vs not-started).
-Populate during the production-status review; keep it honest.
+What each module has been **proven** to do — by evidence, not judgement. Three
+states, each one a checkable claim:
+
+- **Field-verified** — run on the real hardware, outdoors, against real targets,
+  with a date and a recording to point at.
+- **Bench-verified** — runs on the real hardware on the bench.
+- **Unrun** — the code exists (and may be unit-tested) but has never been
+  executed end to end on real inputs.
+
+A row sits at the highest state its **recorded evidence** supports. Several rows
+below are probably field-verified in practice and are marked bench-verified only
+because no date or session id is written down anywhere. Upgrading a row means
+adding that evidence — not relabelling it.
+
+| Module | State | Evidence on record | Biggest known gap |
+|---|---|---|---|
+| Jetson platform | Bench-verified | JetPack 6.2.2 / L4T r36.4.4 on P3767-0005, MAXN_SUPER, fan pinned | `install_clocks.sh` / `install_fan.sh` install from `/tmp`, so the documented bring-up does not run on a fresh box; NVMe and WiFi-AP provisioning are missing from the bring-up sequence |
+| EO camera | Bench-verified | Y10 mono 1440×1088 @ 60 fps on-device with working exposure/gain | the night denoiser cannot engage at defaults — its gate needs applied gain ≥ 200 while the AE cap is 120; no measured low-light image-quality figures |
+| NIR illuminator | Bench-verified | on/off, power, beam FOV and status confirmed against the real device 2026-07-01 | no udev rule, so commands go to the first USB-serial adapter to enumerate; commands are fire-and-forget with no state readback |
+| Operator console (`app/`) | Bench-verified | runs on the Jetson, relays EO + radar + detector + recorder, record/replay exercised on-device | the deploy procedure is written down nowhere in the repo, including the `web_assets.h` regeneration trap |
+| Radar | Field-verified | V2 field-verified 2026-07-11; human ~300 m night / ~200 m day, vehicles radial ~424 m ([`radar/`](../radar/README.md)) | which firmware image is on the chip is recorded inconsistently across the radar docs; angle accuracy for EO-blind standalone guidance |
+| Record & replay | Bench-verified | 30-min full-rate soak at ~125 MB/s with 0 drops; kill-9 recovery to CRC-valid prefixes | that soak has no session id, date or log to point at, and no reproduction procedure |
+| Detection | Bench-verified | on-device latency FP16 ~20.8 ms / INT8 ~14.7 ms; verified correct on one known image | **no accuracy figures at all** — no mAP, no false-positive rate, no DRI ranges; and a trained 3-class model does not currently load |
+| Training data (`datasets/`) | **Unrun** | the non-GPU spine unit-tested against a synthetic fixture | every stage that touches real data has never executed |
+| Fusion / tracking / gimbal / guidance | Not started | — | — |
