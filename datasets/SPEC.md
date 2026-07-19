@@ -120,10 +120,15 @@ Frozen parameters (defaults; every deviation is recorded in the manifest):
      with IoU ≥ **0.5**. The cross-check result is stored on the annotation.
   3. Otherwise it is a **review candidate** with `reasons` ⊆ {`low_conf`,
      `models_disagree`, `small_box_low_conf`, `crowded`, `terminal_no_labels`}.
-- **Review queue is capped** (default budget **200** boxes, `--budget`), ranked
+- **Review queue is capped** (default budget **200 frames**, `--budget`), ranked
   by value: 10–40 px boxes first, terminal mode over baseline, larger model
   disagreement first. Overflow is **dropped and ledgered**
   (`REVIEW_OVERFLOW_DROP`) — never silently, never handed to the human.
+  > The budget counts **queue items, and one item is one frame** carrying a list
+  > of boxes (`ds_merge.py` appends per image; `review.py cap_queue` slices that
+  > list). The number of boxes a reviewer actually sees is therefore **unbounded**
+  > — a crowded frame can carry 8+ (`CROWDED_BOXES` is a tag threshold, not a
+  > limit). Budget 200 does not mean 200 boxes.
 - Human decisions from the review app land in `review/corrections.json`;
   `ds_pack` folds them back: `reviewed_ok` / `reviewed_edited` (with the fixed
   box/label, `label_source: human`, `score: 1.0`) / `rejected` (kept only in the
