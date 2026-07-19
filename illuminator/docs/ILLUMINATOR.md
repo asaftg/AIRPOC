@@ -78,10 +78,15 @@ The USB-TTL adapter enumerates as `/dev/ttyUSB*` (order not guaranteed). Pin it
 by the adapter's VID:PID so `sgctl` can default to `/dev/sg-ir850`:
 
 ```
-# /etc/udev/rules.d/72-sg-ir850.rules  (fill in idVendor/idProduct from
-# `udevadm info -a -n /dev/ttyUSBx`)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="sg-ir850"
+# /etc/udev/rules.d/72-sg-ir850.rules
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="sg-ir850"
 ```
+
+> **Not installed yet.** This rule is not in the repo and is not applied on the
+> Jetson. The shipping EO pipeline defaults to `/dev/ttyUSB0` (`eo/pipeline/main.c`,
+> `eo-pipeline.service`) — the first USB-serial adapter to enumerate. Until the
+> rule ships, confirm which device you are talking to before firing: a command
+> sent to the wrong adapter can still "succeed", including an OFF.
 
 ## Bench bring-up order (laser-safe)
 
