@@ -515,6 +515,7 @@
    * box the operator actually SAW rather than re-deriving the projection (which drifts out of
    * sync the moment zoom/letterbox handling changes on one side only). */
   var eoBoxes = [];
+  var lockLive = false;   /* is the locked target actually on THIS frame? gates hide-the-rest */
   var showRawDet = false;          /* raw detector boxes: DEV overlay, off by default */
   function eoBoxHit(xf, yf) {
     var best = null, bestA = 1e9;
@@ -573,6 +574,14 @@
       ctx.font = (11 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "center";
       haloText(ctx, "EO TRACK · NOT CONNECTED", cx, 22 * dpr, css("--err"), dpr);
       ctx.restore();
+    } else if (!replaying && engagedKey && !lockLive) {
+      /* The lock is still held — the tracker keeps it — but the target isn't on this frame.
+       * Say so, and (see below) the rest of the scene stays visible so the operator isn't blind
+       * while it's out. */
+      ctx.save();
+      ctx.font = (11 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "center";
+      haloText(ctx, "LOCK HELD · TARGET NOT SEEN", cx, 22 * dpr, css("--amber"), dpr);
+      ctx.restore();
     }
     var es = lastStats.eo || {};
     /* hfov/vfov describe the ZOOMED (cropped) frame that was streamed. A NATIVE replay shows the
@@ -590,7 +599,7 @@
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
       targets(lastRadar).forEach(function (t) {
         /* locked → the video shows ONLY the held target, radar marks included */
-        if (engagedKey && ("rad:" + t.tid) !== engagedKey) return;
+        if (engagedKey && lockLive && ("rad:" + t.tid) !== engagedKey) return;
         var az = t.az + radarOv.az, el = t.el + radarOv.el;
         var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
         if (Math.abs(fx) > 1 || Math.abs(fy) > 1) return;      /* off-frame → not drawn */
@@ -712,7 +721,7 @@
       eoBoxes = [];
       trkTracks.forEach(function (t) {
         var eng = (t.key === engagedKey);
-        if (engagedKey && !eng) return;                  /* locked → show only the locked target */
+        if (engagedKey && lockLive && !eng) return;      /* locked AND drawable → show only it */
         var col = t.cls === "human" ? "#40c4ff" : amber;
         var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
         var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
@@ -1150,16 +1159,17 @@
       else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0 &&
                Date.now() - trkEngageSentAt > 1000) engagedKey = null;
     }
-    /* LOCK IS ONLY A LABEL on a track that exists right now — it is never a target in its own
-     * right. If the locked track is no longer on the wire, release the lock instead of holding
-     * a key that matches nothing: otherwise the console keeps a phantom "locked" mark while the
-     * real object carries on under a new id (and, since a lock hides every other target, the
-     * operator would be left staring at a stale box). */
-    if (engagedKey && engagedKey.indexOf("eo:") === 0 && Date.now() - trkEngageSentAt > 1000) {
-      var live = false;
-      (lastTrk && lastTrk.tracks || []).forEach(function (t) { if (("eo:" + t.tid) === engagedKey) live = true; });
-      if (!live) engage(null);
-    }
+    /* A LOCK IS THE OPERATOR'S, and only the operator (or the tracker itself) ends it. The
+     * console does NOT drop it just because the track is missing from this frame: the tracker
+     * keeps `engaged` pinned at the id even while the track is absent, so releasing on absence
+     * made the two fight — we cleared, the next frame re-adopted from the wire, and the lock
+     * flickered. Authority is the wire's `engaged`; we only mirror it.
+     * We do track whether the locked target is actually ON this frame, because that decides
+     * whether it is safe to hide everything else (see drawEO) — hiding the whole scene around a
+     * lock we cannot draw would leave the operator blind. */
+    lockLive = false;
+    if (engagedKey) (lastTrk && lastTrk.tracks || []).forEach(function (t) { if (("eo:" + t.tid) === engagedKey) lockLive = true; });
+    if (engagedKey && engagedKey.indexOf("rad:") === 0) lockLive = true;   /* radar locks are judged in drawEO */
     renderTargetList();
     draw(true, false);
   }
