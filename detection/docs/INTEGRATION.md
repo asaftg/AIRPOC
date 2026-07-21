@@ -108,6 +108,11 @@ replies `ok`.
 `tbd_frames` and `tbd_lo`. Everything else is bench tuning reached with `curl` and must
 not be surfaced in the operator GUI.
 
+> Note for consumers: `/ctl` replies `ok` (200) to **any** request — unknown parameters are
+> silently ignored. A 200 therefore proves only that the request arrived, never that this
+> build honours the setting. To test whether a knob exists, look for it in `/stats` under
+> `knobs.*` (the operator console gates its controls on `knobs.temporal` for this reason).
+
 | knob | range | meaning |
 |---|---|---|
 | `conf` | 0.05–0.95 | **report immediately above this**: a detection at or above this confidence is reported on its own, unchanged, with no added delay |

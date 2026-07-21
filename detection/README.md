@@ -92,6 +92,14 @@ The algorithm and its maths live in code comments in
 > while barely thinning the vehicles. Re-measure this table when the trained model lands —
 > it is a property of the model, not of the algorithm.
 
+> **Pitfall: swapping the model invalidates a warning in the operator console.** The console
+> turns its FAINT FLOOR control red above **0.25**, and that number comes from the table
+> above — i.e. from the *placeholder* model. **Whoever lands the trained model must
+> re-measure the table and tell the console owner where the new threshold sits**, otherwise
+> the GUI keeps warning at a level that no longer means anything. The controls themselves
+> need no console change: the console hides them until `/stats` reports `knobs.temporal`, so
+> they appear on their own when a build that supports them starts running.
+
 > ### 🧊 FROZEN — the motion worker
 > A separate CPU path that looked for anything *moving* the model had missed. It is **kept
 > but switched off, and is not being developed.** Across four recordings it did not do its
