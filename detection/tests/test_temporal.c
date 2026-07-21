@@ -11,7 +11,7 @@
  *   4. a faint target that has not earned it yet is not reported
  *   5. flicker never gets reported however long it goes on
  *   6. nothing is reported on a frame with no observation (no guessed positions)
- *   7. a reported faint target never claims less confidence than the confident tier
+ *   7. a promoted box reports the model's own confidence, never an invented one
  *   8. straight-line movement grows `disp`; movement in place does not
  *   9. oversized inputs and a full track table are handled without corruption
  */
@@ -43,7 +43,7 @@ static TbdIn mk(float cx, float cy, float conf)
     return d;
 }
 
-/* 1 + 7: confident detections pass straight through, faint ones never undercut them */
+/* 1: confident detections pass straight through untouched */
 static void test_confident_passthrough(void)
 {
     printf("confident detection is reported immediately, unchanged\n");
@@ -94,9 +94,9 @@ static void test_faint_needs_exact_frames(void)
     int n = tbd_process(c, &in, 1, &p, out, 8);
     CHECK(n == 1, "frame %d: the target should now be reported, got %d", p.frames, n);
     CHECK(out[0].tbd == 1, "a promoted box must be flagged as collected");
-    CHECK(out[0].conf >= (float)p.hi - 1e-6f,
-          "a reported box must never sit below the confident tier (%.3f < %.3f)",
-          out[0].conf, p.hi);
+    CHECK(fabsf(out[0].conf - (float)p.lo) < 1e-6f,
+          "a promoted box must report the MODEL's confidence (%.3f), not a synthesised "
+          "one (got %.3f)", p.lo, out[0].conf);
     CHECK(out[0].hits == p.frames, "hits should equal the frames seen, got %d", out[0].hits);
     tbd_free(c);
 }

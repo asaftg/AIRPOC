@@ -36,6 +36,19 @@ the evidence has been building, how many frames it was actually seen in, and how
 travelled in a straight line since first seen. That last one separates something moving
 across the scene from something jiggling in place, like a wind-blown branch.
 
+The confidence on a box is **always the model's own score for that frame** — on a collected
+box exactly as much as on a confident one. It deliberately does not reflect how much evidence
+has piled up, so a collected box honestly reports a low number when that is what the model
+thinks. How good the evidence is, is a different question and is answered separately by
+`hits` and `age`.
+
+> **Pitfall — do not blend the two into one percentage.** An earlier version scaled the
+> collected evidence into the confidence figure so everything shared one scale. The evidence
+> score saturates within a few frames, so *every* collected box came out at ~99% however
+> faint the model actually found it — which made a persistent false call on a bush look more
+> certain than a clearly-seen vehicle. A number that is the same for every box carries no
+> information and actively misleads. Two truthful numbers beat one invented one.
+
 The algorithm and its maths live in code comments in
 [`src/temporal.h`](src/temporal.h) / [`src/temporal.c`](src/temporal.c).
 

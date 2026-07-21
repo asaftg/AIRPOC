@@ -67,6 +67,8 @@ Additive and optional — a consumer that ignores them behaves exactly as before
 | `disp` | how far it has moved in a **straight line**, in pixels, since first seen. Something crossing the scene grows this steadily; something jiggling in place (a wind-blown branch) keeps it near zero however long it lives. **A hint, not a measurement** — see the caveat below. |
 | `tbd` | present and `1` **only** when the box exists because of collected evidence, i.e. the model alone scored it *below* `conf`. Absent means it cleared `conf` on its own. |
 
+`conf` is **always the model's own score for that frame**, on a promoted box exactly as much as on a confident one — it is never derived from how much evidence has accumulated. So a promoted box legitimately reports a low number (that *is* what the model thinks); how strong the evidence is, is reported separately and honestly as `hits` / `age`. Do not filter promoted boxes on `conf` alone — that just undoes the collection; use `tbd` and `hits`.
+
 **Guarantee: one box per target per tick.** Confident and collected detections leave through
 a single path, so a target is never reported twice. Boxes are always what the model actually
 produced on that tick — the detector never reports a guessed or coasted position.

@@ -58,8 +58,6 @@ static double logit_c(double p)
     return log(p / (1.0 - p));
 }
 
-static double clamp01(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
-
 static void trk_start(Trk *t, const TbdIn *d, double lo_ref)
 {
     t->used = 1;
@@ -189,22 +187,23 @@ int tbd_process(TbdCtx *c, const TbdIn *in, int n_in, const TbdParams *p,
         float ddx = t->cx - t->x0, ddy = t->cy - t->y0;
         o->net_disp = sqrtf(ddx * ddx + ddy * ddy);
 
-        if (strong) {
-            /* Unchanged from a non-TBD build: raw per-frame confidence, no delay. */
-            o->conf = t->last_conf;
-            o->tbd  = 0;
-        } else {
-            /* Promoted purely by accumulated evidence. Map onto [hi, 0.99] so it
-             * enters at exactly the strong tier's floor and rises with further
-             * evidence — downstream then sees one continuous confidence scale.
-             * Scaled over the whole remaining score range, not a multiple of
-             * `confirm`, so a long-lived weak track saturates slowly and never
-             * claims certainty it hasn't earned. */
-            double span = DET_TBD_S_MAX - confirm;
-            double frac = span > 0 ? clamp01((t->S - confirm) / span) : 1.0;
-            o->conf = (float)(p->hi + (0.99 - p->hi) * frac);
-            o->tbd  = 1;
-        }
+        /* Confidence is ALWAYS the model's own score for this frame — for promoted
+         * boxes exactly as much as for confident ones. It is deliberately NOT a
+         * function of the accumulated score.
+         *
+         * An earlier version mapped the score onto [hi, 0.99] so that everything
+         * emitted shared one scale. That was wrong: the score saturates within a few
+         * frames, so every promoted box reported ~99% no matter how faint the model
+         * actually found it — which makes a persistent false positive on a bush look
+         * more certain than a real, clearly-seen vehicle. A number that is the same
+         * for every box carries no information and actively misleads.
+         *
+         * How strong the accumulated evidence is, is a SEPARATE question from how
+         * much the model recognises the thing, and it is already reported separately
+         * and honestly as `hits` / `age` (with `tbd` saying the box exists only
+         * because of them). Two truthful numbers beat one invented one. */
+        o->conf = t->last_conf;
+        o->tbd  = strong ? 0 : 1;
     }
     return nout;
 }

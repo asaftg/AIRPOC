@@ -63,7 +63,9 @@ typedef struct {
 /* One emitted detection. */
 typedef struct {
     float       cx, cy, w, h;   /* THIS tick's observed box (never predicted) */
-    float       conf;           /* raw conf if strong; else mapped from the score */
+    float       conf;           /* ALWAYS the model's own score for this frame, for a
+                                 * promoted box as much as a confident one — never a
+                                 * number derived from the accumulated evidence */
     const char *cls;
     int         age;            /* ticks since the track was first seen */
     int         hits;           /* observations accumulated */
