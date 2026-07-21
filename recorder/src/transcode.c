@@ -244,7 +244,13 @@ static int build_mp4(const char *sid, volatile int *pct, unsigned gen)
     char tmp[700], cmd[1240];
     snprintf(tmp, sizeof tmp, "%s/native.mp4.%lu.tmp", dir, (unsigned long)pthread_self());
     snprintf(cmd, sizeof cmd,
-        "nice -n 15 ionice -c3 ffmpeg -hide_banner -loglevel error -y "
+        /* Lowest priority the OS offers: nice 19 (minimum share of CPU whenever
+         * anything else wants it), ionice idle (only touches the NVMe when no one
+         * else is), and -threads 2 of 6 cores. The thread cap matters as much as
+         * the nice level: nice throttles CPU share but NOT memory bandwidth, and
+         * the EO pipeline is memory-bound at 188 MB/s -- a 6-thread x264 encode
+         * would starve it on bandwidth no matter how politely it was scheduled. */
+        "nice -n 19 ionice -c3 ffmpeg -threads 2 -hide_banner -loglevel error -y "
         "-f rawvideo -pix_fmt gray -s %dx%d -r %.3f -i - "
         /* Denoise before encoding: night sensor grain is mostly temporal (differs
          * each frame). H.264 turns it into visible frame-to-frame "shimmer" the raw
@@ -350,6 +356,97 @@ static void *build_thread(void *arg)
     pthread_mutex_unlock(&g_lk);
     if (rc != 0) fprintf(stderr, "transcode: %s failed/cancelled\n", sid);
     return NULL;
+}
+
+/* ---- background catch-up builder ----
+ *
+ * Every saved session should end up with an HD movie. session_save() already asks
+ * for one, but the request was silently dropped: the queue is 1-deep, so saving
+ * several clips in a row built the first, pended the second, and threw the rest
+ * away. 10 of 19 sessions in one day ended up with no movie that way.
+ *
+ * Scanning for what is actually MISSING fixes that class of bug outright -- a lost
+ * request no longer matters, and the existing backlog heals itself. Two hard rules:
+ *
+ *   1. NEVER while recording. This refuses to start one, and session_start()
+ *      cancels an in-flight build, so pressing REC stops the encoder mid-frame.
+ *   2. Lowest priority (see the ffmpeg line above).
+ *
+ * Only MISSING movies are built, never stale-version ones: a stale movie already
+ * plays and is upgraded on open, so rebuilding 26 of them would burn an hour of
+ * CPU to replace files that already work.
+ */
+#define AUTOBUILD_TICK_S   20
+#define AUTOBUILD_MAX_SIDS 512
+#define AUTOBUILD_MAX_SKIP 64
+
+static char g_skip[AUTOBUILD_MAX_SKIP][SID_LEN + 1];   /* builds that failed; don't loop on them */
+static int  g_nskip = 0;
+
+static int autobuild_skipped(const char *sid)
+{
+    for (int i = 0; i < g_nskip; i++) if (!strcmp(g_skip[i], sid)) return 1;
+    return 0;
+}
+
+/* A session wants a movie if it is finished, has native frames to render, and
+ * has no mp4 yet. */
+static int autobuild_wants(const char *sid)
+{
+    char dir[640], p[720], mf[24576], state[32] = "";
+    snprintf(dir, sizeof dir, "%s/%s", g_rec.root, sid);
+    snprintf(p, sizeof p, "%s/native.mp4", dir);
+    if (access(p, F_OK) == 0) return 0;                       /* already has one */
+    snprintf(p, sizeof p, "%s/eo_y10/index.bin", dir);
+    if (access(p, F_OK) != 0) return 0;                       /* nothing to render */
+    if (store_manifest_read(dir, mf, sizeof mf) < 0) return 0;
+    store_manifest_field(mf, "state", state, sizeof state);
+    return !strcmp(state, "saved") || !strcmp(state, "recovered");
+}
+
+static void *autobuild_thread(void *arg)
+{
+    (void)arg;
+    static char sids[AUTOBUILD_MAX_SIDS][SID_LEN + 1];
+    char kicked[SID_LEN + 1] = "";
+
+    for (;;) {
+        sleep(AUTOBUILD_TICK_S);
+        if (chan_recording()) continue;                       /* rule 1 */
+
+        pthread_mutex_lock(&g_lk);
+        int busy = (g_job.state == 1);
+        pthread_mutex_unlock(&g_lk);
+        if (busy) continue;                                   /* let it finish */
+
+        /* The build we kicked last tick is done. If it produced nothing, stop
+         * retrying it forever -- otherwise one unencodable session blocks every
+         * session behind it. */
+        if (kicked[0]) {
+            char p[720];
+            snprintf(p, sizeof p, "%s/%s/native.mp4", g_rec.root, kicked);
+            if (access(p, F_OK) != 0 && g_nskip < AUTOBUILD_MAX_SKIP)
+                snprintf(g_skip[g_nskip++], SID_LEN + 1, "%s", kicked);
+            kicked[0] = 0;
+        }
+
+        int n = store_list_sids(g_rec.root, sids, AUTOBUILD_MAX_SIDS);
+        for (int i = 0; i < n; i++) {
+            if (autobuild_skipped(sids[i]) || !autobuild_wants(sids[i])) continue;
+            if (chan_recording()) break;                       /* rule 1, re-checked */
+            fprintf(stderr, "rec: auto-building HD for %s (%d skipped)\n", sids[i], g_nskip);
+            snprintf(kicked, sizeof kicked, "%s", sids[i]);
+            transcode_request(sids[i]);
+            break;                                             /* one at a time */
+        }
+    }
+    return NULL;
+}
+
+void transcode_autobuild_start(void)
+{
+    pthread_t t;
+    if (pthread_create(&t, NULL, autobuild_thread, NULL) == 0) pthread_detach(t);
 }
 
 void transcode_request(const char *sid)

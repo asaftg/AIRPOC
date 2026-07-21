@@ -48,6 +48,7 @@ int main(int argc, char **argv)
     transcode_cleanup_tmp();          /* clear encode temps orphaned by a crash/kill */
     session_guard_start();
     events_start();
+    transcode_autobuild_start();   /* fills in missing HD movies while idle */
 
     if (httpd_start(g_rec.port) != 0) return 1;
 

@@ -214,6 +214,12 @@ int session_start(char *err, size_t errlen)
         return -1;
     }
 
+    /* Recording owns the machine. Kill any HD encode in flight -- it is a
+     * software H.264 build (no encoder silicon on this SoC) and must never
+     * compete with the live pipeline for CPU or memory bandwidth. The build
+     * aborts on its next frame; the catch-up worker rebuilds it once idle. */
+    transcode_cancel();
+
     time_t s = time(NULL);
     struct tm tm;
     gmtime_r(&s, &tm);
