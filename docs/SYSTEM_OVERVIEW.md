@@ -13,21 +13,22 @@ points the head at the target.
 ## Dataflow
 
 ```
-  EO camera            ─┐
-  Thermal (optional)   ─┼─► detection ─┐
-  Radar ───────────────┴──────────────┼─► fusion ─► tracking ─► gimbal pointing ─► guidance
-    └── EO-blind fallback: radar acquires → tracks → guides STANDALONE ──────────┘
-  NIR illuminator ──(lights the EO scene, continuous)                    (effector)
+  EO camera ──► detection ──► EO tracker ──┐
+  Radar ──────► radar tracker ─────────────┼──► fusion ──► gimbal pointing ──► guidance
+  Thermal (optional, later) ───────────────┘
+    └── EO-blind fallback: radar tracker ──► gimbal ──► guidance, STANDALONE
+  NIR illuminator ──(lights the EO scene, continuous)              (effector)
 ```
 
-Sensors produce detections; fusion merges them into one target picture; tracking
-maintains target state; the gimbal points the head at the track; guidance steers
-an effector. The NIR illuminator is a sensing aid for the EO camera, not a
-detection source.
+Each sensor produces detections and maintains its **own** tracks — the EO tracker
+(`eotrack/`) for the camera, the radar daemon's built-in tracker for radar. Fusion
+merges the per-sensor tracks into one target picture; the gimbal points the head at
+the track; guidance steers an effector. The NIR illuminator is a sensing aid for the
+EO camera, not a detection source.
 
 **Radar-only is a required capability, not just an input.** In haze, smoke, or
 with the EO camera dead, radar must **acquire, track, and guide on its own** —
-the chain `radar → tracking → gimbal → guidance` has to run with no EO and no
+the chain `radar → radar tracker → gimbal → guidance` has to run with no EO and no
 fusion. That raises the bar on the radar module: it must deliver a *steerable*
 target — accurate, bias-free azimuth/elevation and a stable bounding box the
 gimbal can point at — not merely a cue for EO to refine. This is why box/angle
@@ -59,9 +60,9 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Firmware `agv3` (2026-07-17): comb gate fixed and observing, awaiting calibration before arming. Open: 450-pt/frame chip budget ~420 full (half spent on threshold-level junk past 200 m) caps far range, tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) that **collects faint evidence over several frames before reporting**, so a distant target the model only half-recognises still gets reported, while confident ones go out immediately and unchanged. One box per target, feeding the console. Stock off-the-shelf placeholder model (FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. **Running on the Jetson and measured live** (adds no compute: 22.73 ms vs 22.68 ms with it off). CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
+| EO tracker (`eotrack/`) | `:8095` | ✅ live on the Jetson beside the detector: turns the detector's per-frame boxes into persistent, smoothed, coasted tracks with **stable IDs**, and serves them as an angle-domain track stream that **mirrors the radar tracker's wire** so fusion joins both the same way. Stare mode plus an operator-engaged **60 fps camera-rate lock** (`airpoc.eo_y10`). Owns identity/smoothing/coasting; **not** weak-evidence integration (the detector's) nor rejecting the model's persistent false positives (a better model's). Open: velocity-gated association for the crossing-vehicle ID-swap | [`eotrack/`](../eotrack/README.md) |
 | Training data (`datasets/`) | — | 🟡 offline bench pipeline (Python; never runs on the seeker): FPV-strike footage → COCO vehicle/human set for the EO detector. Architecture + non-GPU spine unit-tested on a synthetic fixture; **the real-data stages have never been run** | [`datasets/`](../datasets/README.md) |
-| Fusion | — | ⬜ not started | — |
-| Tracking | — | ⬜ not started | — |
+| Fusion | — | ⬜ not started — joins the EO + radar track streams into one target, assigns the global id, adds range | — |
 | Gimbal | — | ⬜ not started | — |
 | Guidance | — | ⬜ not started | — |
 
@@ -217,15 +218,45 @@ mono model does **not** yet drop in unchanged. Detail:
 [`detection/README.md`](../detection/README.md) ·
 [`detection/docs/INTEGRATION.md`](../detection/docs/INTEGRATION.md).
 
-### Fusion / Tracking / Gimbal / Guidance (not started)
+### EO tracker (`eotrack/`) — the temporal layer over the EO detector (live on the Jetson)
+Standalone C daemon (`trackerd`, `:8095`) that consumes the detector's SSE `/stream`
+(`:8094`) and turns its per-frame boxes into **persistent tracks with stable IDs** —
+confirming a target over a few frames before it earns an id, smoothing its position,
+coasting it through short gaps, and dropping one-frame flicker. It serves the tracks on
+`/stream` + `/stats` + `/ctl` and publishes the `airpoc.trk_wire` recorder tap — the same
+contract shape as the radar daemon. The wire is **angle-domain** (azimuth/elevation via the
+lens, raw sensor frame) and **mirrors the radar tracker's target wire**, so fusion consumes
+both sensors the same way; EO has no range, so it carries a size-growth (looming) cue instead.
+
+Two modes: **stare** (default) tracks everything the detector reports; **track** (operator
+`engage=<tid>`) adds a **60 fps camera-rate lock** on the raw frames (`airpoc.eo_y10`),
+re-anchored by each detection, so guidance gets az/el at camera rate with a few ms latency.
+The tracker only reports *where the target is* — it writes no other module's `/ctl`; keeping
+the target framed (zoom, exposure, illuminator, radar FOV) is each sensor module's own job
+off the engaged-target wire.
+
+What it does **not** do, on purpose (see the detector pitfalls above): it does not raise weak
+evidence above the threshold (the detector does that *before* the threshold, and the tracker
+reads the detector's `age`/`hits`/`tbd` instead of redoing it), and it **cannot** reject the
+model's persistent false positives — a box the model draws on the same hedge every frame is
+rock-steady and invisible to any temporal test; only a better model removes it. It never
+drops a track for holding still, so parked vehicles and standing/prone people stay.
+
+**Live on the Jetson 2026-07-21**, running beside the detector, both feeds connected, holding
+vehicle tracks with stable IDs. **Open work:** the crossing-vehicle **ID-swap** (when a car
+passes a parked car their ids can trade) — the fix is velocity-gated association plus a longer
+park-hold, to be tuned on the live feed rather than a recorded clip. Not yet done by the
+console: switching its box overlay from `/det` to `/trk`, and wiring the launcher to start
+`trackerd` after `detectiond`. Detail: [`eotrack/README.md`](../eotrack/README.md) ·
+[`eotrack/docs/INTEGRATION.md`](../eotrack/docs/INTEGRATION.md).
+
+### Fusion / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
 current state, and a link to its module folder. (Tracking target *selection* lives in
-`app/` today; the *tracker/gimbal pointing* is the future module. It owns identity,
-smoothing, coasting, occlusion/re-acquisition and detect-slow/track-fast — but **not**
-weak-evidence integration, which now happens inside the detector because it has to precede
-the confidence threshold, and **not** rejecting the model's persistent mistakes, which no
-amount of tracking can distinguish from a well-behaved target. The tracker consumes the
-detector's `age`/`hits`/`disp` instead of recomputing them.)
+`app/` today; the per-sensor **trackers already exist** — EO in `eotrack/`, radar built into
+the radar daemon — so fusion's job is to join their two track streams into one target, assign
+the global id, and add range. It consumes each tracker's `age`/`hits`/`disp` and the
+size-growth cue rather than recomputing them.)
 
 ## Maturity
 
@@ -253,4 +284,5 @@ adding that evidence — not relabelling it.
 | Record & replay | Bench-verified | 30-min full-rate soak at ~125 MB/s with 0 drops; kill-9 recovery to CRC-valid prefixes | that soak has no session id, date or log to point at, and no reproduction procedure |
 | Detection | Bench-verified | on-device latency FP16 ~20.8 ms / INT8 ~14.7 ms; verified correct on one known image | **no accuracy figures at all** — no mAP, no false-positive rate, no DRI ranges; and a trained 3-class model does not currently load |
 | Training data (`datasets/`) | **Unrun** | the non-GPU spine unit-tested against a synthetic fixture | every stage that touches real data has never executed |
-| Fusion / tracking / gimbal / guidance | Not started | — | — |
+| EO tracker (`eotrack/`) | Bench-verified | live on the Jetson beside the detector 2026-07-21, both feeds connected, holding vehicle tracks with stable IDs; offline replay + lock/ego unit tests pass (`make check`) | no field run yet; the crossing-vehicle ID-swap is unfixed (velocity-gated association pending); console overlay + launcher wiring not done |
+| Fusion / gimbal / guidance | Not started | — | — |

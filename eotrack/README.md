@@ -3,7 +3,7 @@
 The temporal layer over the EO detector. The detector (`detection/`, `:8094`) reports a
 fresh list of boxes every frame with no memory. This module turns that stream into
 **persistent, smoothed tracks with stable IDs**: it confirms real targets over time,
-rejects wind-blown-foliage clutter, coasts through missed frames, and - when the operator
+drops one-frame flicker, coasts through missed frames, and - when the operator
 picks a target - locks onto it at full camera rate for guidance.
 
 It produces an **EO track stream that mirrors the radar track stream** (`radar/`, `:8092`),
@@ -41,7 +41,7 @@ monotonic clock on the IMX296 driver).
 ## Two modes
 
 - **stare** (default): every detector tick is associated to tracks; confirmed,
-  clutter-clean tracks are emitted. This is what the operator sees on the video.
+  flicker-free tracks are emitted. This is what the operator sees on the video.
 - **track** (`engage=<tid>` set): the chosen target additionally gets a 60 fps
   normalised-cross-correlation lock on the raw frames, re-anchored by each detection, so
   guidance gets camera-rate azimuth/elevation with a few ms latency. The tracker only
@@ -62,17 +62,21 @@ monotonic clock on the IMX296 driver).
 - **Confirmation is track hygiene, not sensitivity.** Raising weak detections above the
   noise (track-before-detect) is the **detector's** job; here a track just needs a little
   consistent evidence before it earns an ID, so one-frame junk never does.
-- **Clutter rejection** is the one discrimination this module owns: over a few seconds, a
-  real target nets displacement across the frame while wind-blown foliage oscillates in
-  place. An oscillator is kept internally but **latched off the wire** (so what's emitted is
-  always a subset of what's tracked). A target approaching head-on nets ~zero displacement
-  too and is rescued by its growing size or a classified detection. There are **no
-  size/speed/displacement kill gates** - those would delete exactly the far, small, slow
-  targets the system exists to catch.
-- **Ego-motion.** The displacement test is camera-relative, so a coarse frame-to-frame
-  global-shift estimate is subtracted before the test - on a static mount it is ~0; on a
-  panning gimbal it stops the whole scene reading as motion. A real IMU/VIO slots in behind
-  the same shift when the gimbal exists.
+- **What it does and does NOT reject.** The tracker's temporal job is to drop *flicker*
+  (a box that shows for a frame and is gone) via the confirm bar, and *oscillating* movers
+  (something that thrashes back and forth in place with no net travel - only the motion
+  path, which is off by default). It does **not** try to reject the model's *persistent*
+  mistakes: a hedge the model labels a vehicle at the same spot on every frame is
+  rock-steady and, by any temporal test, indistinguishable from a real parked car - only a
+  better model removes it (see `detection/`). It also **never drops a track for holding
+  still**: parked vehicles and standing/prone people sit at ~zero displacement and are
+  emitted. There are **no size/speed/displacement kill gates** - those would delete exactly
+  the far, small, slow targets the system exists to catch. What it emits is only as clean as
+  the detector; the trained model is the lever on persistent false positives, not the tracker.
+- **Ego-motion.** The oscillation test is camera-relative, so a coarse frame-to-frame
+  global-shift estimate is subtracted before it - on a static mount it is ~0; on a panning
+  gimbal it stops the whole scene reading as motion. A real IMU/VIO slots in behind the same
+  shift when the gimbal exists.
 
 ## Build & run
 
