@@ -287,7 +287,12 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
  * 320x240-ish preview — big enough to tell scenes apart at 100% zoom. The grid scrolls. */
 .lib-grid{flex:1;overflow-y:auto;padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;align-content:start}
 .lib-empty{padding:40px;text-align:center;color:var(--dim)}
-.lib-card{background:var(--panel);border:1px solid var(--bd);border-radius:6px;overflow:hidden;cursor:pointer;position:relative;display:flex;flex-direction:column}
+/* min-height is what actually forces the GRID ROW to be tall enough. Because the card sets
+ * overflow:hidden, its automatic minimum size resolves to 0, so the row was free to size to the
+ * text alone and clip everything below it — the poster showed only as a thin letterboxed slice.
+ * A min-height on the grid item itself can't be defeated by intrinsic-sizing rules.
+ * Keep it >= poster height + body (240 + ~100). */
+.lib-card{background:var(--panel);border:1px solid var(--bd);border-radius:6px;overflow:hidden;cursor:pointer;position:relative;display:flex;flex-direction:column;min-height:346px}
 .lib-card:hover{border-color:var(--amber)}
 .lib-card.sel{border-color:var(--on);box-shadow:0 0 0 1px var(--on) inset}
 /* EXPLICIT height, deliberately not aspect-ratio. An aspect-ratio box contributes ~no intrinsic
