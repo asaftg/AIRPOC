@@ -1081,7 +1081,9 @@
    * SAVE just updates name/tags/note. Reuses the pendingSid + dlg-save flow. */
   function openEditDialog(s) {
     pendingSid = s.sid;
-    $("dlg-name").value = s.name || "";
+    /* Pre-fill the SHOWN name too, so edit/copy/tile all agree. Saving then writes the compact
+     * form back, quietly migrating old "REC yyyy-mm-dd hh:mm …" names as they're touched. */
+    $("dlg-name").value = libTitle(s.name) || "";
     $("dlg-note").value = s.note || "";
     var tw = $("dlg-tags"); tw.innerHTML = "";
     var cur = s.tags || [];
@@ -1278,7 +1280,9 @@
     var eb = document.createElement("button"); eb.className = "lib-act"; eb.textContent = "✎"; eb.title = "edit name / tags / note";
     eb.onclick = function (e) { e.stopPropagation(); openEditDialog(s); };
     var cpb = document.createElement("button"); cpb.className = "lib-act"; cpb.textContent = "⧉"; cpb.title = "copy name";
-    cpb.onclick = function (e) { e.stopPropagation(); copyText(s.name || s.sid); };
+    /* copy WHAT THE CARD SHOWS — copying the raw stored name handed back "REC 2026-07-09 11:58"
+     * while the tile read "260709_1158", which is just a lie about what you clicked. */
+    cpb.onclick = function (e) { e.stopPropagation(); copyText(libTitle(s.name) || s.sid); };
     var hdb = document.createElement("button"); hdb.className = "lib-act lib-hd";
     hdb.onclick = function (e) {
       e.stopPropagation();

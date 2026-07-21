@@ -403,8 +403,26 @@ static void handle_rec(int cfd, const char *req)
                      "Content-Length: %d\r\nConnection: close\r\n\r\n%s", (int)strlen(b), b);
         return;
     }
-    char rq[560];
-    int n = snprintf(rq, sizeof rq, "GET %s HTTP/1.0\r\nHost: rec\r\n\r\n", path);
+    /* Forward the client's Range header. A <video> element seeks by requesting byte ranges; the
+     * recorder answers them correctly (206 + Content-Range), but this proxy used to send a bare
+     * GET, so every seek got the WHOLE file back (200, e.g. 2.1 GB) and the browser had to
+     * refetch from the start — scrubbing a long recording stalled or gave up entirely. Short
+     * clips hid it because the whole file was already buffered. */
+    char rng[160] = "";
+    const char *rh = strstr(req, "\r\nRange:");
+    if (!rh) rh = strstr(req, "\r\nrange:");
+    if (rh) {
+        rh += 8;                                   /* past "\r\nRange:" */
+        while (*rh == ' ' || *rh == '\t') rh++;
+        int ri = 0;
+        while (rh[ri] && rh[ri] != '\r' && rh[ri] != '\n' && ri < (int)sizeof(rng) - 1) { rng[ri] = rh[ri]; ri++; }
+        rng[ri] = 0;
+    }
+    char rq[760];
+    int n = rng[0]
+          ? snprintf(rq, sizeof rq, "GET %s HTTP/1.0\r\nHost: rec\r\nRange: %s\r\n\r\n", path, rng)
+          : snprintf(rq, sizeof rq, "GET %s HTTP/1.0\r\nHost: rec\r\n\r\n", path);
+    if (n < 0 || n >= (int)sizeof rq) { close(rfd); return; }
     if (write(rfd, rq, (size_t)n) < 0) { close(rfd); return; }
     char buf[64 * 1024]; ssize_t r;
     while (g_run && (r = read(rfd, buf, sizeof buf)) > 0) {
@@ -566,15 +584,17 @@ static void *client(void *arg)
     sock_timeouts(fd, 15, 10);          /* a slow/dead client can't wedge this thread forever */
     char req[2048];
     size_t rn = 0; ssize_t n;
-    /* Read until the request LINE is complete — weak WiFi can fragment the header across TCP
-     * segments, and a single read() could truncate "GET /radar/strea" and misroute it to the
-     * index page. Loop until we have a CRLF (or the buffer fills / the peer stops / RCVTIMEO). */
+    /* Read until the END OF HEADERS, not just the request line — weak WiFi can fragment the
+     * header across TCP segments (a single read() could truncate "GET /radar/strea" and misroute
+     * it to the index page), and /rec needs to see the client's Range header to forward it for
+     * video seeking. Every HTTP request terminates its headers with a blank line, and RCVTIMEO
+     * bounds the wait, so this can't hang on a silent peer. */
     while (rn < sizeof(req) - 1) {
         n = read(fd, req + rn, sizeof(req) - 1 - rn);
         if (n <= 0) break;
         rn += (size_t)n;
         req[rn] = 0;
-        if (strstr(req, "\r\n")) break;
+        if (strstr(req, "\r\n\r\n") || strstr(req, "\n\n")) break;
     }
     if (rn == 0) { close(fd); return NULL; }
     req[rn] = 0;
