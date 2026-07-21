@@ -1251,12 +1251,24 @@
     var cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "lib-cb"; cb.checked = !!libSel[s.sid];
     cb.onclick = function (e) { e.stopPropagation(); libSel[s.sid] = cb.checked; card.classList.toggle("sel", cb.checked); updateDelBtn(); };
     card.appendChild(cb);
-    /* built here, appended INTO the card body at the end (see below) — as an absolutely
-     * positioned corner chip it overlapped the tags row. */
+    /* "Drop raw" reclaims the full-res channel, which is where nearly all the disk goes (raw is
+     * ~50x the display copy — on this box ~490 GB of ~520 GB used). But it is IRREVERSIBLE and
+     * the HD movie is built FROM it, so dropping it first means you can never make HD for that
+     * clip again. So only offer it once HD is already built: then you keep the HD movie + the
+     * display + radar, and only lose the source you no longer need. Built here, appended into
+     * the card body at the end — as an absolutely positioned chip it overlapped the tags row. */
+    var hdDone = hdReady[s.sid] || s.hd === "ready";
     var free = null;
-    if (s.bytes && s.bytes.native > 0) {
-      free = document.createElement("button"); free.className = "lib-free"; free.textContent = "FREE — drop raw";
-      free.onclick = function (e) { e.stopPropagation(); if (confirm("Drop the raw native channel? Display + radar are kept.")) fetch("/rec/ctl?purge_native=" + encodeURIComponent(s.sid)).then(loadLibrary); };
+    if (s.bytes && s.bytes.native > 0 && hdDone) {
+      var rawGb = (s.bytes.native / 1e9).toFixed(1);
+      free = document.createElement("button"); free.className = "lib-free";
+      free.textContent = "FREE " + rawGb + " GB — drop raw";
+      free.title = "Delete the raw full-res source (" + rawGb + " GB). The HD movie, the display video and the radar are all kept. Irreversible: the raw can't be recovered.";
+      free.onclick = function (e) {
+        e.stopPropagation();
+        if (confirm("Drop the raw source for this recording and free " + rawGb + " GB?\n\nKept: the HD movie, the display video, the radar and all data.\nLost: the raw full-res frames — permanently, and they can't be regenerated."))
+          fetch("/rec/ctl?purge_native=" + encodeURIComponent(s.sid)).then(loadLibrary);
+      };
     }
     var body = document.createElement("div"); body.className = "lib-cardbody";
     var nrow = document.createElement("div"); nrow.className = "lib-namerow";
@@ -1291,11 +1303,14 @@
     var n = Object.keys(libSel).filter(function (k) { return libSel[k]; }).length;
     var d = $("lib-del"); d.hidden = n === 0; d.textContent = "DELETE (" + n + ")";
     var o = $("lib-offsel"); o.hidden = n === 0; o.textContent = "OFFLOAD (" + n + ")";
+    /* flips to CLEAR once everything shown is ticked, so one button covers both directions */
+    var sa = $("lib-selall");
+    if (sa) sa.textContent = (libSessions.length && n >= libSessions.length) ? "CLEAR" : "SELECT ALL";
   }
   /* offload = download a .tar of the session(s) — display video + radar + data. Over plain
    * HTTP the browser can't pick a folder, so it lands in Downloads (enable the browser's
    * "ask where to save each file" to choose one). tier=display keeps it reasonable; raw
-   * native is excluded (regenerable). */
+   * native is excluded — it is huge, and offload is for sharing/review. */
   function offloadTar(sids, n) {
     if (!confirm("Offload " + n + " session(s) as a .tar (display video + radar + data)?\n\nIt saves to your Downloads. To CHOOSE A FOLDER each time, turn on Chrome ▸ Settings ▸ Downloads ▸ \"Ask where to save each file before downloading\" — then a Save-As window opens for every offload.\n\nA large session takes up to a minute to build before the download starts.")) return;
     var a = document.createElement("a");
@@ -1307,19 +1322,34 @@
     document.body.appendChild(a); a.click(); a.remove();
     toast("Offload started — building the .tar; it'll land in your downloads (large sessions take ~a minute).", "ok", 6000);
   }
-  $("lib-offall").onclick = function () { if (!libSessions.length) { alert("Library is empty."); return; } offloadTar("all", libSessions.length); };
-  $("lib-offsel").onclick = function () { var s = Object.keys(libSel).filter(function (k) { return libSel[k]; }); if (!s.length) { alert("Select sessions first (the checkboxes)."); return; } offloadTar(s.join(","), s.length); };
+  /* One selection model: SELECT ALL is just a fast way to tick every shown card, and the
+   * OFFLOAD/DELETE buttons appear from the selection either way. (There used to be separate
+   * OFFLOAD ALL / DELETE ALL buttons sitting there permanently — two routes to the same action,
+   * with the destructive one always one click away even when nothing was selected.)
+   * "Shown" means what the tag filter + search currently list, not the whole disk. */
+  $("lib-selall").onclick = function () {
+    if (!libSessions.length) { alert("Library is empty."); return; }
+    var sel = Object.keys(libSel).filter(function (k) { return libSel[k]; }).length;
+    var selectingAll = sel < libSessions.length;
+    libSel = {};
+    if (selectingAll) libSessions.forEach(function (s) { libSel[s.sid] = true; });
+    document.querySelectorAll("#lib-grid .lib-card").forEach(function (c) {
+      var on = !!libSel[c.dataset.sid];
+      c.classList.toggle("sel", on);
+      var cb = c.querySelector(".lib-cb"); if (cb) cb.checked = on;
+    });
+    updateDelBtn();
+  };
+  $("lib-offsel").onclick = function () { var s = Object.keys(libSel).filter(function (k) { return libSel[k]; }); if (!s.length) return; offloadTar(s.join(","), s.length); };
   $("lib-del").onclick = function () {
     var sids = Object.keys(libSel).filter(function (k) { return libSel[k]; });
-    if (!sids.length || !confirm("Delete " + sids.length + " session(s)? Cannot be undone.")) return;
-    fetch("/rec/ctl?delete=" + sids.map(encodeURIComponent).join(",")).then(function () { libSel = {}; loadLibrary(); }).catch(function () {});
-  };
-  $("lib-delall").onclick = function () {           /* wipe everything — double verification */
-    var n = libSessions.length;
-    if (!n) { alert("Library is already empty."); return; }
-    if (!confirm("Delete ALL " + n + " session(s)? This permanently erases every recording — there is no undo.")) return;
-    if (prompt("FINAL CHECK — type DELETE (capitals) to erase all " + n + " recordings:") !== "DELETE") return;
-    var sids = libSessions.map(function (s) { return s.sid; });
+    if (!sids.length) return;
+    /* Selecting everything and deleting IS the old "delete all" — keep the second gate for it. */
+    var wipingAll = libSessions.length && sids.length >= libSessions.length;
+    if (wipingAll) {
+      if (!confirm("Delete ALL " + sids.length + " shown session(s)? This permanently erases them — there is no undo.")) return;
+      if (prompt("FINAL CHECK — type DELETE (capitals) to erase all " + sids.length + " recordings:") !== "DELETE") return;
+    } else if (!confirm("Delete " + sids.length + " session(s)? Cannot be undone.")) return;
     fetch("/rec/ctl?delete=" + sids.map(encodeURIComponent).join(",")).then(function () { libSel = {}; loadLibrary(); }).catch(function () {});
   };
 
