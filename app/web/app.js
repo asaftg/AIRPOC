@@ -22,7 +22,7 @@
   var zoom = 1;
   /* MANUAL is the default: AUTO needs a ranking we have not agreed yet (it would pick row #1
    * of the merged list). Manual means the operator declares the target — nothing self-selects. */
-  var trackMode = "man", engagedKey = null, sentEngage = null, sentTrkEngage = null;
+  var trackMode = "man", engagedKey = null, sentEngage = null, sentTrkEngage = null, trkEngageSentAt = 0;
   var illumMode = "auto";
   var lastStats = {}, lastRadar = null;
   var eoDownN = 0, nextLiveHeal = 0, lastEoc = true;   /* live-view EO self-heal (see poll) */
@@ -433,7 +433,7 @@
     engagedKey = key;
     $("track-hint").hidden = (trackMode !== "man") || (key !== null);
     var eoTid = (key && key.indexOf("eo:") === 0) ? parseInt(key.slice(3), 10) : -1;
-    if (eoTid !== sentTrkEngage) { sentTrkEngage = eoTid; ctl("trk_engage=" + eoTid); }
+    if (eoTid !== sentTrkEngage) { sentTrkEngage = eoTid; trkEngageSentAt = Date.now(); ctl("trk_engage=" + eoTid); }
     var tid = key ? parseInt(key.split(":")[1], 10) : -1;
     if (tid !== sentEngage) { sentEngage = tid; ctl("engage=" + tid); }
   }
@@ -567,6 +567,8 @@
       else { vw2 = w; vh2 = w / ar2; vx2 = 0; vy2 = (h - vh2) / 2; }
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
       targets(lastRadar).forEach(function (t) {
+        /* locked → the video shows ONLY the held target, radar marks included */
+        if (engagedKey && ("rad:" + t.tid) !== engagedKey) return;
         var az = t.az + radarOv.az, el = t.el + radarOv.el;
         var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
         if (Math.abs(fx) > 1 || Math.abs(fy) > 1) return;      /* off-frame → not drawn */
@@ -680,21 +682,23 @@
         });
       }
       /* EO TRACKS — the operator's boxes. Colour is the CLASS, always: never how the target
-       * was arrived at (a far human promoted from faint evidence is still a human). SHAPE
-       * carries state — a confirmed/held track gets corner brackets, and "t" tags a target
-       * that only exists because the detector integrated faint evidence for it. */
+       * was arrived at (a far human promoted from faint evidence is still a human).
+       * SHAPE marks exactly ONE thing: the LOCKED target. Every other track draws as the
+       * ordinary rectangle (or seeker cross) it always did — corner brackets on every
+       * confirmed track made the whole frame look "tracked" and hid which one is held.
+       * When a target IS locked, only that target is drawn: the operator asked for the
+       * picture to clear down to the thing being tracked. */
       eoBoxes = [];
       trkTracks.forEach(function (t) {
+        var eng = (t.key === engagedKey);
+        if (engagedKey && !eng) return;                  /* locked → show only the locked target */
         var col = t.cls === "human" ? "#40c4ff" : amber;
         var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
-        var eng = (t.key === engagedKey);
         var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
                        : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
         if (eng) lab = "LOCK " + lab;
-        /* engaged wins the green LOCK colour — that phase is live now, and the held target
-         * must be unmistakable at a glance even against its own class colour. */
         drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
-                t.state === "conf" || t.state === "coast" || eng,
+                eng,                                     /* corner brackets = LOCKED, nothing else */
                 t.raw && (t.raw.tbd === 1 || t.raw.tbd === true));
         /* remember where it landed, in 0..1 panel coords, so a tap can hit-test the drawn
          * box instead of re-deriving the projection (which would drift out of sync). */
@@ -889,10 +893,13 @@
   /* ── Selection: three surfaces, one result — declare the target and enter track mode.
    * Tapping an EO box, a radar circle, or a list row all do the same thing. Any of them
    * switches TRACK to MANUAL first, so a pick is never swallowed by AUTO. ── */
+  /* Tapping the target that is already locked UNLOCKS it — the same press both ways, so the
+   * operator never has to hunt for a separate "release". Tapping a different target moves the
+   * lock straight there. */
   function pick(key) {
     if (!key) return;
     if (trackMode !== "man") setTrack("man");
-    engage(key);
+    engage(key === engagedKey ? null : key);
   }
   /* EO panel: prefer the EO TRACK whose box was tapped (that is the thing the tracker can
    * actually lock); fall back to projecting the click azimuth onto a radar target. */
@@ -1115,7 +1122,12 @@
     if (lastTrk && typeof lastTrk.engaged === "number") {
       var wire = lastTrk.engaged >= 0 ? ("eo:" + lastTrk.engaged) : null;
       if (wire && wire !== engagedKey) { engagedKey = wire; $("track-hint").hidden = true; }
-      else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0) engagedKey = null;
+      /* Don't let a not-yet-acknowledged frame clear a lock we just asked for. The tracker
+       * needs a frame to adopt the engage, and in that window the wire still reads -1 — acting
+       * on it made a fresh lock appear for one frame and vanish. Only honour a wire CLEAR once
+       * the request has had time to land. */
+      else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0 &&
+               Date.now() - trkEngageSentAt > 1000) engagedKey = null;
     }
     renderTargetList();
     draw(true, false);
