@@ -58,7 +58,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector SSE, forwards controls, adds the radar scope + EO/detector overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + tracking + day/night. No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
 | Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Firmware `agv3` (2026-07-17): comb gate fixed and observing, awaiting calibration before arming. Open: 450-pt/frame chip budget ~420 full (half spent on threshold-level junk past 200 m) caps far range, tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
-| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) that **collects faint evidence over several frames before reporting**, so a distant target the model only half-recognises still gets reported, while confident ones go out immediately and unchanged. One box per target, feeding the console. Stock off-the-shelf placeholder model (FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Validated on recordings, **not yet run on the Jetson**. CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
+| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) that **collects faint evidence over several frames before reporting**, so a distant target the model only half-recognises still gets reported, while confident ones go out immediately and unchanged. One box per target, feeding the console. Stock off-the-shelf placeholder model (FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. **Running on the Jetson and measured live** (adds no compute: 22.73 ms vs 22.68 ms with it off). CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
 | Training data (`datasets/`) | — | 🟡 offline bench pipeline (Python; never runs on the seeker): FPV-strike footage → COCO vehicle/human set for the EO detector. Architecture + non-GPU spine unit-tested on a synthetic fixture; **the real-data stages have never been run** | [`datasets/`](../datasets/README.md) |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -177,20 +177,23 @@ to frame, and reports it once it has shown up consistently in roughly the same p
 and unchanged, with no added delay**. Every box leaves through one place, so nothing is
 reported twice, and a reported box is always one the model really produced — never a guess.
 Boxes carry how long the evidence has been building (`age`, `hits`) and how far the target
-has travelled in a straight line (`disp`), which is what separates something crossing the
-scene from a branch moving in the wind.
+has travelled in a straight line (`disp`), i.e. whether it is moving or holding still —
+useful to fusion and for cross-checking against radar, which only sees movers. It is **not**
+a real/false signal: parked vehicles and standing people are targets and barely move.
 
 On a 30 s daytime street the plain 0.50 threshold reported 3.5 boxes per tick and **not one
 person**; with collection on, 17.7 boxes per tick and people found, with the confident boxes
 identical either way. Most of what was added is real — parked cars the threshold had been
-discarding. **Validated on recordings; not yet run on the Jetson.**
+discarding. **Running on the Jetson**, where the A/B measured 22.73 ms with collection off vs 22.68 ms on — it adds no compute.
 
 > **Pitfall — the detector is no longer "stateless".** It used to emit one fresh, independent
 > list of boxes per frame, with all cross-frame work left to the EO tracker. That is no
 > longer true and cannot be: evidence has to be collected *before* the threshold or it is
-> already gone. Identity, smoothing, coasting, occlusion and long-horizon clutter rejection
-> stay with the tracker, and **the tracker should read `age`/`hits`/`disp` rather than redo
-> this work.**
+> already gone. Identity, smoothing, coasting, occlusion and re-acquisition stay with the
+> tracker, and **the tracker should read `age`/`hits`/`disp` rather than redo this work.**
+> Note what is *nobody's* job downstream: a persistent false positive (a hedge the model
+> calls a vehicle every frame) is maximally consistent and therefore invisible to any
+> temporal test. Only a better model removes it.
 
 > **Pitfall — collecting evidence strengthens the model's mistakes too.** A hedge the model
 > calls a vehicle at 0.3 on every frame is indistinguishable from a real car at 0.3 on every
@@ -218,9 +221,10 @@ mono model does **not** yet drop in unchanged. Detail:
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
 current state, and a link to its module folder. (Tracking target *selection* lives in
 `app/` today; the *tracker/gimbal pointing* is the future module. It owns identity,
-smoothing, coasting, occlusion/re-acquisition, long-horizon clutter rejection and
-detect-slow/track-fast — but **not** weak-evidence integration, which now happens inside
-the detector because it has to precede the confidence threshold. The tracker consumes the
+smoothing, coasting, occlusion/re-acquisition and detect-slow/track-fast — but **not**
+weak-evidence integration, which now happens inside the detector because it has to precede
+the confidence threshold, and **not** rejecting the model's persistent mistakes, which no
+amount of tracking can distinguish from a well-behaved target. The tracker consumes the
 detector's `age`/`hits`/`disp` instead of recomputing them.)
 
 ## Maturity

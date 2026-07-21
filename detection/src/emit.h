@@ -27,6 +27,7 @@ typedef struct {
     int         hits;   /* observations accumulated; <0 to omit */
     float       disp;   /* net displacement in px from first seen; <0 to omit */
     int         tbd;    /* 1 = promoted by temporal integration (below `conf` alone) */
+    unsigned    dtid;   /* evidence-pile tag; 0 to omit. NOT an identity — it hops. */
     float       cx, cy, w, h;   /* full-res pixels */
 } DetBox;
 

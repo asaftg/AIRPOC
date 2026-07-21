@@ -42,6 +42,9 @@ static size_t append_box(char *buf, size_t cap, size_t off, const DetBox *b, dou
     if (b->tbd)
         off = adv(off, cap, snprintf(buf + off, cap - off, "\"tbd\":1,"));
     if (off >= cap) return off;
+    if (b->dtid)
+        off = adv(off, cap, snprintf(buf + off, cap - off, "\"dtid\":%u,", b->dtid));
+    if (off >= cap) return off;
     off = adv(off, cap, snprintf(buf + off, cap - off,
         "\"conf\":%.3f,\"px\":[%.1f,%.1f,%.1f,%.1f],"
         "\"ang\":[%.4f,%.4f,%.4f,%.4f]}",

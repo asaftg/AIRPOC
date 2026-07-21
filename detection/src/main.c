@@ -309,6 +309,7 @@ int main(int argc, char **argv)
                     dets[nd].conf = tout[i].conf;
                     dets[nd].age = tout[i].age; dets[nd].hits = tout[i].hits;
                     dets[nd].disp = tout[i].net_disp; dets[nd].tbd = tout[i].tbd;
+                    dets[nd].dtid = tout[i].dtid;
                     dets[nd].cx = tout[i].cx; dets[nd].cy = tout[i].cy;
                     dets[nd].w = tout[i].w;   dets[nd].h = tout[i].h;
                     n_promoted += tout[i].tbd;
@@ -320,7 +321,7 @@ int main(int argc, char **argv)
                     if (!cls) continue;
                     dets[nd].src = "app"; dets[nd].cls = cls; dets[nd].conf = iboxes[i].conf;
                     dets[nd].age = -1; dets[nd].hits = -1; dets[nd].disp = -1.0f;
-                    dets[nd].tbd = 0;
+                    dets[nd].tbd = 0; dets[nd].dtid = 0;
                     dets[nd].cx = iboxes[i].cx; dets[nd].cy = iboxes[i].cy;
                     dets[nd].w = iboxes[i].w; dets[nd].h = iboxes[i].h;
                     nd++;
@@ -339,7 +340,7 @@ int main(int argc, char **argv)
             if (overlaps(&msnap[i], dets, nd)) continue;
             movers[nm].src = "mot"; movers[nm].cls = 0; movers[nm].conf = msnap[i].conf;
             movers[nm].age = msnap[i].age; movers[nm].hits = -1; movers[nm].disp = -1.0f;
-            movers[nm].tbd = 0;
+            movers[nm].tbd = 0; movers[nm].dtid = 0;
             movers[nm].cx = msnap[i].cx; movers[nm].cy = msnap[i].cy;
             movers[nm].w = msnap[i].w; movers[nm].h = msnap[i].h;
             nm++;
