@@ -16,6 +16,8 @@
 #include "cfg_push.h"
 #include "tlv.h"
 #include "cluster.h"
+#include "slowdet.h"
+#include "fuse.h"
 #include "wire.h"
 #include "http.h"
 #include "sim.h"
@@ -59,6 +61,10 @@ static double now_s(void) {
 
 typedef struct {
     RadarClusterer *clust;
+    SlowDet        *slow;        /* far/faint chaining detector (slowdet.c) */
+    Fuse           *fuse;        /* F+S merge + elevation conditioning */
+    RadarTarget     ftgt[RADAR_MAX_TARGETS];   /* cluster's targets, pre-merge */
+    RadarTarget     stgt[RADAR_MAX_TARGETS];   /* slowdet's targets, pre-merge */
     RadarFrame      frame;
     char           *json;
     const char     *profile;
@@ -97,9 +103,16 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
     c->frame.n_points = n;
     c->frame.frame_number = frame_no;
 
-    int nt = cluster_step(c->clust, c->frame.points, n, t, dt,
-                          c->frame.targets, RADAR_MAX_TARGETS);
-    c->frame.n_targets = nt;
+    /* F: the confirmed per-frame tracker (unchanged). S: the chaining detector
+     * that holds the far/faint intermittent movers F cannot confirm. fuse emits
+     * one box per object (F authoritative, S fills the gaps) and conditions the
+     * published elevation — the noisy axis — for both alike. */
+    int nf = cluster_step(c->clust, c->frame.points, n, t, dt,
+                          c->ftgt, RADAR_MAX_TARGETS);
+    int ns = slowdet_step(c->slow, c->frame.points, n, t,
+                          c->stgt, RADAR_MAX_TARGETS);
+    c->frame.n_targets = fuse_step(c->fuse, c->ftgt, nf, c->stgt, ns, t,
+                                   c->frame.targets, RADAR_MAX_TARGETS);
 
     if (dt > 0) {
         double inst = 1.0 / dt;
@@ -259,9 +272,11 @@ int main(int argc, char **argv) {
     Ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.clust = cluster_new();
+    ctx.slow  = slowdet_new();
+    ctx.fuse  = fuse_new();
     ctx.json  = malloc(JSON_CAP);
     ctx.profile = profile;
-    if (!ctx.clust || !ctx.json) { perror("malloc"); return 1; }
+    if (!ctx.clust || !ctx.slow || !ctx.fuse || !ctx.json) { perror("malloc"); return 1; }
 
     http_start(http_port, webroot);
     http_set_ctl_cb(on_ctl, ctx.clust);      /* GET /ctl?eps=&minpts= -> DBSCAN */
@@ -284,7 +299,8 @@ int main(int argc, char **argv) {
             usleep(50000);      /* 20 Hz */
         }
         tlv_stream_free(st);
-        cluster_free(ctx.clust); free(ctx.json);
+        cluster_free(ctx.clust); slowdet_free(ctx.slow); fuse_free(ctx.fuse);
+        free(ctx.json);
         free(cfg_owned); free(web_owned);
         return 0;
     }
@@ -411,6 +427,8 @@ int main(int argc, char **argv) {
     tap_destroy(&ctx.cli_tap);
     tlv_stream_free(stream);
     cluster_free(ctx.clust);
+    slowdet_free(ctx.slow);
+    fuse_free(ctx.fuse);
     free(ctx.json);
     free(cfg_owned); free(web_owned);
     return 0;
