@@ -10,9 +10,10 @@
  * latest published snapshot, so a slow consumer drops frames and can never
  * stall the detector.
  *
- * Of these knobs exactly TWO are operator-facing and belong in the GUI: `conf`
- * and `temporal`. Everything else is bench tuning, reached with curl. The
- * mot_* knobs belong to the FROZEN motion worker (see config.h).
+ * Four of these knobs are operator-facing and belong in the GUI: `conf`,
+ * `temporal`, `tbd_frames` and `tbd_lo`. Everything else is bench tuning,
+ * reached with curl. The mot_* knobs belong to the FROZEN motion worker
+ * (see config.h).
  */
 #ifndef DET_HTTP_H
 #define DET_HTTP_H
@@ -26,11 +27,12 @@ typedef struct {
     double nms;           /* box-merge IoU threshold (lower = merge more) */
 
     /* temporal integration (track-before-detect) — see temporal.h */
-    int    temporal;      /* on/off; the operator-facing "EO temporal" button */
-    double tbd_lo;        /* candidate floor + evidence reference */
-    double tbd_confirm;   /* score needed to promote a weak track */
-    double tbd_decay;     /* score subtracted per missed tick */
-    int    tbd_max_miss;  /* consecutive missed ticks before a track is dropped */
+    int    temporal;      /* on/off; operator-facing ("EO temporal" button) */
+    int    tbd_frames;    /* frames integrated before a floor-level target is reported;
+                             operator-facing */
+    double tbd_lo;        /* candidate floor + evidence reference; operator-facing */
+    double tbd_decay;     /* score subtracted per missed tick; bench only */
+    int    tbd_max_miss;  /* consecutive missed ticks before a track is dropped; bench only */
 
     /* motion worker — FROZEN, off by default (config.h) */
     int    motion;

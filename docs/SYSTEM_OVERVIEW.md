@@ -58,7 +58,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector SSE, forwards controls, adds the radar scope + EO/detector overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + tracking + day/night. No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
 | Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Firmware `agv3` (2026-07-17): comb gate fixed and observing, awaiting calibration before arming. Open: 450-pt/frame chip budget ~420 full (half spent on threshold-level junk past 200 m) caps far range, tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
-| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + **track-before-detect temporal integration** (weak evidence integrated before the threshold, so far/low-contrast targets survive; strong ones unchanged and un-delayed), one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Integration validated **offline only, not yet on the Jetson**. CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
+| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) that **collects faint evidence over several frames before reporting**, so a distant target the model only half-recognises still gets reported, while confident ones go out immediately and unchanged. One box per target, feeding the console. Stock off-the-shelf placeholder model (FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Validated on recordings, **not yet run on the Jetson**. CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
 | Training data (`datasets/`) | — | 🟡 offline bench pipeline (Python; never runs on the seeker): FPV-strike footage → COCO vehicle/human set for the EO detector. Architecture + non-GPU spine unit-tested on a synthetic fixture; **the real-data stages have never been run** | [`datasets/`](../datasets/README.md) |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -158,7 +158,7 @@ per-session `hd` flag drives the console badge) and **offloaded** as a streaming
 the live-rate radar/detection replay streams. Detail:
 [`recorder/`](../recorder/README.md).
 
-### Detection (`detection/`) — EO object detector with track-before-detect
+### Detection (`detection/`) — EO object detector that collects evidence over frames
 On-device detector (`detectiond`, `:8094`) that reads the EO camera tap
 (`airpoc.eo_y10`) and emits per-frame `human`/`vehicle`/`drone` boxes over
 `/stream` + `/stats` + `/ctl`, plus the `airpoc.det_wire` recorder tap — the same
@@ -167,46 +167,50 @@ appearance model** at native 1440×1088 (RTMDet-tiny, Apache; raw-head export wi
 decode + NMS in our C++) feeds a **temporal integrator**. Boxes carry pixels **and**
 real-world angle (via the lens IFOV) for fusion.
 
-**Track-before-detect (v0.6.0).** A confidence threshold is a *lossy gate*: whatever
-falls below it is destroyed, and no downstream tracker can recover it — so a far or
-low-contrast target the model scores at 0.2 every single frame is thrown away frame
-after frame. The detector therefore runs the model at a **low floor** and integrates
-the weak evidence along a short trajectory before deciding what to emit. A candidate
-already above `conf` goes out **immediately and unchanged** (zero added latency); a
-weaker one goes out only once its accumulated evidence confirms it, flagged `"tbd":1`.
-One track emits at most one box per tick, so **nothing is ever reported twice**. Boxes
-carry `age`, `hits` and `disp` (net displacement) for the tracker to consume.
+**Collecting evidence over frames (v0.6.0).** A confidence threshold throws away everything
+below it, permanently — a person far enough away that the model only ever half-recognises
+them, scoring 0.2 on every frame, is discarded on every frame, and nothing downstream can
+get them back. Simply lowering the threshold instead would let in every one-frame flicker.
+So the detector runs the model at a **low floor**, follows each faint candidate from frame
+to frame, and reports it once it has shown up consistently in roughly the same place
+(flagged `"tbd":1`). Anything the model is already confident about goes out **immediately
+and unchanged, with no added delay**. Every box leaves through one place, so nothing is
+reported twice, and a reported box is always one the model really produced — never a guess.
+Boxes carry how long the evidence has been building (`age`, `hits`) and how far the target
+has travelled in a straight line (`disp`), which is what separates something crossing the
+scene from a branch moving in the wind.
 
-Measured offline on a 30 s daytime recording (real model, shipping integrator): the
-0.50 gate reported **3.5 boxes/tick and zero humans**; with integration, 17.7 boxes/tick
-and humans found — while the strong-tier boxes stayed byte-identical. Most of what was
-added is real (the parked cars the gate was discarding). **Not yet run on the Jetson.**
+On a 30 s daytime street the plain 0.50 threshold reported 3.5 boxes per tick and **not one
+person**; with collection on, 17.7 boxes per tick and people found, with the confident boxes
+identical either way. Most of what was added is real — parked cars the threshold had been
+discarding. **Validated on recordings; not yet run on the Jetson.**
 
-> **⚠️ Contract change:** the detector is **no longer "deliberately stateless"** — it now
-> carries a short-horizon temporal integrator, because evidence must be integrated *before*
-> the threshold or it is gone. Identity, track IDs, coasting, occlusion, smoothing and
-> long-horizon clutter rejection remain the **EO tracker's**, and the tracker must consume
-> `age`/`hits`/`disp` rather than re-integrate what is already integrated here.
+> **Pitfall — the detector is no longer "stateless".** It used to emit one fresh, independent
+> list of boxes per frame, with all cross-frame work left to the EO tracker. That is no
+> longer true and cannot be: evidence has to be collected *before* the threshold or it is
+> already gone. Identity, smoothing, coasting, occlusion and long-horizon clutter rejection
+> stay with the tracker, and **the tracker should read `age`/`hits`/`disp` rather than redo
+> this work.**
 
-> **⚠️ Honest limit:** integration amplifies the model's beliefs, *including its persistent
-> mistakes* — a hedge the model calls "vehicle" at 0.3 every tick is indistinguishable from
-> a real car at 0.3 every tick. Only a better model fixes that, which is why the stock COCO
-> placeholder is the real bottleneck. Also: `tbd_confirm` is a **latency** knob, not a
-> sensitivity one (raise `tbd_lo` to accept less), and `disp` is a hint — the association
-> can hop between nearby targets, so identity stays the tracker's job.
+> **Pitfall — collecting evidence strengthens the model's mistakes too.** A hedge the model
+> calls a vehicle at 0.3 on every frame is indistinguishable from a real car at 0.3 on every
+> frame. Only a better model separates them, which is why the stock placeholder is the real
+> bottleneck. Related: `tbd_lo` decides how much is accepted, `tbd_frames` only how long a
+> faint target waits; and `disp` can pick up a neighbour's history, so identity stays the
+> tracker's job.
 
-> **🧊 The CPU motion worker is FROZEN** (2026-07-21) and off by default. Measured across
-> four recordings it did not do its job: it absorbs slow/near-stationary targets, misses
-> slow far ones, and floods on wind-blown foliage (128–353 boxes) — clutter no per-frame
-> threshold can remove. It is **frozen, not deleted**, for one reason: track-before-detect
-> recovers targets the model scores *weakly* but not ones it scores at **zero** (a 3 px
-> drone), and motion is the only path that would ever see those. Revive only on evidence.
+> **🧊 The CPU motion worker is FROZEN** and off by default. It swallowed targets that move
+> slowly or pause, missed slow distant ones, and drowned breezy scenes in wind-blown foliage
+> — real motion that no threshold removes without also removing distant targets. It is
+> **frozen, not deleted**, for one reason: collecting evidence rescues a target the model
+> *half* sees, but not one it does not see at all (a drone a few pixels across), and motion
+> is the only path that would ever catch that. Revive only on evidence.
 
-Measured on-device (hot GPU, native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near
-its floor for this chip, and the biggest live-latency lever is pinning the GPU clocks (a
-`jetson/` boot service). The integrator itself costs nothing measurable. **Current model is
-a stock COCO placeholder** proving the pipeline; the trained mono model (data/training
-agent) does **not** yet drop in unchanged. Detail:
+Measured on-device (warm GPU, native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near
+its floor for this chip, and the biggest lever on live latency is pinning the GPU clocks (a
+`jetson/` boot service). The frame-to-frame collection itself costs nothing measurable.
+**The current model is a stock, off-the-shelf placeholder** proving the pipeline; our trained
+mono model does **not** yet drop in unchanged. Detail:
 [`detection/README.md`](../detection/README.md) ·
 [`detection/docs/INTEGRATION.md`](../detection/docs/INTEGRATION.md).
 

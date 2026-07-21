@@ -66,7 +66,7 @@ jetson/          compute-platform bring-up (flash, base config, fan) — not a m
 eo/              electro-optical module: camera driver, pipeline, streaming, docs
 illuminator/     NIR illuminator module: controller src + docs
 radar/           radar module: AWR2944P daemon, firmware trees, previewer, docs
-detection/       EO object detector: TensorRT model + CPU motion worker
+detection/       EO object detector: TensorRT model + frame-to-frame evidence collection
 recorder/        record & replay: NVMe session recorder + library + replay
 app/             main process + operator console (field GUI) + launcher
 datasets/        offline training-set builder (bench only, not on the seeker)

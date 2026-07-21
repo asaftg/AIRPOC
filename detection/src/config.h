@@ -58,24 +58,29 @@
  * "tbd":1 on the wire). Detections already at/above `conf` are unaffected: same box,
  * same confidence, same tick, no added latency. The cost is latency ON WEAK TARGETS
  * ONLY — roughly (confirm / per-hit score) ticks, ~0.2-0.5 s at the default cadence. */
-#define DET_TEMPORAL_DEFAULT   1       /* operator-facing on/off ("EO temporal" button) */
+/* Three of these are OPERATOR-facing and belong in the GUI: `temporal`, `tbd_frames`
+ * and `tbd_lo` — on/off, how long we integrate, and how weak a hint we accept. The
+ * rest (`tbd_decay`, `tbd_max_miss`) are bench tuning reached with curl. */
+#define DET_TEMPORAL_DEFAULT   1       /* on/off — the "EO temporal" button */
 
 #define DET_TBD_LO_DEFAULT     0.15    /* candidate floor: the model is run at this when
                                           temporal is on, and it doubles as the evidence
                                           reference — a hit exactly here is judged as
                                           likely clutter as target and scores only the
-                                          small fixed presence term */
+                                          small fixed presence term. THIS is the knob that
+                                          decides how much is accepted; it wants tuning
+                                          against the trained model on real scenes. */
 #define DET_TBD_LO_MIN         0.02
 #define DET_TBD_LO_MAX         0.50
-#define DET_TBD_CONFIRM_DEFAULT 3.0    /* score needed to promote a weak track. This is a
-                                          LATENCY knob, not a sensitivity one: a target the
-                                          model keeps seeing crosses any threshold sooner or
-                                          later, so raising it delays promotion rather than
-                                          preventing it (measured: 2.0 -> 8.0 changed the box
-                                          count by only 13% on a 30 s day clip). To accept
-                                          FEWER things, raise `tbd_lo` instead. */
-#define DET_TBD_CONFIRM_MIN    0.5
-#define DET_TBD_CONFIRM_MAX    10.0    /* < DET_TBD_S_MAX so promotion stays reachable */
+#define DET_TBD_FRAMES_DEFAULT 6       /* frames of evidence needed to report a target sitting
+                                          exactly at `tbd_lo`. A target the model scores higher
+                                          confirms proportionally sooner. This sets how long a
+                                          weak target waits, NOT what is accepted: a target the
+                                          model keeps seeing gets there eventually either way,
+                                          so raise `tbd_lo` to accept fewer things. */
+#define DET_TBD_FRAMES_MIN     2
+#define DET_TBD_FRAMES_MAX     20      /* MAX * PRESENCE must stay < DET_TBD_S_MAX so
+                                          promotion always remains reachable */
 #define DET_TBD_DECAY_DEFAULT  0.7     /* score subtracted per tick with no observation.
                                           This is what kills flicker: a candidate seen
                                           every third tick nets negative and dies */

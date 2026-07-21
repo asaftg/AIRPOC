@@ -21,7 +21,7 @@ static DetKnobs g_k = {
     .conf = DET_CONF_DEFAULT, .cadence = DET_CADENCE_DEFAULT,
     .max_dets = DET_MAXDETS_DEFAULT, .nms = DET_NMS_DEFAULT,
     .temporal = DET_TEMPORAL_DEFAULT, .tbd_lo = DET_TBD_LO_DEFAULT,
-    .tbd_confirm = DET_TBD_CONFIRM_DEFAULT, .tbd_decay = DET_TBD_DECAY_DEFAULT,
+    .tbd_frames = DET_TBD_FRAMES_DEFAULT, .tbd_decay = DET_TBD_DECAY_DEFAULT,
     .tbd_max_miss = DET_TBD_MAXMISS_DEFAULT,
     .motion = DET_MOTION_DEFAULT,
     .mot_k = DET_MOT_K_DEFAULT, .mot_window_s = DET_MOT_WINDOW_S_DEFAULT,
@@ -142,7 +142,7 @@ static int build_stats(char *b, size_t cap)
         "\"motion\":{\"active\":%s,\"frozen\":true,\"fps\":%.1f,\"stab_fail_pct\":%.1f,"
         "\"candidates\":%d},"
         "\"knobs\":{\"conf\":%.2f,\"cadence\":%d,\"max_dets\":%d,\"nms\":%.2f,"
-        "\"temporal\":%d,\"tbd_lo\":%.2f,\"tbd_confirm\":%.2f,\"tbd_decay\":%.2f,"
+        "\"temporal\":%d,\"tbd_frames\":%d,\"tbd_lo\":%.2f,\"tbd_decay\":%.2f,"
         "\"tbd_max_miss\":%d,"
         "\"motion\":%d,\"mot_k\":%.1f,\"mot_window_s\":%.1f,\"mot_persist\":%d,"
         "\"mot_down\":%d,\"mot_method\":%d,\"mot_baseline_s\":%.2f}}\n",
@@ -154,7 +154,7 @@ static int build_stats(char *b, size_t cap)
         g_tbd.active ? "true" : "false", g_tbd.tracks, g_tbd.promoted,
         g_mot.active ? "true" : "false", g_mot.fps, g_mot.stab_fail_pct, g_mot.candidates,
         g_k.conf, g_k.cadence, g_k.max_dets, g_k.nms,
-        g_k.temporal, g_k.tbd_lo, g_k.tbd_confirm, g_k.tbd_decay, g_k.tbd_max_miss,
+        g_k.temporal, g_k.tbd_frames, g_k.tbd_lo, g_k.tbd_decay, g_k.tbd_max_miss,
         g_k.motion, g_k.mot_k, g_k.mot_window_s, g_k.mot_persist, g_k.mot_down,
         g_k.mot_method, g_k.mot_baseline_s);
 }
@@ -193,7 +193,7 @@ static void *client(void *arg)
         if ((q = strstr(req, "nms=")))           k.nms = atof(q + 4);
         if ((q = strstr(req, "temporal=")))      k.temporal = atoi(q + 9);
         if ((q = strstr(req, "tbd_lo=")))        k.tbd_lo = atof(q + 7);
-        if ((q = strstr(req, "tbd_confirm=")))   k.tbd_confirm = atof(q + 12);
+        if ((q = strstr(req, "tbd_frames=")))    k.tbd_frames = atoi(q + 11);
         if ((q = strstr(req, "tbd_decay=")))     k.tbd_decay = atof(q + 10);
         if ((q = strstr(req, "tbd_max_miss=")))  k.tbd_max_miss = atoi(q + 13);
         if ((q = strstr(req, "motion=")))        k.motion = atoi(q + 7);
@@ -212,7 +212,7 @@ static void *client(void *arg)
         k.tbd_lo = clampd(k.tbd_lo, DET_TBD_LO_MIN, DET_TBD_LO_MAX);
         /* the candidate floor is meaningless above the immediate-emit tier */
         if (k.tbd_lo > k.conf) k.tbd_lo = k.conf;
-        k.tbd_confirm = clampd(k.tbd_confirm, DET_TBD_CONFIRM_MIN, DET_TBD_CONFIRM_MAX);
+        k.tbd_frames = clampi(k.tbd_frames, DET_TBD_FRAMES_MIN, DET_TBD_FRAMES_MAX);
         k.tbd_decay = clampd(k.tbd_decay, DET_TBD_DECAY_MIN, DET_TBD_DECAY_MAX);
         k.tbd_max_miss = clampi(k.tbd_max_miss, DET_TBD_MAXMISS_MIN, DET_TBD_MAXMISS_MAX);
         k.motion = k.motion ? 1 : 0;

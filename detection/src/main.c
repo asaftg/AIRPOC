@@ -72,11 +72,11 @@ static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
     fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d max_dets=%d nms=%.2f "
-            "temporal=%d tbd_lo=%.2f tbd_confirm=%.2f tbd_decay=%.2f tbd_max_miss=%d "
+            "temporal=%d tbd_frames=%d tbd_lo=%.2f tbd_decay=%.2f tbd_max_miss=%d "
             "| motion=%d (frozen) mot_k=%.1f mot_window_s=%.1f mot_persist=%d "
             "mot_down=%d mot_method=%d mot_baseline_s=%.2f\n",
             k->conf, k->cadence, k->max_dets, k->nms,
-            k->temporal, k->tbd_lo, k->tbd_confirm, k->tbd_decay, k->tbd_max_miss,
+            k->temporal, k->tbd_frames, k->tbd_lo, k->tbd_decay, k->tbd_max_miss,
             k->motion, k->mot_k, k->mot_window_s, k->mot_persist, k->mot_down,
             k->mot_method, k->mot_baseline_s);
 }
@@ -300,7 +300,7 @@ int main(int argc, char **argv)
                 }
                 double tick_fps = det_fps > 0.5 ? det_fps
                                                 : (fps > 1.0 ? fps / cadence : 60.0 / cadence);
-                TbdParams tp = { .lo = k.tbd_lo, .hi = k.conf, .confirm = k.tbd_confirm,
+                TbdParams tp = { .lo = k.tbd_lo, .hi = k.conf, .frames = k.tbd_frames,
                                  .miss_penalty = k.tbd_decay, .max_miss = k.tbd_max_miss,
                                  .fps = tick_fps };
                 int no = tbd_process(tbd, tin, ni, &tp, tout, MAX_DETS_CAP);

@@ -57,30 +57,29 @@ emitted **even when empty** so it doubles as a heartbeat. Schema:
   `drone` arrives with the trained model. With no engine loaded, `model` is
   `"none"` and `dets` is empty.
 
-### Temporal-integration fields (model boxes, when `temporal=1`)
+### Evidence-collection fields (model boxes, when `temporal=1`)
 Additive and optional — a consumer that ignores them behaves exactly as before.
 
 | field | meaning |
 |---|---|
 | `age` | ticks since this evidence was first seen |
-| `hits` | observations accumulated (`hits < age` ⇒ the target was missed on some ticks) |
-| `disp` | **net displacement**: straight-line pixels from where the track was first seen. Compare against distance travelled: a target that translates grows `disp` steadily, while something oscillating in place (wind-blown foliage) keeps `disp` near zero however long it lives. **A hint, not a measurement** — see the caveat below. |
-| `tbd` | present and `1` **only** when the box was promoted by accumulated evidence, i.e. its raw per-frame confidence was *below* `conf`. Absent means the box cleared `conf` on its own. |
+| `hits` | frames it was actually seen in (`hits < age` ⇒ it was missed on some ticks) |
+| `disp` | how far it has moved in a **straight line**, in pixels, since first seen. Something crossing the scene grows this steadily; something jiggling in place (a wind-blown branch) keeps it near zero however long it lives. **A hint, not a measurement** — see the caveat below. |
+| `tbd` | present and `1` **only** when the box exists because of collected evidence, i.e. the model alone scored it *below* `conf`. Absent means it cleared `conf` on its own. |
 
-**Guarantee: one box per target per tick.** Strong and integrated detections are
-emitted through a single per-track path, so a target is never reported twice (once as
-"strong" and once as "integrated"). Boxes are always what the model actually produced
-on that tick — the detector never emits a predicted or coasted box.
+**Guarantee: one box per target per tick.** Confident and collected detections leave through
+a single path, so a target is never reported twice. Boxes are always what the model actually
+produced on that tick — the detector never reports a guessed or coasted position.
 
-**Latency:** a `"tbd":1` box waited `age` ticks for its evidence (~0.13–0.40 s at the
-default cadence). A box **without** `tbd` waited nothing — it is byte-identical to what
-a non-temporal build would have emitted on that tick.
+**Delay:** a `"tbd":1` box waited `age` ticks while its evidence built up (~0.1–0.4 s at the
+default settings). A box **without** `tbd` waited nothing — it is identical to what a build
+with collection switched off would have reported on that tick.
 
-**Caveat on `age`/`hits`/`disp`:** the cross-frame link exists only to accumulate
-evidence. It is a gated nearest-neighbour with a constant-velocity predict, and it
-*will* hop between nearby targets. The box stays correct; the three counters may belong
-to a hopped identity. **Real identity is the EO tracker's job** — and the tracker should
-consume these fields rather than recompute them.
+**Caveat on `age`/`hits`/`disp`:** linking a candidate from one frame to the next is a simple
+nearest-match, there only to decide whether evidence is still building for the same thing. It
+*can* jump to a neighbouring target. The box stays correct; those three counters may have
+picked up a neighbour's history. **Real identity is the EO tracker's job** — and the tracker
+should read these fields rather than recompute them.
 
 ## Output — `GET /stats`
 ```json
@@ -91,30 +90,30 @@ consume these fields rather than recompute them.
  "temporal":{"active":true,"tracks":14,"promoted":6},
  "motion":{"active":false,"frozen":true,"fps":0.0,"stab_fail_pct":0.0,"candidates":0},
  "knobs":{"conf":0.50,"cadence":4,"max_dets":128,"nms":0.45,
-          "temporal":1,"tbd_lo":0.15,"tbd_confirm":3.00,"tbd_decay":0.70,
+          "temporal":1,"tbd_frames":6,"tbd_lo":0.15,"tbd_decay":0.70,
           "tbd_max_miss":3,
           "motion":0,"mot_k":6.0,"mot_window_s":15.0,"mot_persist":3,"mot_down":1,
           "mot_method":1,"mot_baseline_s":2.0}}
 ```
-`det.active` is true once an engine is loaded (`-e`). `temporal.tracks` is the number of
-candidate tracks currently carrying evidence (including ones not yet promoted, so it is
-normally larger than the emitted box count); `temporal.promoted` is how many boxes on the
-last tick were `"tbd":1`. `motion.active` is true once the frozen motion thread has
+`det.active` is true once an engine is loaded (`-e`). `temporal.tracks` is how many faint candidates are
+currently being followed (including ones not yet reported, so it is normally larger than the
+box count); `temporal.promoted` is how many boxes on the last tick were `"tbd":1`. `motion.active` is true once the frozen motion thread has
 processed a frame; `motion.frozen` is always `true` (see the module README).
 
 ## Output — `GET /ctl?k=v&...`
 Sets live knobs; absent params keep their value; all clamped server-side;
 replies `ok`.
 
-**Only `conf` and `temporal` are operator-facing.** Everything else is bench tuning
-reached with `curl` and must not be surfaced in the operator GUI.
+**Four settings are operator-facing** and belong in the GUI: `conf`, `temporal`,
+`tbd_frames` and `tbd_lo`. Everything else is bench tuning reached with `curl` and must
+not be surfaced in the operator GUI.
 
 | knob | range | meaning |
 |---|---|---|
-| `conf` | 0.05–0.95 | the **strong tier**: a detection at/above this is emitted immediately on its own, unchanged and with no added latency |
-| `temporal` | 0/1 | **track-before-detect on/off** (the "EO temporal" button). On: the model is run at `tbd_lo` and weak candidates are integrated before the emit decision. Off: the model runs at `conf` and its boxes are emitted directly. |
-| `tbd_lo` | 0.02–0.50 | candidate floor — the confidence the model is actually run at, and the reference against which evidence is weighed (a hit exactly here scores only the small fixed presence term). **This is the sensitivity knob**: raise it to accept fewer things. Clamped to never exceed `conf`. |
-| `tbd_confirm` | 0.5–10 | score needed to promote a weak track. **This is a LATENCY knob, not a sensitivity one** — a target the model keeps seeing crosses any threshold eventually (measured: 2.0 → 8.0 changed the box count by 13%, while `tbd_lo` 0.15 → 0.25 cut it 24%). |
+| `conf` | 0.05–0.95 | **report immediately above this**: a detection at or above this confidence is reported on its own, unchanged, with no added delay |
+| `temporal` | 0/1 | **frame-to-frame evidence collection on/off** (the "EO temporal" button). On: the model is run at `tbd_lo` and faint candidates are followed across frames before anything is reported. Off: the model runs at `conf` and its boxes are reported directly. |
+| `tbd_frames` | 2–20 | **how many frames of evidence** a target sitting exactly at `tbd_lo` needs before it is reported. Something the model scores higher is reported proportionally sooner. This decides *how long a faint target waits*, not what is accepted — anything the model keeps seeing is reported eventually regardless (measured: 2 → 20 changed the box count by 19%). |
+| `tbd_lo` | 0.02–0.50 | **how faint a hint is worth collecting** — the confidence the model is actually run at, and the level at which a hint counts as no better than clutter. **This is the setting that decides how much is accepted** (measured: 0.15 → 0.30 halved the box count). Clamped to never exceed `conf`. ⚠️ People sit at the bottom of the stock model's range: raising this above ~0.25 deleted *every* person on the day clip. Re-measure with the trained model. |
 | `tbd_decay` | 0.1–3.0 | score subtracted per tick with no observation. This is what kills flicker: a candidate seen every third tick nets negative and dies. |
 | `tbd_max_miss` | 1–10 | consecutive missed ticks before a candidate track is abandoned |
 | `cadence` | 1–8 | run the detector every Nth captured frame (1 = every frame; 4 ≈ 15 Hz at 60 fps capture). The integrator's association gate scales with the resulting tick rate automatically. |

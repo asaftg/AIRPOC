@@ -103,6 +103,10 @@ int tbd_process(TbdCtx *c, const TbdIn *in, int n_in, const TbdParams *p,
 
     const double fps     = p->fps > 0.5 ? p->fps : 15.0;
     const double lo_ref  = logit_c(p->lo);
+    /* The knob is "frames of evidence at the floor"; the score target follows from it,
+     * because a hit at exactly `lo` contributes exactly DET_TBD_PRESENCE. A stronger
+     * hit contributes more, so it confirms in proportionally fewer frames. */
+    const double confirm = (p->frames > 0 ? p->frames : 1) * DET_TBD_PRESENCE;
     /* Between ticks a target moves; the slower the tick rate the further. Scale the
      * gate by the tick interval relative to the nominal 15/s, and add the box size so
      * a large near object isn't gated tighter than its own extent. */
@@ -173,7 +177,7 @@ int tbd_process(TbdCtx *c, const TbdIn *in, int n_in, const TbdParams *p,
         if (!t->used || !t->hit_now) continue;          /* never emit a coasted box */
 
         int strong    = (t->last_conf >= (float)p->hi);
-        int promoted  = (t->S >= p->confirm);
+        int promoted  = (t->S >= confirm);
         if (!strong && !promoted) continue;
 
         TbdOut *o = &out[nout++];
@@ -196,8 +200,8 @@ int tbd_process(TbdCtx *c, const TbdIn *in, int n_in, const TbdParams *p,
              * Scaled over the whole remaining score range, not a multiple of
              * `confirm`, so a long-lived weak track saturates slowly and never
              * claims certainty it hasn't earned. */
-            double span = DET_TBD_S_MAX - p->confirm;
-            double frac = span > 0 ? clamp01((t->S - p->confirm) / span) : 1.0;
+            double span = DET_TBD_S_MAX - confirm;
+            double frac = span > 0 ? clamp01((t->S - confirm) / span) : 1.0;
             o->conf = (float)(p->hi + (0.99 - p->hi) * frac);
             o->tbd  = 1;
         }

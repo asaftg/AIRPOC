@@ -75,7 +75,11 @@ typedef struct {
 typedef struct {
     double lo;            /* candidate floor: model runs at this, evidence reference */
     double hi;            /* immediate-emit confidence (the normal `conf` knob) */
-    double confirm;       /* score at which a weak track is promoted */
+    int    frames;        /* frames of evidence needed to report a target sitting exactly
+                           * at `lo`. This is the operator-facing form of the promotion
+                           * threshold: internally the score target is
+                           * frames * DET_TBD_PRESENCE, so a target the model scores
+                           * ABOVE lo confirms proportionally sooner. */
     double miss_penalty;  /* score subtracted per tick with no observation */
     int    max_miss;      /* consecutive missed ticks before a track is dropped */
     double fps;           /* detector TICK rate, used to scale the association gate */
