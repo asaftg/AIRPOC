@@ -192,6 +192,9 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 #devclose{background:transparent;border:0;color:var(--muted);font-size:16px;cursor:pointer}
 .sec{font-size:10px;letter-spacing:1.5px;color:var(--dim);margin:14px 0 8px}
 .srow{display:grid;grid-template-columns:64px 1fr 60px;align-items:center;gap:8px;padding:5px 0}
+/* display:grid above beats the hidden attribute's UA display:none, so a gated row (one hidden
+ * until its daemon reports the knob) rendered anyway. Restore it explicitly. */
+.srow[hidden]{display:none}
 .srow label{font-size:11px;color:var(--muted);letter-spacing:1px}
 .srow input[type=range]{-webkit-appearance:none;width:100%;height:16px;background:var(--bd2);border-radius:3px;outline:none}
 .srow input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;

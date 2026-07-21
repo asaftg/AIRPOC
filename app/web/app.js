@@ -1659,6 +1659,10 @@
     dtTouch = Date.now();
     ctl("det_max_dets=" + MAX_DETS);
     ctl("det_motion=1"); var mb = document.querySelector('#mot-btns [data-mot="1"]'); if (mb) setSeg("mot-btns", mb);
+    /* TEMPORAL defaults ON (operator request) — finding far/weak targets is the point of the
+     * seeker, and the cost is latency on those faint targets only. Harmless on a detector build
+     * that doesn't know the knob yet: it just ignores it. */
+    ctl("det_temporal=1"); var tb = document.querySelector('#tmp-btns [data-tmp="1"]'); if (tb) setSeg("tmp-btns", tb);
     rcTouch = Date.now();
     ctl("radar_fov=60");   $("rd-fov").value = 60;   $("rv-fov").textContent = "60°";
     ctl("radar_elmax=20"); $("rd-elmax").value = 20; $("rv-elmax").textContent = "20°";
