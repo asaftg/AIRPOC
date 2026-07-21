@@ -25,9 +25,9 @@ full-screen (see `app.css` media query).
   **radar→EO overlay** (all radar targets projected onto the video — see below), detector
   boxes, zoom **±** (bottom-left), the control cluster (bottom-centre). Scrim shows
   **EO · NOT CONNECTED** / **NO VIDEO RECORDED** (replay of a radar-only session).
-- **Target list (right, top):** class-less radar targets straight from the frame (the
-  daemon's tracker confirms/coasts, so rows don’t flicker); tap a
-  row → MANUAL-select it.
+- **Target list (right, top):** **both sensors** — EO tracks (class · confidence · az/el) and
+  radar targets (range · speed), source-tagged, no dedup until fusion exists. Tap a row to
+  select it — see *Target list* and *Tracking* below.
 - **Radar scope (right, bottom):** see *Radar rendering* below. Expand button flips it to
   the big view (EO drops to a PIP).
 - **Control cluster (over EO):** `LIGHT` (fire) · `TRACK` (auto/man) · `REC` (record).
@@ -98,8 +98,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   metric range-grid rings + **constant amber reference rings at 100 m and 250 m** on every
   zoom.
 - Doppler colours (red inbound / blue outbound / static), per-point SNR alpha, dashed FOV
-  wedge + boresight. No engaged/LOCK styling anywhere (scope, list, EO) until the tracking
-  phase exists — a track wears ONE colour everywhere. **No GUI-side persistence** — the daemon is
+  wedge + boresight. A track wears ONE colour everywhere (scope, list, EO); the **engaged**
+  target is the exception — it takes green LOCK, since the tracking phase is live now and the
+  held target must be unmistakable. **No GUI-side persistence** — the daemon is
   a temporal tracker (stable tids, M-of-N confirm, coast, park-hold), so target boxes and
   list rows are drawn verbatim from the frame; a GUI hold would double-persist.
 
@@ -107,8 +108,9 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 - Every radar target is projected onto the video from its az/el (radar frame) through the
   camera's current hfov/vfov, drawn as a **broken halo ring** (four arcs, dark halo underlay) in its track
   colour, labelled `R#tid range` (size-coding by the tracker's sx/sy was tried and pulsed —
-  those estimates jitter; position is stable). No engaged/LOCK styling on the EO — all
-  marks are equal until the tracking phase exists. Off-frame targets are not drawn.
+  those estimates jitter; position is stable). Off-frame targets are not drawn. (These are the
+  RADAR's marks on the video — distinct from the EO tracker's boxes above, and not fused with
+  them; a radar ring and an EO box on the same object are two sensors, not one target.)
 - **DEV → RADAR ON EO**: OVERLAY on/off + **AZ TRIM / EL TRIM** (±10°, 0.1° steps) + **SAVE** —
   the radar↔camera mount alignment. No rig calibration is stored anywhere else yet (the radar
   module's README leaves radar↔EO calibration to the consumer), so defaults are 0 — nudge until
@@ -128,15 +130,33 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 - Works in replay too (video + radar both come from the recording), and the trim knobs
   stay usable there — aligning against a recording is the calibration workflow.
 
-## EO detector overlay (console-owned render; detection module owns the boxes)
-- Live boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:8094`).
-  `dets[]` = classified model boxes (solid; **human** cyan, **vehicle** amber, label =
-  class + confidence). `movers[]` = motion-only "something moving" (dashed titanium,
-  `MOT ·age` tag above the box — that tag is how you tell a motion-head box from a model
-  box, which reads class+confidence instead). One box per target — the daemon dedups
-  model-vs-motion overlap.
+## EO boxes — the TRACKER is the source (console-owned render)
+The **EO tracker** (`eotrack/`, `trackerd` on `:8095`) is the single source of the EO boxes the
+operator sees, over **SSE `/trk/stream`**. It turns the detector's per-frame boxes into targets
+with identity — stable `tid`, `state` (`tent`/`conf`/`coast`), smoothed position, and the
+engaged lock. The raw detector boxes are a **DEV overlay only** (below); drawing both is the
+double display this module removes.
+
+- **Colour = class, always** (human cyan, vehicle amber) — never *how* the target was found.
+  A far human promoted from faint evidence is still a human; overloading colour with provenance
+  made it read as a different kind of thing.
+- **Shape = state.** A confirmed/held track draws as **corner brackets** (the four corners, no
+  connecting edges) instead of a plain rectangle or the seeker cross. The **engaged** track adds
+  green **LOCK**. A coasting track is dashed.
+- A small **`t`** at the box's top-right marks a target the detector only reported because it
+  integrated faint evidence across frames (`tbd`) — a quiet provenance hint, not a recolour.
+- **Tracker down → `EO TRACK · NOT CONNECTED`** on the overlay. It never silently falls back to
+  raw detections: an empty frame would read as "nothing out there".
+- **RAW DET** (DEV → DETECTOR) draws the detector's own boxes dim + dashed underneath,
+  **off by default**. Diagnostic only — it's how you tell a tracker fault from a detector fault.
 - `px` boxes are in the **native** 1440×1088 frame; the console maps them through the
-  current zoom crop + the letterboxed video rect, clipped to the video content.
+  current zoom crop + the letterboxed video rect, clipped to the video content. Tapping an EO
+  box hit-tests the boxes **as drawn** (smallest box containing the tap wins) rather than
+  re-deriving the projection, which would drift out of sync with the render.
+
+### Raw detector overlay (DEV only)
+Boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:8094`).
+`dets[]` = classified model boxes, `movers[]` = motion-only. This is the tracker's **input**.
 - **MARK style** (DEV → DETECTOR → MARK): `BOX` = full bounding boxes; `SEEKER` = a heavy
   gapped cross over a dark halo on the target centroid, short labels (`V62` / `H55` /
   `M·7`). All labels get the dark halo in both modes — display-only, persisted per browser.
@@ -146,10 +166,40 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
 - Heads-up: until the trained mono model lands, the stock COCO placeholder emits false
   "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
 
-## Tracking — AUTO / MANUAL (cluster `TRACK`)
-- **AUTO** engages the most important target (fused → nearer → confidence; radar-only for
-  now). **MANUAL** engages the target you tap (EO, mapped via the feed's FOV, or the
-  scope). `engage` flows to `/ctl`/`/stats` for the gimbal.
+## Target list — BOTH sensors, one list
+Radar targets and EO tracks are **independent objects with separate id spaces**. There is no
+fusion yet, so the console does **not** dedup them — guessing at that association would merge
+two different things. Each row is keyed `"<src>:<tid>"` so ids can't collide, and each sensor
+shows what it actually knows:
+
+| Row | Shows | Doesn't have |
+|---|---|---|
+| **EO** (tracker) | class · confidence · azimuth/elevation | range — a camera has none |
+| **RDR** (radar) | range · speed · azimuth | class — the radar emits class-less boxes |
+| **FUS** | *stub* — fusion will carry range **and** class on one row | — |
+
+Persistence is **each daemon's own**: both run temporal trackers with stable ids, confirm and
+coast, so rows come straight off the wire. A GUI-side hold would double-persist what the
+daemons already did. Ranking pins the **engaged** target first (so the held target can never
+scroll off), then fused, then confirmed EO tracks, then the rest by confidence/nearness.
+
+## Tracking — selection and mode (cluster `TRACK`)
+Selecting a target **declares the tracking state**; each module then acts in its own domain off
+that declaration (the tracker runs its lock loop; radar FOV, zoom and illuminator remain their
+owners' jobs — the console does not reach into them).
+
+- **Three surfaces, one result:** tap a **target-list row**, an **EO box**, or a **radar scope
+  circle**. All three select the same way and switch to MANUAL first, so a pick is never
+  swallowed by AUTO.
+- **Two wires go out:** `trk_engage=<tid>` for an **EO** pick (the only thing the EO tracker can
+  lock; `-1` clears), and the console's own `engage=<tid>` for **any** pick — so a radar-only
+  selection is real published state rather than a dead click.
+- **Mode/engaged are reflected FROM the tracker's wire, never from the button press.** If the
+  tracker refuses or drops a lock, the console shows that truth.
+- **MANUAL is the default.** AUTO takes row #1 of the merged list, but that ranking is
+  **provisional** — nothing self-selects unless you switch to AUTO.
+- An EO engagement is the tracker's to keep or drop; a **radar** dropout only clears a
+  **radar** engagement.
 
 ## Illuminator — AUTO / MANUAL (DEV → ILLUMINATOR, `LIGHT` fires)
 The **EO module owns the illuminator**; the console forwards to its `/ctl`. AUTO fits the
@@ -286,6 +336,9 @@ rows (`knobs.temporal`).
 | `/det/stream` | **SSE** push of each detector message (~15/s); the live det-box path |
 | `/det` | the detector's latest message verbatim (one-shot poll) |
 | `/dstats` | the detector's `/stats` (health + `knobs`) for slider init |
+| `/trk/stream` | **SSE** push of each EO-tracker message; **the** EO-box path (tracks with identity + engaged lock) |
+| `/trk` | the tracker's latest message verbatim (one-shot poll) |
+| `/tstats` | the tracker's `/stats` (health + `knobs`) |
 | `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
 | `/uiprefs` | operator UI prefs stored **on the Jetson** (`/var/lib/airpoc/ui-prefs.json`): plain `GET` reads, `?set=<url-encoded json>` writes. Currently the radar→EO AZ/EL trim — rig-level state that must not depend on which browser or which IP the console was opened from. Deliberately schema-less: the console stores the blob the page hands it, so new prefs need no C change |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |

@@ -10,12 +10,21 @@ domain; the app proxies and overlays.
  EO module (eo/pipeline, :8091)  ──MJPEG /stream + /stats + /ctl──┐
    owns camera + ISP + AE + zoom + illuminator                    │  proxy + forward
  radar module (daemon, :8092)  ──SSE /stream + /stats + /ctl──────┤  + overlays
-   owns board + clustering + tracking                             ▼
+   owns board + clustering + tracking                             │
+ detection (detectiond, :8094) ──SSE /stream────────────────────┐ │
+   owns the model + per-frame boxes                             │ │
+                                    (input)                     ▼ │
+ EO tracker (trackerd, :8095) ────SSE /stream + /stats + /ctl─────┤
+   owns EO identity: stable ids, confirm/coast, engaged lock      ▼
                                               app/  (this module) ──► operator browser
-                                              relay video + radar, forward controls,
+                                              relay video + radar + tracks, forward controls,
                                               draw the radar scope + EO overlays +
-                                              tracking selection + styling
+                                              target list + tracking selection
 ```
+
+**The EO tracker is the single source of the EO boxes** the operator sees. The detector feeds
+the tracker, and its raw boxes are a DEV overlay only — drawing both was a double display of
+the same targets.
 
 Lane discipline: the app **couples to each module's served contract only**, never its
 internals. When the EO agent optimized `eo/pipeline`, this app didn't break, because it
@@ -25,9 +34,10 @@ CONNECTED** — there is no synthetic data.
 | File | Role |
 |---|---|
 | `main.c` | supervisor: start the EO + radar consumers + the GUI server, wait for a signal |
-| `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar`+`/radar/stream` · `/det`+`/det/stream` · `/stats`/`/rstats`/`/dstats` · `/ctl` (routed) · `/rec/<path>` (recorder pass-through) |
+| `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar`+`/radar/stream` · `/det`+`/det/stream` · `/trk`+`/trk/stream` · `/stats`/`/rstats`/`/dstats`/`/tstats` · `/ctl` (routed) · `/rec/<path>` (recorder pass-through) |
 | `eo_client.c` / `eo_client.h` | consumes the EO module's MJPEG feed (latest JPEG + its `/stats`); forwards controls to its `/ctl` |
 | `radar_client.c` / `radar.h` | consumes the radar daemon's SSE (latest frame + tracks); re-broadcasts each frame to the browser (`/radar/stream`); forwards the ten controls to its `/ctl` |
+| `trk_client.c` / `trk.h` | consumes the EO tracker's SSE (:8095) — the operator's EO boxes + engaged lock; re-broadcasts on `/trk/stream`; forwards `trk_*` knobs to its `/ctl` |
 | `det_client.c` / `det.h` | consumes the detection daemon's SSE (`:8094`, per-frame boxes + `/stats`); re-broadcasts to the browser (`/det/stream`); forwards `det_*` controls |
 | `web/` | front-end (`index.html`, `app.css`, `app.js`) — embedded at build |
 | `gen_assets.sh` | `xxd`-embeds `web/` into `web_assets.h` (single self-contained binary) |
@@ -38,9 +48,10 @@ CONNECTED** — there is no synthetic data.
 ```bash
 sudo apt-get install -y xxd            # self-contained C — no libjpeg/eo-pipeline/illuminator link
 cd app && make
-./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094
+./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094 -t 127.0.0.1:8095
 ```
-`-e` EO feed · `-r` radar daemon · `-c` recorder daemon (`/rec/*` pass-through) · `-d` detector.
+`-e` EO feed · `-r` radar daemon · `-c` recorder daemon (`/rec/*` pass-through) · `-d` detector ·
+`-t` EO tracker.
 Open **`http://<jetson>:8080/`** (or `192.168.55.1:8080` over USB-C). In practice the
 [launcher](launcher/README.md) (`:8088`) starts/stops the whole stack for you.
 
@@ -64,13 +75,24 @@ daemon with `-s` (simulation) in front of an operator.
   trim is the radar↔camera mount alignment, so it's stored **on the Jetson** (`/uiprefs` →
   `/var/lib/airpoc/ui-prefs.json`), not per browser: same value from every device and every
   address (USB / WiFi / field AP), surviving a reboot. Changes are session-only until SAVE.
-- **Tracking** — `TRACK` AUTO/MANUAL: AUTO engages the most important target (fused →
-  nearer → confidence); MANUAL engages the tapped target. Green LOCK; `engage` flows to
-  `/ctl`/`/stats` for the future gimbal.
-- **EO detector** — proxies the detection daemon (`:8094`, `/det/stream`); draws classified
-  boxes (human cyan / vehicle amber) + motion-only movers (dashed). MARK box/seeker style.
-  Console load defaults: **MOTION on, MAX DETS 25**. Full knob set in DEV incl. MOT MEM
-  (`mot_window_s`, 1–60 s).
+- **EO tracker** — proxies `trackerd` (`:8095`, `/trk/stream`) and draws its `tracks[]` as
+  **the** EO boxes: class colour, corner brackets once a track is confirmed/held, green **LOCK**
+  on the engaged one, a small `t` where the detector integrated faint evidence. Tracker down →
+  **EO TRACK · NOT CONNECTED**; it never falls back to raw detections.
+- **Target list** — **both sensors, no dedup** (there is no fusion yet, and guessing at the
+  association would merge two different things). EO rows carry class · confidence · az/el;
+  radar rows carry range · speed. Rows are keyed `"<src>:<tid>"` so the two id spaces can't
+  collide, with a `FUS` row type stubbed for fusion. The engaged target is pinned first.
+- **Tracking / selection** — tap a **list row**, an **EO box**, or a **radar scope circle**:
+  all three declare the tracking state. An EO pick sends `trk_engage=<tid>` (the only thing the
+  EO tracker can lock); any pick also publishes the console's own `engage=<tid>`, so a
+  radar-only pick is real state rather than a dead click. `mode`/`engaged` are **reflected from
+  the tracker's wire, never the button press**. **MANUAL is the default** — AUTO takes row #1 of
+  the merged list, but that ranking is provisional.
+- **EO detector** — proxies the detection daemon (`:8094`, `/det/stream`). Now the **tracker's
+  input**, so its raw boxes are a **DEV overlay (RAW DET, off by default)** — useful to tell a
+  tracker fault from a detector fault. Console load defaults: **MOTION off, MAX DETS 25,
+  TEMPORAL on**. Full knob set in DEV incl. MOT MEM and the temporal controls.
 - **Illuminator** — the EO feed owns it; the console's LIGHT/PWR/BEAM + AUTO-fit forward
   to the EO feed's `/ctl`.
 - **Record / replay** — `REC` records via the recorder daemon (`:8093`, proxied at `/rec/*`);
@@ -87,7 +109,7 @@ daemon with `-s` (simulation) in front of an operator.
 - **System readouts** — Jetson junction temp, CPU % (+ core-equivalents), GPU %.
 - Also live: **day = bright white theme**, DEV panel, link chip (signal/type/Mb/s/fps),
   phone-responsive layout.
-- Reserved (need their modules/bus): BRG/RNG, BATT/ALT, EO detection box, gimbal pointing.
+- Reserved (need their modules/bus): BRG/RNG, BATT/ALT, gimbal pointing.
 
 > Pitfall: the operator laptop is on the drone's link with **no internet** — the page
 > loads **no external fonts or icons**. Keep `web/` fully self-contained.

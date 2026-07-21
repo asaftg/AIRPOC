@@ -56,7 +56,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Jetson platform | — | ✅ bring-up done | [`jetson/`](../jetson/README.md) |
 | EO camera | — | ✅ 60 fps mono, AE, production C pipeline + preview | [`eo/`](../eo/README.md) |
 | NIR illuminator | — | ✅ controller HW-verified + controls in the reviewer; camera-sync pending | [`illuminator/`](../illuminator/README.md) |
-| Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector SSE, forwards controls, adds the radar scope + EO/detector overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + tracking + day/night. No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
+| Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector/**tracker** SSE, forwards controls, adds the radar scope + EO overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + day/night. The **EO tracker is the single source of the EO boxes** (raw detector boxes = dev overlay); the **target list carries both sensors** (EO: class/confidence/angles · radar: range/speed), source-tagged and **not fused**; tapping a list row, EO box or radar circle **declares the tracked target** (MANUAL default). No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
 | Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Firmware `agv3` (2026-07-17): comb gate fixed and observing, awaiting calibration before arming. Open: 450-pt/frame chip budget ~420 full (half spent on threshold-level junk past 200 m) caps far range, tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) that **collects faint evidence over several frames before reporting**, so a distant target the model only half-recognises still gets reported, while confident ones go out immediately and unchanged. One box per target, feeding the console. Stock off-the-shelf placeholder model (FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. **Running on the Jetson and measured live** (adds no compute: 22.73 ms vs 22.68 ms with it off). CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
@@ -245,10 +245,19 @@ drops a track for holding still, so parked vehicles and standing/prone people st
 **Live on the Jetson 2026-07-21**, running beside the detector, both feeds connected, holding
 vehicle tracks with stable IDs. **Open work:** the crossing-vehicle **ID-swap** (when a car
 passes a parked car their ids can trade) — the fix is velocity-gated association plus a longer
-park-hold, to be tuned on the live feed rather than a recorded clip. Not yet done by the
-console: switching its box overlay from `/det` to `/trk`, and wiring the launcher to start
-`trackerd` after `detectiond`. Detail: [`eotrack/README.md`](../eotrack/README.md) ·
-[`eotrack/docs/INTEGRATION.md`](../eotrack/docs/INTEGRATION.md).
+park-hold, to be tuned on the live feed rather than a recorded clip.
+
+**Console side (done, not yet run end-to-end):** the console consumes `/trk/stream` and draws
+its `tracks[]` as **the** EO boxes — the raw detector boxes moved to a dev overlay, which is
+what removes the double display. The **target list carries both sensors**, source-tagged and
+**not fused**: EO rows show class/confidence/angles, radar rows show range/speed, keyed
+`"<src>:<tid>"` so the two id spaces cannot collide. Selecting a target on **any** surface
+(list row, EO box, radar circle) declares the tracked state — an EO pick sends
+`trk_engage=<tid>`, and `mode`/`engaged` are reflected from the tracker's wire rather than the
+button press. The launcher starts `trackerd` after `detectiond` and stops it with the stack.
+Detail: [`eotrack/README.md`](../eotrack/README.md) ·
+[`eotrack/docs/INTEGRATION.md`](../eotrack/docs/INTEGRATION.md) ·
+[`app/docs/GUI.md`](../app/docs/GUI.md).
 
 ### Fusion / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
@@ -279,10 +288,10 @@ adding that evidence — not relabelling it.
 | Jetson platform | Bench-verified | JetPack 6.2.2 / L4T r36.4.4 on P3767-0005, MAXN_SUPER, fan pinned | `install_clocks.sh` / `install_fan.sh` install from `/tmp`, so the documented bring-up does not run on a fresh box; NVMe and WiFi-AP provisioning are missing from the bring-up sequence |
 | EO camera | Bench-verified | Y10 mono 1440×1088 @ 60 fps on-device with working exposure/gain | the night denoiser cannot engage at defaults — its gate needs applied gain ≥ 200 while the AE cap is 120; no measured low-light image-quality figures |
 | NIR illuminator | Bench-verified | on/off, power, beam FOV and status confirmed against the real device 2026-07-01 | no udev rule, so commands go to the first USB-serial adapter to enumerate; commands are fire-and-forget with no state readback |
-| Operator console (`app/`) | Bench-verified | runs on the Jetson, relays EO + radar + detector + recorder, record/replay exercised on-device | the deploy procedure is written down nowhere in the repo, including the `web_assets.h` regeneration trap |
+| Operator console (`app/`) | Bench-verified | runs on the Jetson, relays EO + radar + detector + recorder, record/replay exercised on-device | the deploy procedure is written down nowhere in the repo, including the `web_assets.h` regeneration trap. **The tracker integration (EO boxes from `/trk/stream`, merged target list, selection→engage) is built and compiles but has NOT been run against a live `trackerd`** — the box went unreachable before the end-to-end check |
 | Radar | Field-verified | V2 field-verified 2026-07-11; human ~300 m night / ~200 m day, vehicles radial ~424 m ([`radar/`](../radar/README.md)) | which firmware image is on the chip is recorded inconsistently across the radar docs; angle accuracy for EO-blind standalone guidance |
 | Record & replay | Bench-verified | 30-min full-rate soak at ~125 MB/s with 0 drops; kill-9 recovery to CRC-valid prefixes | that soak has no session id, date or log to point at, and no reproduction procedure |
 | Detection | Bench-verified | on-device latency FP16 ~20.8 ms / INT8 ~14.7 ms; verified correct on one known image | **no accuracy figures at all** — no mAP, no false-positive rate, no DRI ranges; and a trained 3-class model does not currently load |
 | Training data (`datasets/`) | **Unrun** | the non-GPU spine unit-tested against a synthetic fixture | every stage that touches real data has never executed |
-| EO tracker (`eotrack/`) | Bench-verified | live on the Jetson beside the detector 2026-07-21, both feeds connected, holding vehicle tracks with stable IDs; offline replay + lock/ego unit tests pass (`make check`) | no field run yet; the crossing-vehicle ID-swap is unfixed (velocity-gated association pending); console overlay + launcher wiring not done |
+| EO tracker (`eotrack/`) | Bench-verified | live on the Jetson beside the detector 2026-07-21, both feeds connected, holding vehicle tracks with stable IDs; offline replay + lock/ego unit tests pass (`make check`) | no field run yet; the crossing-vehicle ID-swap is unfixed (velocity-gated association pending). Console overlay + launcher wiring now DONE (tracker is the console's EO box source; `trackerd` in START/STOP) but not yet run end-to-end on the box |
 | Fusion / gimbal / guidance | Not started | — | — |
