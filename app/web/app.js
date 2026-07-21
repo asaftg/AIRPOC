@@ -467,7 +467,14 @@
      * is green and keeps an off-frame edge arrow; the rest clip at the video edge.
      * Works in replay too — both video and radar come from the recording there. */
     var es = lastStats.eo || {};
-    var eoHfov = es.hfov || 0, eoVfov = es.vfov || (eoHfov * 0.75);   /* 4:3 fallback */
+    /* hfov/vfov describe the ZOOMED (cropped) frame that was streamed. A NATIVE replay shows the
+     * FULL uncropped frame, which spans zoom x that angle — so scale the FOV up there, exactly as
+     * the detector block below uses z=1 for native. Without this every mark projected far outside
+     * the frame, hit the |fx|>1 cull, and the whole radar overlay silently vanished in native
+     * replay while the detector boxes kept working. */
+    var fovZ = (replaying && replayVideoSrc === "native") ? (es.zoom || 1) : 1;
+    var eoHfov = (es.hfov || 0) * fovZ;
+    var eoVfov = (es.vfov ? es.vfov : (es.hfov || 0) * 0.75) * fovZ;
     if (radarOv.on && eoHfov && lastRadar && lastRadar.connected) {
       var sw2 = es.dw || 4, sh2 = es.dh || 3, ar2 = sw2 / sh2, vw2, vh2, vx2, vy2;
       if (w / h > ar2) { vh2 = h; vw2 = h * ar2; vx2 = (w - vw2) / 2; vy2 = 0; }
