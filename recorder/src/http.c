@@ -263,12 +263,26 @@ static void handle_export(int fd, const char *qs)
                       g_rec.root, excl, xform, list);
     if (cn <= 0 || (size_t)cn >= cmdcap) { free(cmd); send_json(fd, 500, "{\"err\":\"cmd\"}"); return; }
 
-    char h[256];
+    /* Name the DOWNLOAD after the recording too, not just the folder inside it.
+     * Chrome gives this header priority over the console's download attribute, so
+     * without it the operator gets "airpoc-display-1session (7).tar" containing a
+     * correctly named folder -- the confusing half being the one they see first.
+     * Multi-session and named=0 keep the generic form (nothing sensible to call a
+     * bundle of five, and tooling keys off the old shape).
+     * Injection-safe by construction: chosen[] is whitelisted to [A-Za-z0-9 ._-],
+     * so it cannot carry a quote or a CRLF into the header. */
+    char fname[EXPORT_NAME_MAX + 32];
+    if (named && nsid == 1) snprintf(fname, sizeof fname, "%s.tar", chosen[0]);
+    else snprintf(fname, sizeof fname, "airpoc-%s-%dsession%s.tar",
+                  tier, nsid, nsid == 1 ? "" : "s");
+
+    char h[EXPORT_NAME_MAX + 256];
     int hn = snprintf(h, sizeof h,
         "HTTP/1.0 200 OK\r\nContent-Type: application/x-tar\r\n"
-        "Content-Disposition: attachment; filename=\"airpoc-%s-%dsession%s.tar\"\r\n"
+        "Content-Disposition: attachment; filename=\"%s\"\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        tier, nsid, nsid == 1 ? "" : "s");
+        fname);
+    if (hn <= 0 || hn >= (int)sizeof h) { free(cmd); return; }
     if (write(fd, h, (size_t)hn) != hn) { free(cmd); return; }
 
     FILE *p = popen(cmd, "r");
