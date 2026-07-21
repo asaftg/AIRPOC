@@ -488,6 +488,20 @@ static const char *TRK_KEYS[] = { "engage", "lock", "gate_base", "confirm", "coa
 static const char *RADAR_KEYS[] = { "eps", "minpts", "speed", "snrmin", "fov", "elmax", "doppler",
                                     "confirm", "coast", "park" };
 
+/* Find "<key>" in a query string only where it starts a parameter — i.e. at the very start or
+ * immediately after '&'. Returns a pointer to the value, or NULL. Without this, a bare key is
+ * matched inside a namespaced one ("engage=" inside "trk_engage="). */
+static char *qparam(const char *q, const char *key)
+{
+    size_t kl = strlen(key);
+    const char *p = q;
+    while ((p = strstr(p, key))) {
+        if (p == q || p[-1] == '&') return (char *)p + kl;
+        p += kl;
+    }
+    return NULL;
+}
+
 static void handle_ctl(const char *req)
 {
     const char *qs = strstr(req, "/ctl?");
@@ -498,8 +512,12 @@ static void handle_ctl(const char *req)
     query[i] = 0;
 
     char *p;
-    if ((p = strstr(query, "track=")))  { g_track_man = (strncmp(p + 6, "man", 3) == 0); return; }
-    if ((p = strstr(query, "engage="))) { g_engage = atoi(p + 7); return; }
+    /* Match a parameter only at a TOKEN BOUNDARY (start of query, or just after '&'). A plain
+     * strstr for "engage=" also matches inside "trk_engage=", so the local handler swallowed the
+     * tracker's engage and returned — the operator's target pick reached the console and died
+     * there. Namespaced keys must never be captured by their unprefixed cousins. */
+    if ((p = qparam(query, "track=")))  { g_track_man = (strncmp(p, "man", 3) == 0); return; }
+    if ((p = qparam(query, "engage="))) { g_engage = atoi(p); return; }
 
     /* tracker controls: strip the trk_ namespace and forward to trackerd's /ctl. The EO
      * tracker owns identity + the engaged lock loop, so an EO pick arrives here as
