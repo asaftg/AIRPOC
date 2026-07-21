@@ -121,7 +121,12 @@ void library_json(const char *qs, char *buf, size_t len)
          * encode for this sid is in progress; "none" = no current mp4 (missing or a
          * superseded older encode — the operator converts it). Mirrors native_mp4
          * in /replay/state. */
-        int hd_st = transcode_current_state(sids[i], NULL);
+        /* "is there an HD movie to watch?" -- NOT "was it built by the current
+         * encoder". mp4_current() demands ver == TRANSCODE_VER, so every bump of
+         * the encoder silently reported 26 perfectly playable files (up to 390 MB)
+         * as hd:"none". A stale file plays fine and is upgraded in the background
+         * by the serve handler; the console keys its HD badge off this field. */
+        int hd_st = transcode_status(sids[i], NULL);
         const char *hd = hd_st == 2 ? "ready" : hd_st == 1 ? "building" : "none";
 
         o += (size_t)snprintf(buf + o, len - o,

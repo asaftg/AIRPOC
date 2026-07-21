@@ -112,7 +112,11 @@ int transcode_mp4_path(const char *sid, char *path, size_t plen)
 {
     if (strlen(sid) != SID_LEN || strchr(sid, '/')) return -1;
     snprintf(path, plen, "%s/%s/native.mp4", g_rec.root, sid);
-    return access(path, F_OK) == 0 ? 0 : -1;
+    /* Must be a real, playable file -- a zero-byte leftover is not "HD ready".
+     * (Builds go to native.mp4.<pid>.tmp and are renamed in, so a .tmp can
+     * never be seen under this name.) */
+    struct stat st;
+    return (stat(path, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) ? 0 : -1;
 }
 
 int transcode_status(const char *sid, int *pct)
