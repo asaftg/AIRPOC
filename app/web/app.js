@@ -1320,6 +1320,20 @@
    * HTTP the browser can't pick a folder, so it lands in Downloads (enable the browser's
    * "ask where to save each file" to choose one). tier=display keeps it reasonable; raw
    * native is excluded — it is huge, and offload is for sharing/review. */
+  /* Name the download after the RECORDING, not its session id — "260709_1201 highway.tar" tells
+   * you what it is; "airpoc-20260709T120117Z.tar" doesn't. Sanitised for Windows/macOS/Linux
+   * filenames (\ / : * ? " < > | are all illegal somewhere) and length-capped.
+   * NOTE: the FOLDER INSIDE the tar is still the session id — that's built by the recorder's
+   * exporter, not here; asking them to name it after the recording. */
+  function offloadFilename(sids, n) {
+    if (n === 1 && sids !== "all" && sids.indexOf(",") < 0) {
+      var s = libSessions.filter(function (x) { return x.sid === sids; })[0];
+      var nm = (s && libTitle(s.name)) || sids;
+      nm = nm.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-").replace(/\s+/g, " ").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 90);
+      return (nm || sids) + ".tar";
+    }
+    return "airpoc-" + n + "-sessions.tar";
+  }
   function offloadTar(sids, n) {
     if (!confirm("Offload " + n + " session(s) as a .tar (display video + radar + data)?\n\nIt saves to your Downloads. To CHOOSE A FOLDER each time, turn on Chrome ▸ Settings ▸ Downloads ▸ \"Ask where to save each file before downloading\" — then a Save-As window opens for every offload.\n\nA large session takes up to a minute to build before the download starts.")) return;
     var a = document.createElement("a");
@@ -1327,7 +1341,7 @@
     /* download attr => the browser SAVES A FILE (shows it in the download bar) instead of
      * NAVIGATING the tab to the URL — which is what dumped you on the ERR_EMPTY_RESPONSE page
      * when the build was slow. With "ask where to save" on, this same click opens the folder picker. */
-    a.download = "airpoc-" + ((n === 1 && sids !== "all" && sids.indexOf(",") < 0) ? sids : n + "-sessions") + ".tar";
+    a.download = offloadFilename(sids, n);
     document.body.appendChild(a); a.click(); a.remove();
     toast("Offload started — building the .tar; it'll land in your downloads (large sessions take ~a minute).", "ok", 6000);
   }
