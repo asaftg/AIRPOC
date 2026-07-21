@@ -993,22 +993,28 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, function (c) { return { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]; }); }
   function fmtClock(ms) { var s = Math.floor(Math.max(0, ms || 0) / 1000); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
   function fmtClockT(ms) { var s = Math.max(0, ms || 0) / 1000; return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2) + "." + Math.floor((s * 10) % 10); }
-  /* Default recording name: compact YYMMDD_HHMM, no "REC" prefix (every entry in the library is
-   * a recording — the word cost ~4 characters of the visible name and told you nothing). Short
-   * enough that whatever the operator types after it survives on the card. */
+  /* Default recording name: compact YYMMDD_HHMMSS, no "REC" prefix (every entry in the library is
+   * a recording — the word cost ~4 characters of the visible name and told you nothing).
+   * SECONDS matter: at minute resolution two recordings started in the same minute got identical
+   * names, and the recorder names each folder inside an offload .tar after the name — so two
+   * same-named recordings extracted into one directory would silently overwrite each other with
+   * no error. Seconds makes the default unique by construction. */
   function localStamp() {
     var d = new Date(), p = function (n) { return ("0" + n).slice(-2); };
-    return p(d.getFullYear() % 100) + p(d.getMonth() + 1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes());
+    return p(d.getFullYear() % 100) + p(d.getMonth() + 1) + p(d.getDate()) + "_"
+         + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
   }
   /* Older recordings were saved as "REC 2026-07-18 21:24 radar empty scene". Render those in the
    * new compact form so the actual description is readable, without rewriting stored names.
    * Anything that doesn't match is shown untouched — the name is operator-editable free text. */
   function libTitle(name) {
     if (!name) return "";
-    var m = /^\s*(?:REC\s+)?(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})\s*(.*)$/.exec(name);
+    /* seconds optional: old stored names are hh:mm, but a name may carry hh:mm:ss — without the
+     * optional group the ":ss" fell through into the description as literal ":35 …". */
+    var m = /^\s*(?:REC\s+)?(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?\s*(.*)$/.exec(name);
     if (!m) return name.replace(/^\s*REC\s+/, "");
-    var rest = m[6].trim();
-    return m[1].slice(2) + m[2] + m[3] + "_" + m[4] + m[5] + (rest ? " " + rest : "");
+    var rest = m[7].trim();
+    return m[1].slice(2) + m[2] + m[3] + "_" + m[4] + m[5] + (m[6] || "") + (rest ? " " + rest : "");
   }
   function debounce(fn, ms) { var t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
   function rctl(q) { fetch("/rec/replay/ctl?" + q).catch(function () {}); }
