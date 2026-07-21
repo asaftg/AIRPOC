@@ -891,11 +891,23 @@
     targets(radar).forEach(function (t) {
       if (!inFov(t.x, t.y)) return;                 /* hide targets outside the FOV */
       var tc = W2C(t.x, t.y), col = scopeCol(tcolor(t.tid)), rr = 10 * dpr;
+      var spd = Math.hypot(t.vx, t.vy);
+      /* LOCKED → the same corner-bracket mark used on the video, so the held target reads
+       * identically wherever the operator happens to be looking. Velocity vector stays: on the
+       * scope that is the reason you locked it. */
+      if (engagedKey === ("rad:" + t.tid)) {
+        var lb = 13 * dpr, on = css("--on");
+        cornerBrackets(ctx, tc[0] - lb, tc[1] - lb, tc[0] + lb, tc[1] + lb, on, dpr);
+        ctx.strokeStyle = on; ctx.fillStyle = on; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.arc(tc[0], tc[1], 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
+        var vl = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vl[0], vl[1]); ctx.stroke();
+        ctx.fillText("LOCK  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] + lb + 3 * dpr, tc[1] - lb - 3 * dpr);
+        return;
+      }
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5 * dpr;
       ctx.beginPath(); ctx.arc(tc[0], tc[1], rr, 0, 2 * Math.PI); ctx.stroke();
       ctx.beginPath(); ctx.arc(tc[0], tc[1], 1.6 * dpr, 0, 2 * Math.PI); ctx.fill();
       var vc = W2C(t.x + t.vx, t.y + t.vy); ctx.beginPath(); ctx.moveTo(tc[0], tc[1]); ctx.lineTo(vc[0], vc[1]); ctx.stroke();
-      var spd = Math.hypot(t.vx, t.vy);
       ctx.fillText("R#" + t.tid + "  " + spd.toFixed(1) + " m/s · " + t.rng.toFixed(0) + " m", tc[0] + rr + 3 * dpr, tc[1] - rr - 3 * dpr);
     });
   }
