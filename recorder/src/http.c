@@ -198,12 +198,16 @@ static void handle_export(int fd, const char *qs)
 
     char list[8192]; size_t lo = 0; int nsid = 0;
     char xform[24576]; size_t xo = 0;
-    static char mf[24576];                      /* manifest scratch; big, keep off the stack */
+    /* Manifest scratch. Heap, NOT static: /export is served from a thread per
+     * connection, so a shared buffer lets two concurrent exports read each
+     * other's manifest and stamp the wrong name on a folder. */
+    char *mf = malloc(24576);
+    if (!mf) { send_json(fd, 500, "{\"err\":\"oom\"}"); return; }
     char chosen[256][EXPORT_NAME_MAX];
     char work[8192]; snprintf(work, sizeof work, "%s", sids);
     char *save = NULL;
     for (char *tok = strtok_r(work, ",", &save); tok && nsid < 256; tok = strtok_r(NULL, ",", &save)) {
-        if (!valid_sid(tok)) { send_json(fd, 400, "{\"err\":\"bad sid\"}"); return; }
+        if (!valid_sid(tok)) { free(mf); send_json(fd, 400, "{\"err\":\"bad sid\"}"); return; }
         char probe[700];
         snprintf(probe, sizeof probe, "%s/%s/manifest.json", g_rec.root, tok);
         if (access(probe, F_OK) != 0) continue;
@@ -215,7 +219,7 @@ static void handle_export(int fd, const char *qs)
         if (named) {
             char dir[640], nm[NAME_MAX_LEN * 2] = "";
             snprintf(dir, sizeof dir, "%s/%s", g_rec.root, tok);
-            if (store_manifest_read(dir, mf, sizeof mf) >= 0)
+            if (store_manifest_read(dir, mf, 24576) >= 0)
                 store_manifest_field(mf, "name", nm, sizeof nm);
             export_safe_name(nm, safe, sizeof safe);
             /* A name that itself looks like a sid would let one --transform cascade
@@ -240,6 +244,7 @@ static void handle_export(int fd, const char *qs)
         snprintf(chosen[nsid], EXPORT_NAME_MAX, "%s", safe[0] ? safe : tok);
         nsid++;
     }
+    free(mf);
     if (!nsid) { send_json(fd, 404, "{\"err\":\"no such sessions\"}"); return; }
 
     /* meta = no video · display = the playable movie + metadata (no raw channels)
