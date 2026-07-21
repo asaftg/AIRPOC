@@ -224,8 +224,26 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   rolling-background window: how far back the static scene is modelled; shorter adapts faster,
   longer forgets a stopped object slower). All except MARK forwarded namespaced `det_<key>=` →
   detection daemon `/ctl`; readback from `/dstats` (values under `knobs`). The console pushes
-  **MOTION on** and **MAX DETS 25** as load defaults — MAX DETS has no slider, it's a fixed
-  value the operator doesn't change.
+  **MOTION on**, **MAX DETS 25** and **TEMPORAL on** as load defaults — MAX DETS has no slider,
+  it's a fixed value the operator doesn't change.
+- **DETECTOR → temporal integration** — three controls that let the detector collect faint
+  evidence across frames so far/weak targets get reported at all (costing ~0.2–0.4 s of extra
+  delay **on those faint targets only**): **TEMPORAL** on/off (`temporal`, default **on**),
+  **INTEGRATE** (`tbd_frames`, 2–20, default 6 — how long a faint target must build evidence
+  before it's reported: *waiting time*, not how much is reported), and **FAINT FLOOR**
+  (`tbd_lo`, 0.02–0.50, default 0.15 — how weak a hint is worth collecting; **this** is the knob
+  that decides how much gets reported). Detections carrying `tbd:1` were promoted by integration
+  and are drawn with a **violet outline + `·t`** — they carry the extra latency, so they're the
+  ones to sanity-check first.
+  - > **Pitfall:** FAINT FLOOR turns red and warns above **0.25**, and that number is tied to the
+    > *stock placeholder model*, where people sit at the very bottom of the confidence range —
+    > raising it thins clutter but **deletes people**. When the trained model lands the table must
+    > be re-measured and this threshold moved; the detection module's README names that obligation.
+    > A warning at a level that no longer means anything is worse than no warning.
+  - > **Pitfall:** the detector's `/ctl` answers `ok`/200 to *any* request and silently ignores
+    > parameters it doesn't know, so a 200 proves the forward arrived — never that the running
+    > build honours it. `/stats` → `knobs.<name>` is the only real presence test. That's why these
+    > rows stay hidden until `knobs.temporal` appears (see *Gated controls* below).
 - **RADAR** — the daemon's **ten** tracker knobs: FOV ± (azimuth gate), **EL ±** (`elmax` —
   elevation gate, 5–90°, the antenna's physical elevation beam edge; 90 = off), MIN SNR,
   MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
@@ -239,6 +257,24 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   they are asserted again. Nothing else on the radar is touched.)
 - **SYSTEM** — Jetson **TEMP** (junction/`tj` thermal zone), **CPU %** (aggregate, plus
   core-equivalents `x/N`), **GPU %** (Tegra load). RETURN TO CONTROL → the launcher (`:8088`).
+
+## Gated controls (don't ship a button the daemon can't honour)
+A control for a knob the *running* daemon doesn't implement is worse than no control: it looks
+operable, changes nothing, and there's no feedback saying so. So a control for a not-yet-shipped
+knob stays hidden until the daemon proves it exists, then appears by itself — no console change
+needed at flash time. Used today by **DISPLAY 30/60** (`eo.disp_fps`) and the three **temporal**
+rows (`knobs.temporal`).
+
+- **Test presence with `/stats`, never with a `/ctl` 200.** Every feed's `/ctl` returns `ok`/200
+  and silently ignores parameters it doesn't know, so a 200 proves only that the forward arrived.
+  The knob appearing in `/stats` is the only real evidence.
+- **Forward the key regardless.** It's harmless on an old build (ignored) and means the control
+  works the instant the daemon ships it.
+> **Pitfall:** `.srow` sets `display:grid`, which **overrides the `hidden` attribute's**
+> `display:none` — a row gated with `hidden` alone renders anyway. `.srow[hidden]{display:none}`
+> restores it. This silently exposed the temporal rows on a detector build that had none of those
+> knobs; the symptom is a visible row with *no* option highlighted, because the readback that
+> selects one only runs when the knob exists.
 
 ## HTTP endpoints (the app)
 | Path | Purpose |
