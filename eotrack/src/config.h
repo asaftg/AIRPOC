@@ -1,0 +1,116 @@
+/* config.h - geometry and runtime knob bounds for trackerd (the EO tracker).
+ *
+ * The EO tracker consumes the detector's per-frame boxes (:8094) and turns them
+ * into persistent, smoothed, coasted tracks with stable IDs. It works in PIXELS
+ * internally (that is what the detector reports and what the lock loop needs) and
+ * converts to angles only when it emits, using the same IFOV the detector uses.
+ *
+ * The camera geometry is fixed by the sensor; the IFOV depends on the lens and is
+ * a RUNTIME value (--ifov / --focal) - the default is the documented CommonLands
+ * CIL122 (f=12 mm) on the IMX296 (3.45 um pixel): 287.5 urad/px.
+ */
+#ifndef TRK_CONFIG_H
+#define TRK_CONFIG_H
+
+#define TRK_VERSION       "0.1.0"
+
+/* EO frame geometry - identical to the detector's config.h (the boxes are in this
+ * frame). Y10 delivered as 16-bit LE words on airpoc.eo_y10. */
+#define EO_IMG_W          1440
+#define EO_IMG_H          1088
+#define EO_BYTES_PER_PX   2
+#define EO_FRAME_BYTES    ((size_t)EO_IMG_W * EO_IMG_H * EO_BYTES_PER_PX)
+#define EO_TAP_NAME       "airpoc.eo_y10"
+
+#define EO_PIXEL_UM_DEFAULT   3.45
+#define EO_FOCAL_MM_DEFAULT   12.0
+#define EO_IFOV_RAD_DEFAULT   (EO_PIXEL_UM_DEFAULT * 1e-6 / (EO_FOCAL_MM_DEFAULT * 1e-3))
+
+/* Image-centre pixel coordinates for the pixel->angle mapping (az +right, el +up). */
+#define EO_CX             ((EO_IMG_W - 1) / 2.0)   /* 719.5 */
+#define EO_CY             ((EO_IMG_H - 1) / 2.0)   /* 543.5 */
+
+/* EO tap meta[] layout (published by eo/pipeline/libeo.c; mirrored from the
+ * detector's config.h so the lock loop can read exposure/gain/illuminator per
+ * frame and freeze its template across an AE/illuminator step). */
+#define EO_META_V4L2SEQ    0
+#define EO_META_EXPLINES   1
+#define EO_META_GAIN       2
+#define EO_META_VMAX       3
+#define EO_META_ILLUM      4
+#define EO_META_DROPS      5
+#define EO_ILLUM_ON(x)       ((x) & 0x1u)
+#define EO_ILLUM_PRESENT(x)  (((x) >> 1) & 0x1u)
+#define EO_ILLUM_POWER(x)    (((x) >> 8) & 0xFFu)
+#define EO_ILLUM_FOV10(x)    (((x) >> 16) & 0xFFFFu)
+
+/* --- Ports / names --- */
+#define TRK_PORT_DEFAULT   8095
+#define TRK_TAP_NAME       "airpoc.trk_wire"      /* recorder tap (byte-verbatim /stream) */
+#define TRK_TAP_SLOTS      16
+#define TRK_TAP_BYTES      (128 * 1024)
+#define DET_STREAM_HOST    "127.0.0.1"
+#define DET_STREAM_PORT    8094                   /* detector SSE we consume */
+
+/* --- Fixed internals (algorithm, not tuning) --- */
+#define TRK_MAX_TRACKS     128     /* live tracks carried at once (fixed pool) */
+#define TRK_MAX_IN         512     /* detections accepted per tick (== detector MAXDETS) */
+#define TRK_HIST           64      /* per-track position-history ring (for clutter test) */
+
+/* --- Knob defaults + clamp bounds (echoed in /stats, set via /ctl) --- */
+
+/* Association gate: a detection matches a track if within (base + 0.5*boxdim) px,
+ * scaled by (ref_fps / measured_fps) so the same real speed tracks at any rate.
+ * MEASURED tick rate, not configured (audit lesson). */
+#define TRK_GATE_BASE_DEFAULT   28.0
+#define TRK_GATE_BASE_MIN       4.0
+#define TRK_GATE_BASE_MAX       200.0
+#define TRK_GATE_REF_FPS        15.0
+
+/* Confirmation: a track emits once its evidence score crosses `confirm`. Model
+ * detections add ~1.0 (a strong direct det) down to a floor for weak/tbd boxes;
+ * a tbd-promoted box arrives already integrated upstream and counts fully. This
+ * is TRACK HYGIENE (stop one-tick junk getting an ID), NOT a second sensitivity
+ * layer - TBD confidence-raising lives in the detector. */
+#define TRK_CONFIRM_DEFAULT     3.0
+#define TRK_CONFIRM_MIN         1.0
+#define TRK_CONFIRM_MAX         12.0
+#define TRK_SCORE_MISS          1.0     /* score removed per missed tick */
+#define TRK_SCORE_MAX           12.0    /* ceiling so a stale track still dies in bounded time */
+#define TRK_SCORE_FLOOR        (-3.0)   /* score at which a tentative track is abandoned */
+
+/* Coast: a confirmed track survives this many seconds of misses on held rates
+ * before it dies. Derived to frames from the MEASURED tick rate at runtime. */
+#define TRK_COAST_S_DEFAULT     1.0
+#define TRK_COAST_S_MIN         0.2
+#define TRK_COAST_S_MAX         5.0
+
+/* Clutter (translate-vs-oscillate) horizon: over this many seconds a track's net
+ * displacement is compared to its path length. An oscillator (foliage) has a long
+ * path and ~zero net -> emission-latched OFF. NO size/speed/displacement KILL gate
+ * (standing rule: that deletes far/small/slow targets). Radial approachers net ~0
+ * too and are saved by looming (size growth) or a classified model hit. */
+#define TRK_CLUTTER_S_DEFAULT   2.0
+#define TRK_CLUTTER_S_MIN       0.5
+#define TRK_CLUTTER_S_MAX       6.0
+#define TRK_TRANS_RATIO         0.30    /* net/path below this = oscillator (latch off) */
+#define TRK_LOOM_RATE           0.15    /* rel size growth (1/s) that rescues a radial mover */
+
+/* Filter smoothing (alpha-beta constants for the OUTPUT wire state; the internal
+ * association state uses a tighter EMA). Output state never feeds back into assoc. */
+#define TRK_OUT_ALPHA           0.5     /* position blend */
+#define TRK_OUT_BETA            0.2     /* velocity blend */
+
+/* Class is a SOFT association penalty, not a hard gate (a COCO placeholder flickers
+ * human<->vehicle at range; a hard gate fragments tracks). Hard class stickiness
+ * applies only to the engaged track. */
+#define TRK_CLASS_PENALTY       0.4     /* fraction of gate charged for a class mismatch */
+
+/* Engaged-target 60 fps lock loop (lock.c). Multi-scale NCC on a small ROI of the
+ * raw Y10 frame; template rebuilt only from class-consistent NN detections. */
+#define TRK_LOCK_ROI_MAX        192     /* max ROI side (px); template is <= this */
+#define TRK_LOCK_SEARCH         24      /* +/- search radius around the prediction (px) */
+#define TRK_LOCK_SCORE_MIN      0.35    /* NCC below this = "hold", not a fresh anchor */
+#define TRK_LOCK_META_HOLD      4       /* frames to freeze template after an AE/illum step */
+
+#endif /* TRK_CONFIG_H */

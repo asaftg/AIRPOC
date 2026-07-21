@@ -1,0 +1,5 @@
+trackerd
+tools/replay
+tools/lock_test
+tools/fake_det
+*.o

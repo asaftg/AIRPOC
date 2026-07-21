@@ -1,0 +1,17 @@
+[Unit]
+Description=AIRPOC EO tracker daemon (:8095)
+After=network.target
+# The detector is the tracker's input, but it is not a hard dependency: trackerd
+# reconnects to :8094 on its own and reports connected:false meanwhile, so it must
+# not fail to start just because the detector is briefly down.
+Wants=network.target
+
+[Service]
+Type=simple
+User=asaftg
+ExecStart=/home/asaftg/AIRPOC/eotrack/trackerd -p 8095 -d 127.0.0.1:8094
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
