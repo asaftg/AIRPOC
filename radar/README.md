@@ -115,6 +115,40 @@ that moved then stopped is held (parked-car persistence). Ids are stable across
 frames. Longer-horizon fusion (person/vehicle labelling, cross-sensor) remains
 downstream.
 
+### Two detectors, one box per object
+
+`targets` come from **two** detectors, merged by `fuse.c` into a single list:
+
+- **cluster** (`cluster.c`) decides per frame and confirms over a few frames. It
+  owns anything close or bright, and it is **authoritative** — fuse copies its
+  targets through untouched and can only ever *add* to them, never remove.
+- **slowdet** (`slowdet.c`) chains faint, intermittent echoes across frames. It
+  holds what cluster cannot confirm: a 300 m car returning a single point in only
+  ~60 % of frames, the night walker past 240 m. Its ids start at **1000**, so the
+  source of any box is visible on the wire. See
+  [`docs/SLOWDET.md`](docs/SLOWDET.md).
+
+A slowdet target is emitted only where no cluster target already sits at the same
+range and bearing, so an object is never boxed twice.
+
+### Elevation is conditioned; range and azimuth are not
+
+The array is spread sideways but barely stacked vertically, so **azimuth is
+accurate (~0.6°) and elevation is not (~3.5°, 11° at the tail)**. Range and
+azimuth are published at full frame rate, untouched. The elevation of **every**
+published target — both detectors — passes through a trailing median whose window
+scales with range (0.6 s at 200 m, clamped 0.3–1.2 s), a 20 °/s physical rate
+limit, and a 1.5° cap on the vertical box half-height. Measured effect on the
+published elevation: frame-to-frame jump **4.06° → 0.17°**.
+
+This removes **jitter, not bias** — a repeatable offset is calibration's job. The
+window is range-scaled rather than simply long because this is an aerial seeker:
+a target's elevation angle changes at roughly (vertical speed ÷ range), so a
+multi-second average would smear a real manoeuvring target worst in the terminal
+phase. Rationale and the measurements behind every constant are in
+[`docs/SLOWDET.md`](docs/SLOWDET.md); the approaches that failed are in
+[`docs/TRIAL_AND_ERROR.md`](docs/TRIAL_AND_ERROR.md).
+
 ## Build & run (on the Jetson, native aarch64)
 
 ```
