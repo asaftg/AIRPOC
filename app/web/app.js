@@ -1251,10 +1251,12 @@
     var cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "lib-cb"; cb.checked = !!libSel[s.sid];
     cb.onclick = function (e) { e.stopPropagation(); libSel[s.sid] = cb.checked; card.classList.toggle("sel", cb.checked); updateDelBtn(); };
     card.appendChild(cb);
+    /* built here, appended INTO the card body at the end (see below) — as an absolutely
+     * positioned corner chip it overlapped the tags row. */
+    var free = null;
     if (s.bytes && s.bytes.native > 0) {
-      var free = document.createElement("button"); free.className = "lib-free"; free.textContent = "FREE — drop raw";
+      free = document.createElement("button"); free.className = "lib-free"; free.textContent = "FREE — drop raw";
       free.onclick = function (e) { e.stopPropagation(); if (confirm("Drop the raw native channel? Display + radar are kept.")) fetch("/rec/ctl?purge_native=" + encodeURIComponent(s.sid)).then(loadLibrary); };
-      card.appendChild(free);
     }
     var body = document.createElement("div"); body.className = "lib-cardbody";
     var nrow = document.createElement("div"); nrow.className = "lib-namerow";
@@ -1279,7 +1281,9 @@
       + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
       + '<div class="lib-cardtags">' + (s.tags || []).map(function (t) { return '<span class="tagchip">' + esc(t) + "</span>"; }).join("") + "</div>"
       + (s.note ? '<div class="lib-note">' + esc(s.note) + "</div>" : "");
-    body.appendChild(rest); card.appendChild(body);
+    body.appendChild(rest);
+    if (free) body.appendChild(free);   /* in-flow, below the tags — can't overlap them */
+    card.appendChild(body);
     card.onclick = function () { openReplay(s); };
     return card;
   }
