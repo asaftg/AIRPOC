@@ -295,7 +295,14 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
  * clipped the poster away entirely — cards rendered as a name strip with the date sliced in half.
  * (It survived at 50% browser zoom, which is why it looked layout-dependent.) A real height in px
  * always contributes to row sizing, so the poster can never be clipped. */
-.lib-postwrap{height:240px;width:100%;overflow:hidden;position:relative;background:var(--canvas)}
+/* BOTH parts are required, and each alone fails:
+ *  - height:240px  : a real height (aspect-ratio contributes ~no intrinsic height to grid row
+ *                    sizing, so the row sized to the text and overflow:hidden ate the poster).
+ *  - flex:0 0 auto : .lib-card is a flex COLUMN, so the default flex-shrink:1 lets this box be
+ *                    squeezed back to ~0 no matter what height it has — which also drags the
+ *                    grid row down with it, so it collapses again.
+ * With only one of the two the card renders as a name strip with the date sliced in half. */
+.lib-postwrap{flex:0 0 auto;height:240px;width:100%;overflow:hidden;position:relative;background:var(--canvas)}
 .lib-poster{display:block;width:100%;height:100%;object-fit:cover}
 .lib-poster.radaronly{display:flex;align-items:center;justify-content:center;color:var(--cyan);font-size:11px;letter-spacing:1px;
   background:radial-gradient(circle at 50% 100%,rgba(0,212,255,.08),transparent 70%)}
