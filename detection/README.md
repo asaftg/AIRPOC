@@ -130,6 +130,29 @@ change. The frame-to-frame collection itself costs nothing measurable next to in
 **Delay it adds:** only to faint targets, and only until they are confirmed — about
 0.1–0.4 s at the default settings. Confident targets wait nothing at all.
 
+### What collecting evidence costs
+Switching it on does **not** change the GPU work at all — same network, same input, same
+frame rate. The threshold only decides which of the network's outputs are worth looking at
+afterwards, and that step runs on the CPU. Measured on the day clip:
+
+| | per detector tick |
+|---|---|
+| candidates the CPU must sift | **32 → 282** (8.7×) |
+| pairwise overlap checks when merging boxes | **531 → ~40,000** (75×) |
+| the evidence collection itself | **4 µs** (max 14 µs) |
+
+The collection step is free — it only ever sees boxes that survived merging (~20 a tick).
+**The cost is in the box-merging stage**, which compares every surviving candidate against
+every other of the same class, so 8.7× the candidates is roughly 75× that comparison work.
+In context, the step before it scans all 32,130 candidate positions × 80 classes on every
+tick regardless of any threshold, and that fixed scan is the larger number — so the expected
+net effect is a modest rise in CPU decode time, not a 75× rise in anything end-to-end.
+
+> **Pitfall: this has not been measured on the Jetson** — the figures above are candidate
+> counts and host timings. `/stats` → `det.e2e_ms` covers the whole path including the merge,
+> so **compare it with `temporal=0` and `temporal=1` on the first live run** and record the
+> real number here. If it turns out to matter, `max_dets` caps the merge input directly.
+
 ## Build & run (on the Jetson)
 ```
 cd detection && make            # C + CUDA (nvcc) + C++ (TensorRT, OpenCV)
@@ -184,7 +207,16 @@ detection/
   tools/ build_engine.cpp     ONNX -> TRT engine (FP16 / INT8)
          capture_calib.c      grab Y10 frames from the tap for INT8 calibration
          infer_probe.cpp      run a still image through the real path (model sanity check)
+  tests/ test_temporal.c      unit tests for the evidence-collection decisions
 ```
+
+`make test` builds and runs the unit tests. They need no GPU, no TensorRT, no OpenCV
+and no board, so they run on any dev machine and can gate a change before it reaches
+the Jetson. They enforce the guarantees this README and the I/O contract state —
+a confident detection is passed through untouched on its first frame, one target
+never yields two boxes, a faint one is reported after exactly the configured number
+of frames, flicker never gets reported, no box is ever reported for a frame with no
+detection, and straight-line movement grows `disp` while movement in place does not.
 Models + engines live under `/data/detection/` and are never committed.
 
 ## Verify the model (bench sanity check)
