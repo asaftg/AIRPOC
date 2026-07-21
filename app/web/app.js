@@ -301,7 +301,10 @@
     /* max_dets has no control — fixed at MAX_DETS below, pushed on load. */
     { key: "mot_k",        fmt: function (v) { return v.toFixed(1); } },
     { key: "mot_persist",  fmt: function (v) { return String(v | 0); } },
-    { key: "mot_window_s", fmt: function (v) { return v.toFixed(1) + " s"; } }
+    { key: "mot_window_s", fmt: function (v) { return v.toFixed(1) + " s"; } },
+    /* temporal integration — the rows stay hidden until the detector reports these knobs */
+    { key: "tbd_frames",   fmt: function (v) { return String(v | 0); } },
+    { key: "tbd_lo",       fmt: function (v) { return v.toFixed(2); } }
   ];
   var dtTouch = 0;
   DETC.forEach(function (c) {
@@ -309,6 +312,19 @@
   });
   document.querySelectorAll("#mot-btns [data-mot]").forEach(function (b) {
     b.onclick = function () { dtTouch = Date.now(); ctl("det_motion=" + b.dataset.mot); setSeg("mot-btns", b); };
+  });
+  document.querySelectorAll("#tmp-btns [data-tmp]").forEach(function (b) {
+    b.onclick = function () { dtTouch = Date.now(); ctl("det_temporal=" + b.dataset.tmp); setSeg("tmp-btns", b); };
+  });
+  /* FAINT FLOOR above ~0.25 is the dangerous direction: with the current model people sit at the
+   * very bottom of its confidence range, so raising it thins clutter but deletes people entirely.
+   * Warn once per crossing rather than nagging on every step of the drag. */
+  var tbdWarned = false;
+  $("dt-tbd_lo").addEventListener("input", function () {
+    var v = parseFloat(this.value);
+    $("dv-tbd_lo").classList.toggle("warn", v > 0.25);
+    if (v > 0.25 && !tbdWarned) { tbdWarned = true; toast("Above 0.25 the detector starts dropping people, not just clutter.", "err", 5000); }
+    if (v <= 0.25) tbdWarned = false;
   });
   function pollDstats() {
     if (replaying) return;
@@ -325,6 +341,13 @@
         if (typeof v === "number" && document.activeElement !== $("dt-" + c.key)) { $("dt-" + c.key).value = v; $("dv-" + c.key).textContent = c.fmt(v); }
       });
       if (typeof k.motion === "number") { var mb = document.querySelector('#mot-btns [data-mot="' + k.motion + '"]'); if (mb) setSeg("mot-btns", mb); }
+      /* Temporal integration: no buttons for a control the running detector can't honour — the
+       * rows appear by themselves once it reports the knobs (same gate as DISPLAY 30/60). */
+      if (typeof k.temporal === "number") {
+        document.querySelectorAll(".tbd-row").forEach(function (r) { r.hidden = false; });
+        var tb = document.querySelector('#tmp-btns [data-tmp="' + k.temporal + '"]'); if (tb) setSeg("tmp-btns", tb);
+        $("dv-tbd_lo").classList.toggle("warn", (k.tbd_lo || 0) > 0.25);
+      }
     }).catch(function () {});
   }
 
@@ -551,10 +574,15 @@
       };
       var seek = (detStyle === "seeker");
       (lastDet.dets || []).forEach(function (d) {
-        var col = d.cls === "human" ? "#40c4ff" : amber;
+        /* tbd:1 = the detector only reported this because it collected faint evidence over
+         * several frames, rather than seeing it outright. Distinct violet outline + a "·t" tag
+         * so the operator can tell an integrated call from a confident one at a glance — those
+         * carry ~0.2-0.4 s more latency and are the ones to sanity-check. */
+        var tbd = d.tbd === 1 || d.tbd === true;
+        var col = tbd ? "#c08cff" : (d.cls === "human" ? "#40c4ff" : amber);
         var cl = String(d.cls || "?");                   /* coerce: a non-string cls (e.g. a numeric id) would throw on [0]/.toUpperCase() and blank every overlay */
-        var lab = seek ? cl[0].toUpperCase() + Math.round((d.conf || 0) * 100)
-                       : cl.toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
+        var lab = seek ? cl[0].toUpperCase() + Math.round((d.conf || 0) * 100) + (tbd ? "·t" : "")
+                       : cl.toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%" + (tbd ? " ·t" : "");
         drawDet(d, false, col, lab);
       });
       /* motion-head marks: ALWAYS a gentle thin dashed box (never the heavy cross), so a
