@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <ctype.h>
 
 void urldecode(char *s)
 {
@@ -139,6 +140,27 @@ static int valid_sid(const char *s)
     return 1;
 }
 
+#define EXPORT_NAME_MAX 72        /* folder name cap inside the tar */
+
+/* Turn a recording's display name into a safe top-level folder name for the tar.
+ *
+ * Deliberately a drop-anything-unexpected whitelist, not an escaper: this value
+ * is interpolated into BOTH a shell command and a tar --transform sed expression,
+ * so quotes/backslashes are shell-active and '&' and the delimiter are sed-active.
+ * Nothing outside [A-Za-z0-9 ._-] survives. Empty result -> caller uses the sid. */
+static void export_safe_name(const char *in, char *out, size_t outlen)
+{
+    size_t o = 0;
+    for (const char *p = in; *p && o + 1 < outlen; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (!(isalnum(c) || c == ' ' || c == '.' || c == '_' || c == '-')) continue;
+        if (o == 0 && (c == '-' || c == '.' || c == ' ')) continue;   /* no leading -, . or space */
+        out[o++] = (char)c;
+    }
+    while (o > 0 && out[o - 1] == ' ') o--;                           /* no trailing space */
+    out[o] = 0;
+}
+
 static void handle_export(int fd, const char *qs)
 {
     char sids[8192] = "", tier[16] = "";
@@ -167,7 +189,17 @@ static void handle_export(int fd, const char *qs)
      * second concurrent encode. The tar carries whatever native.mp4 is already
      * cached; the operator uses "Convert to native" first if they want the HD movie
      * in the offload. Export is pure I/O and streams immediately. */
+    /* Also rewrite each session's top-level folder to its recording name, so an
+     * extracted offload reads as "260709_1201 highway/" and not a wall of opaque
+     * timestamps. The sid stays inside manifest.json, so provenance is never lost
+     * even though the folder no longer carries it. */
+    int named = 1;
+    { char v[8]; if (query_get(qs, "named", v, sizeof v) == 0 && v[0] == '0') named = 0; }
+
     char list[8192]; size_t lo = 0; int nsid = 0;
+    char xform[24576]; size_t xo = 0;
+    static char mf[24576];                      /* manifest scratch; big, keep off the stack */
+    char chosen[256][EXPORT_NAME_MAX];
     char work[8192]; snprintf(work, sizeof work, "%s", sids);
     char *save = NULL;
     for (char *tok = strtok_r(work, ",", &save); tok && nsid < 256; tok = strtok_r(NULL, ",", &save)) {
@@ -178,6 +210,30 @@ static void handle_export(int fd, const char *qs)
         int wn = snprintf(list + lo, sizeof list - lo, " '%s'", tok);
         if (wn < 0 || (size_t)wn >= sizeof list - lo) break;      /* clamp: stop before overrunning the cmd list */
         lo += (size_t)wn;
+
+        char safe[EXPORT_NAME_MAX] = "";
+        if (named) {
+            char dir[640], nm[NAME_MAX_LEN * 2] = "";
+            snprintf(dir, sizeof dir, "%s/%s", g_rec.root, tok);
+            if (store_manifest_read(dir, mf, sizeof mf) >= 0)
+                store_manifest_field(mf, "name", nm, sizeof nm);
+            export_safe_name(nm, safe, sizeof safe);
+            /* A name that itself looks like a sid would let one --transform cascade
+             * onto another session's folder; not worth the cleverness. */
+            if (valid_sid(safe)) safe[0] = 0;
+            /* Two recordings can share a display name (the console's default is
+             * minute-resolution, and operators rename freely). Colliding folders
+             * would silently merge on extract, so disambiguate with the sid. */
+            for (int i = 0; i < nsid && safe[0]; i++)
+                if (!strcmp(chosen[i], safe)) snprintf(safe, sizeof safe, "%s %s", chosen[i], tok);
+        }
+        if (safe[0] && strcmp(safe, tok)) {
+            int xn = snprintf(xform + xo, sizeof xform - xo,
+                              " --transform='s|^%s|%s|'", tok, safe);
+            if (xn > 0 && (size_t)xn < sizeof xform - xo) xo += (size_t)xn;
+            else safe[0] = 0;                                     /* no room: keep the sid */
+        }
+        snprintf(chosen[nsid], EXPORT_NAME_MAX, "%s", safe[0] ? safe : tok);
         nsid++;
     }
     if (!nsid) { send_json(fd, 404, "{\"err\":\"no such sessions\"}"); return; }
@@ -189,9 +245,14 @@ static void handle_export(int fd, const char *qs)
     else if (!strcmp(tier, "full")) excl = "--exclude=*.tmp";
     else                            excl = "--exclude=*/eo_y10 --exclude=*/eo_jpeg --exclude=*.tmp";
 
-    char cmd[8192];
-    int cn = snprintf(cmd, sizeof cmd, "tar -C '%s' -cf - %s%s", g_rec.root, excl, list);
-    if (cn <= 0 || cn >= (int)sizeof cmd) { send_json(fd, 500, "{\"err\":\"cmd\"}"); return; }
+    /* The --transform list grows with the session count (up to 256), so this no
+     * longer fits the old 8 KB stack buffer. */
+    size_t cmdcap = 4096 + sizeof xform + sizeof list;
+    char *cmd = malloc(cmdcap);
+    if (!cmd) { send_json(fd, 500, "{\"err\":\"oom\"}"); return; }
+    int cn = snprintf(cmd, cmdcap, "tar -C '%s' %s%s -cf -%s",
+                      g_rec.root, excl, xform, list);
+    if (cn <= 0 || (size_t)cn >= cmdcap) { free(cmd); send_json(fd, 500, "{\"err\":\"cmd\"}"); return; }
 
     char h[256];
     int hn = snprintf(h, sizeof h,
@@ -199,9 +260,10 @@ static void handle_export(int fd, const char *qs)
         "Content-Disposition: attachment; filename=\"airpoc-%s-%dsession%s.tar\"\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
         tier, nsid, nsid == 1 ? "" : "s");
-    if (write(fd, h, (size_t)hn) != hn) return;
+    if (write(fd, h, (size_t)hn) != hn) { free(cmd); return; }
 
     FILE *p = popen(cmd, "r");
+    free(cmd);
     if (!p) return;
     char buf[65536];
     size_t n;
