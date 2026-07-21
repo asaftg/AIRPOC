@@ -26,8 +26,9 @@ eo_client.o: eo_client.c eo_client.h
 radar_client.o: radar_client.c radar.h
 	$(CC) $(CFLAGS) -c -o $@ radar_client.c
 det_client.o: det_client.c det.h
-trk_client.o: trk_client.c trk.h
 	$(CC) $(CFLAGS) -c -o $@ det_client.c
+trk_client.o: trk_client.c trk.h
+	$(CC) $(CFLAGS) -c -o $@ trk_client.c
 
 clean:
 	rm -f app *.o web_assets.h
