@@ -82,6 +82,10 @@ void http_get_ctl(TrkCtl *out)
 {
     pthread_mutex_lock(&g_lock); *out = g_c; pthread_mutex_unlock(&g_lock);
 }
+void http_set_engage(int engage)
+{
+    pthread_mutex_lock(&g_lock); g_c.engage = engage; pthread_mutex_unlock(&g_lock);
+}
 void http_set_ctl_cb(void (*cb)(const TrkCtl *, void *), void *user)
 {
     g_ctl_cb = cb; g_ctl_user = user;

@@ -61,6 +61,16 @@ static uint64_t now_ns(void)
 /* Build + publish one wire frame from the given emitted tracks. Caller holds g_lk. */
 static void publish_wire(const TrkOut *tracks, int n, int connected, uint64_t t_src_ns)
 {
+    /* Release the lock (engaged -> -1) in THIS message if its track is genuinely gone.
+     * The core keeps an engaged track alive by a sticky coast, so this only fires for an
+     * engage on a tid that never existed or died before the engage arrived - never for a
+     * live-but-coasting locked target. Consumers are thus never left holding a dangling id.
+     * Runs under S.lk (every caller holds it); http_set_engage takes its own lock. */
+    if (S.engage >= 0 && !trk_core_has_track(S.core, S.engage)) {
+        fprintf(stderr, "trackerd: engaged track %d gone -> released lock\n", S.engage);
+        S.engage = -1;
+        http_set_engage(-1);
+    }
     TrkHdr h = {
         .frame_id = S.last_frame_id,
         .t_src_ns = t_src_ns,

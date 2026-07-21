@@ -36,4 +36,8 @@ void http_set_info(const char *version, double ifov_urad, int img_w, int img_h);
 void http_get_ctl(TrkCtl *out);
 void http_set_ctl_cb(void (*cb)(const TrkCtl *, void *user), void *user);
 
+/* The daemon releases the lock (engaged -> -1) when its track is genuinely gone; keep the
+ * knob echoed in /stats and read by /ctl in sync with that. */
+void http_set_engage(int engage);
+
 #endif /* TRK_HTTP_H */

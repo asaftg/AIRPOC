@@ -153,6 +153,33 @@ int main(void)
       CHECK(em == 0, "moving single-frame blips never emit");
       trk_core_free(c); }
 
+    /* 9. engaged track is STICKY: it survives far past the coast budget and keeps being
+     *    emitted (a locked target the operator must not lose in ~1 s). Contrast with #6
+     *    where a non-engaged confirmed track dies after coast_s. */
+    { TrkCore *c = trk_core_new();
+      uint64_t ts = 1000; int em = 0;
+      for (int k = 0; k < 30; k++) { TrkDet d; gen_translate(k, &d); ts += (uint64_t)(DT*1e9);
+          em = trk_core_step(c, &d, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
+      CHECK(em >= 1, "engaged-test: target confirmed first");
+      /* engage tid 1, then 90 empty ticks (~6 s, way past the 1 s coast budget) */
+      for (int k = 0; k < 90; k++) { ts += (uint64_t)(DT*1e9);
+          em = trk_core_step(c, NULL, 0, ts, DT, 0, 0, /*engage*/1, out, TRK_MAX_TRACKS); }
+      CHECK(trk_core_has_track(c, 1), "engaged track survives 6 s of misses (sticky)");
+      CHECK(em >= 1 && out[0].tid == 1 && !strcmp(out[0].state, "coast"),
+            "engaged track still emitted as coast after long loss");
+      /* release the lock: now it dies on the normal budget */
+      for (int k = 0; k < 30; k++) { ts += (uint64_t)(DT*1e9);
+          trk_core_step(c, NULL, 0, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
+      CHECK(!trk_core_has_track(c, 1), "released track then dies on the normal coast");
+      trk_core_free(c); }
+
+    /* 10. bogus engage: has_track is false for an id that never existed (daemon releases) */
+    { TrkCore *c = trk_core_new();
+      TrkDet d; gen_translate(0, &d);
+      trk_core_step(c, &d, 1, 1000, DT, 0, 0, 9999, out, TRK_MAX_TRACKS);
+      CHECK(!trk_core_has_track(c, 9999), "bogus engaged id reports no track (lock released)");
+      trk_core_free(c); }
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }

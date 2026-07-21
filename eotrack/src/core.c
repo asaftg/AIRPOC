@@ -293,8 +293,14 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             t->score = t->score - TRK_SCORE_MISS;
             /* coast: keep position moving on held velocity; sigma grows */
             t->sigma += 0.5 * dt_s * fps;
-            if (!t->confirmed && t->score <= TRK_SCORE_FLOOR) { t->used = 0; continue; }
-            if (t->confirmed && t->misses > coast_frames)     { t->used = 0; continue; }
+            /* An operator-engaged track is STICKY: the global coast budget never kills
+             * it. It coasts (held velocity, growing coast_s) until the operator releases
+             * the lock or the lock loop re-anchors it, so a locked target is always
+             * drawable and its id never dangles. Everything else dies normally. */
+            if (t->tid != engaged_tid) {
+                if (!t->confirmed && t->score <= TRK_SCORE_FLOOR) { t->used = 0; continue; }
+                if (t->confirmed && t->misses > coast_frames)     { t->used = 0; continue; }
+            }
         }
         if (!t->confirmed && t->score >= c->k.confirm) t->confirmed = 1;
         /* majority class */
@@ -360,6 +366,14 @@ void trk_core_counts(const TrkCore *c, int *live, int *emitted)
 {
     if (live) *live = c->live;
     if (emitted) *emitted = c->emitted;
+}
+
+int trk_core_has_track(const TrkCore *c, int tid)
+{
+    if (tid < 0) return 0;
+    for (int i = 0; i < TRK_MAX_TRACKS; i++)
+        if (c->tr[i].used && c->tr[i].tid == tid) return 1;
+    return 0;
 }
 
 int trk_core_engaged_box(const TrkCore *c, int engaged_tid,

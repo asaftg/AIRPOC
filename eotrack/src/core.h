@@ -80,6 +80,11 @@ int trk_core_snapshot(TrkCore *c, int engaged_tid, TrkOut *out, int max);
 /* Diagnostics for /stats: total live tracks (incl. latched-off) and emitted last tick. */
 void trk_core_counts(const TrkCore *c, int *live, int *emitted);
 
+/* 1 if a live track with this id exists (an engaged track is kept alive by the sticky
+ * coast, so this only returns 0 for an engaged id that never existed or died before the
+ * engage arrived - the daemon then releases the lock). */
+int trk_core_has_track(const TrkCore *c, int tid);
+
 /* The engaged track's current predicted centre/size in px, for the lock loop to
  * seed/anchor its ROI. Returns 1 if the engaged track exists, else 0. */
 int trk_core_engaged_box(const TrkCore *c, int engaged_tid,
