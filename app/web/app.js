@@ -1267,25 +1267,8 @@
     var cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "lib-cb"; cb.checked = !!libSel[s.sid];
     cb.onclick = function (e) { e.stopPropagation(); libSel[s.sid] = cb.checked; card.classList.toggle("sel", cb.checked); updateDelBtn(); };
     card.appendChild(cb);
-    /* "Drop raw" reclaims the full-res channel, which is where nearly all the disk goes (raw is
-     * ~50x the display copy — on this box ~490 GB of ~520 GB used). But it is IRREVERSIBLE and
-     * the HD movie is built FROM it, so dropping it first means you can never make HD for that
-     * clip again. So only offer it once HD is already built: then you keep the HD movie + the
-     * display + radar, and only lose the source you no longer need. Built here, appended into
-     * the card body at the end — as an absolutely positioned chip it overlapped the tags row. */
-    var hdDone = hdReady[s.sid] || s.hd === "ready";
-    var free = null;
-    if (s.bytes && s.bytes.native > 0 && hdDone) {
-      var rawGb = (s.bytes.native / 1e9).toFixed(1);
-      free = document.createElement("button"); free.className = "lib-free";
-      free.textContent = "FREE " + rawGb + " GB — drop raw";
-      free.title = "Delete the raw full-res source (" + rawGb + " GB). The HD movie, the display video and the radar are all kept. Irreversible: the raw can't be recovered.";
-      free.onclick = function (e) {
-        e.stopPropagation();
-        if (confirm("Drop the raw source for this recording and free " + rawGb + " GB?\n\nKept: the HD movie, the display video, the radar and all data.\nLost: the raw full-res frames — permanently, and they can't be regenerated."))
-          fetch("/rec/ctl?purge_native=" + encodeURIComponent(s.sid)).then(loadLibrary);
-      };
-    }
+    /* (No per-card "drop raw" control — removed at the operator's request. The recorder still
+     * exposes /rec/ctl?purge_native=<sid> if reclaiming raw is ever needed.) */
     var body = document.createElement("div"); body.className = "lib-cardbody";
     /* Name on its own full-width line; the buttons sit on the row BELOW it. Sharing one line
      * meant the actions ate ~90px and every description was truncated to "…". */
@@ -1309,13 +1292,14 @@
     nrow.appendChild(nm); body.appendChild(nrow);
     var arow = document.createElement("div"); arow.className = "lib-actrow";
     arow.appendChild(eb); arow.appendChild(cpb); arow.appendChild(hdb); body.appendChild(arow);
+    /* date · duration · size share ONE line (size pushed right) — they were three separate rows
+     * that, with the tags underneath, overran the card and got clipped. */
     var rest = document.createElement("div");
-    rest.innerHTML = '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
-      + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
+    rest.innerHTML = '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span>"
+      + '<span class="lib-size">' + sizeBadge(s.bytes) + "</span></div>"
       + '<div class="lib-cardtags">' + (s.tags || []).map(function (t) { return '<span class="tagchip">' + esc(t) + "</span>"; }).join("") + "</div>"
       + (s.note ? '<div class="lib-note">' + esc(s.note) + "</div>" : "");
     body.appendChild(rest);
-    if (free) body.appendChild(free);   /* in-flow, below the tags — can't overlap them */
     card.appendChild(body);
     card.onclick = function () { openReplay(s); };
     return card;

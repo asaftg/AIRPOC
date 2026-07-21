@@ -325,20 +325,22 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
 .lib-hd.ready{color:var(--on);border-color:var(--on)}
 .lib-hd.building{color:var(--amber);border-color:var(--amber)}
 .lib-hd:disabled{cursor:default;opacity:.9}
-.lib-meta{font-size:11px;color:var(--muted);display:flex;gap:8px}
+/* one line: date · duration · size, size pushed to the right edge */
+.lib-meta{font-size:11px;color:var(--muted);display:flex;gap:8px;align-items:baseline;white-space:nowrap}
+.lib-size{margin-left:auto;overflow:hidden;text-overflow:ellipsis}
 .lib-size b{color:var(--fg)}.lib-size .raw{color:var(--dim)}
-.lib-cardtags{display:flex;flex-wrap:wrap;gap:3px}
-.lib-note{margin-top:5px;font-size:11px;line-height:1.35;color:var(--muted);font-style:italic;
-  white-space:pre-wrap;overflow-wrap:anywhere}
+/* Tags stay on ONE row inside the tile. They used to wrap to two or three rows, which pushed the
+ * note past the card's fixed height and got chopped by overflow:hidden. Overflowing chips are
+ * clipped rather than reflowing the card; the full set is always in the edit dialog. */
+.lib-cardtags{display:flex;flex-wrap:nowrap;gap:3px;overflow:hidden;min-height:17px}
+.lib-cardtags .tagchip{flex:0 0 auto}
+/* single line — the full note is in the edit dialog */
+.lib-note{font-size:11px;line-height:1.35;color:var(--muted);font-style:italic;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rb-note{font-style:italic;font-weight:600;opacity:.85}
 .lib-pending{position:absolute;top:8px;left:-28px;transform:rotate(-45deg);background:var(--amber);color:var(--bg);
   font-size:9px;letter-spacing:1px;padding:2px 30px;font-weight:700}
 .lib-cb{position:absolute;top:6px;right:6px;width:18px;height:18px;z-index:2;accent-color:var(--on)}
-/* In the card's normal flow, not absolutely positioned. It used to float at the card's
- * bottom-right, where it sat ON TOP of the tags row and made both unreadable. */
-.lib-free{align-self:flex-end;margin-top:2px;background:transparent;color:var(--dim);border:1px solid var(--bd2);
-  border-radius:3px;font-size:9px;padding:2px 6px;cursor:pointer}
-.lib-free:hover{color:var(--amber)}
 .tagchip{font-size:10px;letter-spacing:.5px;color:var(--muted);background:var(--sub);border:1px solid var(--bd2);
   border-radius:10px;padding:1px 8px;cursor:pointer;user-select:none}
 .tagchip.on{color:var(--amber);border-color:var(--amber);background:#3a2c0f}
