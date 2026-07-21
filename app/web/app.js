@@ -383,6 +383,12 @@
   /* fusion lands here later: { src:"fus", … } rows carrying range AND class together. */
   function allTargets() { return eoTracks().concat(radarTargets()); }
 
+  /* Bearing reads as a SIDE, not a sign: "6R" / "7L" — an operator turning a head thinks
+   * left/right, not positive/negative. Elevation keeps the sign, since up/down maps to it
+   * naturally. Convention (both wires): azimuth + is right, elevation + is up. */
+  function fmtAz(a) { var v = Math.round(Math.abs(a || 0)); return v + (a < 0 ? "L" : "R"); }
+  function fmtEl(e) { var v = Math.round(Math.abs(e || 0)); return (e < 0 ? "-" : "+") + v + "°"; }
+
   /* Rank: engaged always first (never let the held target scroll off), then fused, then EO
    * confirmed tracks, then everything else by confidence / nearness. */
   function importance(t) {
@@ -402,9 +408,9 @@
         var t = rows[i], col = tcolor(t.key), mid, rgt;
         if (t.src === "eo") {
           mid = String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
-          rgt = (t.az >= 0 ? "+" : "") + t.az.toFixed(0) + "° / " + (t.el >= 0 ? "+" : "") + t.el.toFixed(0) + "°";
+          rgt = fmtAz(t.az) + " / " + fmtEl(t.el);
         } else {
-          mid = t.spd.toFixed(1) + " m/s · " + (t.az >= 0 ? "+" : "") + t.az.toFixed(0) + "°";
+          mid = t.spd.toFixed(1) + " m/s · " + fmtAz(t.az);
           rgt = t.rng.toFixed(0) + " m";
         }
         out.push('<li class="tgt-row' + (t.key === engagedKey ? ' eng' : '') + '" data-key="' + t.key + '" style="border-left-color:' + col + '">'
@@ -1128,6 +1134,16 @@
        * the request has had time to land. */
       else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0 &&
                Date.now() - trkEngageSentAt > 1000) engagedKey = null;
+    }
+    /* LOCK IS ONLY A LABEL on a track that exists right now — it is never a target in its own
+     * right. If the locked track is no longer on the wire, release the lock instead of holding
+     * a key that matches nothing: otherwise the console keeps a phantom "locked" mark while the
+     * real object carries on under a new id (and, since a lock hides every other target, the
+     * operator would be left staring at a stale box). */
+    if (engagedKey && engagedKey.indexOf("eo:") === 0 && Date.now() - trkEngageSentAt > 1000) {
+      var live = false;
+      (lastTrk && lastTrk.tracks || []).forEach(function (t) { if (("eo:" + t.tid) === engagedKey) live = true; });
+      if (!live) engage(null);
     }
     renderTargetList();
     draw(true, false);
