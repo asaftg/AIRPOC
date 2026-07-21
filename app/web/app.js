@@ -1327,11 +1327,15 @@
    * HTTP the browser can't pick a folder, so it lands in Downloads (enable the browser's
    * "ask where to save each file" to choose one). tier=display keeps it reasonable; raw
    * native is excluded — it is huge, and offload is for sharing/review. */
-  /* Name the download after the RECORDING, not its session id — "260709_1201 highway.tar" tells
-   * you what it is; "airpoc-20260709T120117Z.tar" doesn't. Sanitised for Windows/macOS/Linux
+  /* Preferred download name: the RECORDING, not its session id. Sanitised for Windows/macOS/Linux
    * filenames (\ / : * ? " < > | are all illegal somewhere) and length-capped.
-   * NOTE: the FOLDER INSIDE the tar is still the session id — that's built by the recorder's
-   * exporter, not here; asking them to name it after the recording. */
+   *
+   * CAVEAT — this is currently a FALLBACK ONLY. The recorder answers /rec/export with
+   *   Content-Disposition: attachment; filename="airpoc-display-1session.tar"
+   * and a server-supplied filename BEATS the <a download> attribute in Chrome, so that name wins
+   * and this one is ignored. Naming has to be fixed on the recorder (it already derives the
+   * recording name server-side for the folder inside the tar). This stays as the fallback for if
+   * the header is ever dropped. */
   function offloadFilename(sids, n) {
     if (n === 1 && sids !== "all" && sids.indexOf(",") < 0) {
       var s = libSessions.filter(function (x) { return x.sid === sids; })[0];
