@@ -986,7 +986,23 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, function (c) { return { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]; }); }
   function fmtClock(ms) { var s = Math.floor(Math.max(0, ms || 0) / 1000); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
   function fmtClockT(ms) { var s = Math.max(0, ms || 0) / 1000; return Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2) + "." + Math.floor((s * 10) % 10); }
-  function localStamp() { var d = new Date(), p = function (n) { return ("0" + n).slice(-2); }; return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()); }
+  /* Default recording name: compact YYMMDD_HHMM, no "REC" prefix (every entry in the library is
+   * a recording — the word cost ~4 characters of the visible name and told you nothing). Short
+   * enough that whatever the operator types after it survives on the card. */
+  function localStamp() {
+    var d = new Date(), p = function (n) { return ("0" + n).slice(-2); };
+    return p(d.getFullYear() % 100) + p(d.getMonth() + 1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes());
+  }
+  /* Older recordings were saved as "REC 2026-07-18 21:24 radar empty scene". Render those in the
+   * new compact form so the actual description is readable, without rewriting stored names.
+   * Anything that doesn't match is shown untouched — the name is operator-editable free text. */
+  function libTitle(name) {
+    if (!name) return "";
+    var m = /^\s*(?:REC\s+)?(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})\s*(.*)$/.exec(name);
+    if (!m) return name.replace(/^\s*REC\s+/, "");
+    var rest = m[6].trim();
+    return m[1].slice(2) + m[2] + m[3] + "_" + m[4] + m[5] + (rest ? " " + rest : "");
+  }
   function debounce(fn, ms) { var t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
   function rctl(q) { fetch("/rec/replay/ctl?" + q).catch(function () {}); }
 
@@ -1054,7 +1070,7 @@
   /* ── save dialog ── */
   function openSaveDialog(sid) {
     pendingSid = sid;
-    $("dlg-name").value = "REC " + localStamp();
+    $("dlg-name").value = localStamp();
     $("dlg-note").value = "";
     var tw = $("dlg-tags"); tw.innerHTML = "";
     TAGVOCAB.forEach(function (t) { var c = document.createElement("span"); c.className = "tagchip"; c.textContent = t; c.onclick = function () { c.classList.toggle("on"); }; tw.appendChild(c); });
@@ -1271,8 +1287,11 @@
       };
     }
     var body = document.createElement("div"); body.className = "lib-cardbody";
+    /* Name on its own full-width line; the buttons sit on the row BELOW it. Sharing one line
+     * meant the actions ate ~90px and every description was truncated to "…". */
     var nrow = document.createElement("div"); nrow.className = "lib-namerow";
-    var nm = document.createElement("span"); nm.className = "lib-name"; nm.textContent = s.name || s.sid; nm.title = s.name || s.sid;
+    var nm = document.createElement("span"); nm.className = "lib-name";
+    nm.textContent = libTitle(s.name) || s.sid; nm.title = s.name || s.sid;
     var eb = document.createElement("button"); eb.className = "lib-act"; eb.textContent = "✎"; eb.title = "edit name / tags / note";
     eb.onclick = function (e) { e.stopPropagation(); openEditDialog(s); };
     var cpb = document.createElement("button"); cpb.className = "lib-act"; cpb.textContent = "⧉"; cpb.title = "copy name";
@@ -1287,7 +1306,9 @@
       hdPoll(s.sid);
     };
     setHdBtn(hdb, (hdBuild && hdBuild.sid === s.sid) ? "building" : (hdReady[s.sid] || s.hd === "ready" ? "ready" : "none"), hdBuild ? hdBuild.pct : 0);
-    nrow.appendChild(nm); nrow.appendChild(eb); nrow.appendChild(cpb); nrow.appendChild(hdb); body.appendChild(nrow);
+    nrow.appendChild(nm); body.appendChild(nrow);
+    var arow = document.createElement("div"); arow.className = "lib-actrow";
+    arow.appendChild(eb); arow.appendChild(cpb); arow.appendChild(hdb); body.appendChild(arow);
     var rest = document.createElement("div");
     rest.innerHTML = '<div class="lib-meta"><span>' + libDate(s.t0) + "</span><span>" + fmtClock(s.dur_ms) + "</span></div>"
       + '<div class="lib-meta lib-size">' + sizeBadge(s.bytes) + "</div>"
