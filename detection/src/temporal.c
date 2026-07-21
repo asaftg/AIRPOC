@@ -12,6 +12,7 @@
 
 typedef struct {
     int         used;
+    unsigned    id;             /* see TbdOut.dtid — an evidence-pile tag, not identity */
     float       cx, cy, w, h;   /* last OBSERVED box */
     float       vx, vy;         /* px per tick, from consecutive observations */
     float       x0, y0;         /* first observation (for net displacement) */
@@ -25,7 +26,8 @@ typedef struct {
 } Trk;
 
 struct TbdCtx {
-    Trk t[DET_TBD_MAX_TRACKS];
+    Trk      t[DET_TBD_MAX_TRACKS];
+    unsigned next_id;
 };
 
 TbdCtx *tbd_new(void)
@@ -58,9 +60,10 @@ static double logit_c(double p)
     return log(p / (1.0 - p));
 }
 
-static void trk_start(Trk *t, const TbdIn *d, double lo_ref)
+static void trk_start(Trk *t, const TbdIn *d, double lo_ref, unsigned id)
 {
     t->used = 1;
+    t->id = id;
     t->cx = d->cx; t->cy = d->cy; t->w = d->w; t->h = d->h;
     t->x0 = d->cx; t->y0 = d->cy;
     t->vx = t->vy = 0.0f;
@@ -154,7 +157,7 @@ int tbd_process(TbdCtx *c, const TbdIn *in, int n_in, const TbdParams *p,
         /* unmatched -> new track in the first free slot (table full: drop, the
          * strongest candidates were served first) */
         for (int i = 0; i < DET_TBD_MAX_TRACKS; i++) {
-            if (!c->t[i].used) { trk_start(&c->t[i], d, lo_ref); break; }
+            if (!c->t[i].used) { trk_start(&c->t[i], d, lo_ref, ++c->next_id); break; }
         }
     }
 
@@ -204,6 +207,7 @@ int tbd_process(TbdCtx *c, const TbdIn *in, int n_in, const TbdParams *p,
          * because of them). Two truthful numbers beat one invented one. */
         o->conf = t->last_conf;
         o->tbd  = strong ? 0 : 1;
+        o->dtid = t->id;
     }
     return nout;
 }

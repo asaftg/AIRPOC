@@ -33,8 +33,15 @@ idea of range and angle is what fusion needs.
 **How to read a box:** `tbd:1` marks one that only exists because of the frame-to-frame
 collection (the model alone was not confident enough). `age`, `hits` and `disp` say how long
 the evidence has been building, how many frames it was actually seen in, and how far it has
-travelled in a straight line since first seen. That last one separates something moving
-across the scene from something jiggling in place, like a wind-blown branch.
+travelled in a straight line since first seen. That last one says whether the thing is
+**moving or holding still** — useful to fusion, and for cross-checking against radar, which
+only ever sees movers.
+
+> **Pitfall — `disp` is not a real/false signal, and nothing downstream should treat it as
+> one.** Standing still is normal for a target: parked vehicles, and people standing or
+> prone, all sit at `disp ≈ 0`. Anything that dropped low-`disp` tracks would delete them.
+> The distinction only holds for the *motion* worker, where every detection is a mover by
+> definition — it does **not** carry over to the model.
 
 The confidence on a box is **always the model's own score for that frame** — on a collected
 box exactly as much as on a confident one. It deliberately does not reflect how much evidence
@@ -62,7 +69,7 @@ The algorithm and its maths live in code comments in
   the daemon **keeps running with no model at all** (`model=none`, no detections) while
   otherwise looking healthy. The class mapping in `src/coco.h` is also COCO-specific. Both
   need a code change before the trained model can be handed over.
-- **Frame-to-frame collection: validated on recordings, not yet run on the Jetson.**
+- **Frame-to-frame collection: running on the Jetson.**
   On a 30 s daytime street (450 detector ticks), the plain 0.50 threshold reported 3.5
   boxes per tick and **not one person**; with collection enabled it reported 17.7 boxes per
   tick and found people. Confident boxes were identical in both runs. Most of what was added
@@ -77,10 +84,14 @@ The algorithm and its maths live in code comments in
 > rejection. **The tracker should read `age` / `hits` / `disp` off the wire rather than
 > redo this work.**
 
-> **Pitfall — collecting evidence makes the model's mistakes stronger too.** A hedge the
-> model calls a vehicle at 0.3 on every frame is, by construction, indistinguishable from a
-> real car at 0.3 on every frame. No amount of tuning separates them; only a better model
-> does. On the stock placeholder, expect more false boxes than the trained model will give.
+> **Pitfall — collecting evidence makes the model's mistakes stronger too, and nothing
+> downstream can undo that.** A hedge the model calls a vehicle at 0.3 on every frame is, by
+> construction, indistinguishable from a real car at 0.3 on every frame. It is also
+> *maximally consistent* — it appears in the same place every single frame, so it looks like
+> the best-behaved target in the scene, and **no temporal test can reject it.** Persistent
+> false positives are an appearance problem: only a better model removes them. On the stock
+> placeholder, expect more false boxes than the trained model will give, and do not expect
+> the tracker to clean them up.
 
 > **Pitfall — tune the floor, not the frame count.** `tbd_lo` decides *how much is accepted*;
 > `tbd_frames` only decides *how long a faint target waits*. Something the model keeps seeing

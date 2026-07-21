@@ -64,8 +64,9 @@ Additive and optional — a consumer that ignores them behaves exactly as before
 |---|---|
 | `age` | ticks since this evidence was first seen |
 | `hits` | frames it was actually seen in (`hits < age` ⇒ it was missed on some ticks) |
-| `disp` | how far it has moved in a **straight line**, in pixels, since first seen. Something crossing the scene grows this steadily; something jiggling in place (a wind-blown branch) keeps it near zero however long it lives. **A hint, not a measurement** — see the caveat below. |
+| `disp` | how far it has moved in a **straight line**, in pixels, since first seen — i.e. whether the thing is moving or holding still. **Not a real/false signal:** parked vehicles and standing or prone people are targets and all sit near zero, so never drop a track for having a low `disp`. **A hint, not a measurement** — see the caveat below. |
 | `tbd` | present and `1` **only** when the box exists because of collected evidence, i.e. the model alone scored it *below* `conf`. Absent means it cleared `conf` on its own. |
+| `dtid` | tag of the evidence pile this box came from. Two boxes on consecutive ticks with the same `dtid` were treated as the same accumulating evidence. **This is NOT an identity and must not be inherited as a track id** — the link is a gated nearest-match and it *does* jump to neighbouring targets (measured: a 375-tick pile with 768 px of "travel" was a jump, not a journey). Safe as a weak association prior; nothing more. Omitted when there is none. |
 
 `conf` is **always the model's own score for that frame**, on a promoted box exactly as much as on a confident one — it is never derived from how much evidence has accumulated. So a promoted box legitimately reports a low number (that *is* what the model thinks); how strong the evidence is, is reported separately and honestly as `hits` / `age`. Do not filter promoted boxes on `conf` alone — that just undoes the collection; use `tbd` and `hits`.
 

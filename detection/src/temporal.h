@@ -72,6 +72,11 @@ typedef struct {
     float       net_disp;       /* px, straight line from first observation */
     float       path_len;       /* px, summed observed steps */
     int         tbd;            /* 1 = promoted by integration (was below `hi`) */
+    unsigned    dtid;           /* id of the evidence pile this box came from.
+                                 * NOT an identity: the association is a gated
+                                 * nearest-neighbour and it DOES hop between nearby
+                                 * targets. Safe as a weak association prior only;
+                                 * never inherit it as a track id. */
 } TbdOut;
 
 typedef struct {
