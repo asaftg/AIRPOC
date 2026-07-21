@@ -316,16 +316,6 @@
   document.querySelectorAll("#tmp-btns [data-tmp]").forEach(function (b) {
     b.onclick = function () { dtTouch = Date.now(); ctl("det_temporal=" + b.dataset.tmp); setSeg("tmp-btns", b); };
   });
-  /* FAINT FLOOR above ~0.25 is the dangerous direction: with the current model people sit at the
-   * very bottom of its confidence range, so raising it thins clutter but deletes people entirely.
-   * Warn once per crossing rather than nagging on every step of the drag. */
-  var tbdWarned = false;
-  $("dt-tbd_lo").addEventListener("input", function () {
-    var v = parseFloat(this.value);
-    $("dv-tbd_lo").classList.toggle("warn", v > 0.25);
-    if (v > 0.25 && !tbdWarned) { tbdWarned = true; toast("Above 0.25 the detector starts dropping people, not just clutter.", "err", 5000); }
-    if (v <= 0.25) tbdWarned = false;
-  });
   function pollDstats() {
     if (replaying) return;
     if (!$("dev").classList.contains("open")) return;   /* only the DEV panel shows these — don't poll when it's closed */
@@ -346,7 +336,6 @@
       if (typeof k.temporal === "number") {
         document.querySelectorAll(".tbd-row").forEach(function (r) { r.hidden = false; });
         var tb = document.querySelector('#tmp-btns [data-tmp="' + k.temporal + '"]'); if (tb) setSeg("tmp-btns", tb);
-        $("dv-tbd_lo").classList.toggle("warn", (k.tbd_lo || 0) > 0.25);
       }
     }).catch(function () {});
   }
@@ -545,7 +534,7 @@
       else { vw = w; vh = w / ar; vx = 0; vy = (h - vh) / 2; }
       ctx.save(); ctx.beginPath(); ctx.rect(vx, vy, vw, vh); ctx.clip();
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      var drawDet = function (b, dashed, col, label, forceBox, tracked) {
+      var drawDet = function (b, dashed, col, label, forceBox, tracked, tbd) {
         if (!b.px || b.px.length < 4) return;
         var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
         var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
@@ -591,6 +580,16 @@
           ctx.setLineDash([]);
           haloText(ctx, label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr, col, dpr);
         }
+        /* Temporal marker: a tiny "t" at the box's top-right corner (in the CLASS colour, so it
+         * flags provenance without recolouring the box). Small on purpose — a quiet hint that this
+         * one was promoted from collected evidence, not an alarm. */
+        if (tbd) {
+          ctx.save();
+          ctx.font = "bold " + (9 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "left";
+          var tx = bx + bw2 / 2 - 6 * dpr, ty = by - bh2 / 2 + 9 * dpr;
+          haloText(ctx, "t", tx, ty, col, dpr);
+          ctx.restore();
+        }
       };
       var seek = (detStyle === "seeker");
       (lastDet.dets || []).forEach(function (d) {
@@ -606,8 +605,9 @@
         /* A box carrying a track id is a held target -> corner brackets. Today's detector is
          * stateless and emits no tid, so nothing takes this path yet; it lights up by itself
          * when the tracker (:8095) becomes the box source. Keyed on tid because that's the one
-         * identity field guaranteed by the contract — no guessing at state strings. */
-        drawDet(d, false, col, lab, false, d.tid !== undefined && d.tid !== null);
+         * identity field guaranteed by the contract — no guessing at state strings.
+         * tbd:1 = promoted from collected evidence -> small "t" corner tag (class colour kept). */
+        drawDet(d, false, col, lab, false, d.tid !== undefined && d.tid !== null, d.tbd === 1 || d.tbd === true);
       });
       /* motion-head marks: ALWAYS a gentle thin dashed box (never the heavy cross), so a
        * mover reads as a soft hint distinct from the model's class marks */
@@ -1672,8 +1672,8 @@
   setInterval(pollRec, 400); pollRec();
   /* Console-enforced defaults on load (operator request). These have no controls in DEV any more
    * — they're fixed values the operator never changes, so the console just asserts them and the
-   * panel stays uncluttered: EO MEDIAN off + DENOISE off, detector MAX DETS 25, MOTION on,
-   * radar FOV ±60° + EL ±20°. Touch guards stop the /stats readback fighting the push. */
+   * panel stays uncluttered: EO MEDIAN off + DENOISE off, detector MAX DETS 25, MOTION off,
+   * TEMPORAL on, radar FOV ±60° + EL ±20°. Touch guards stop the /stats readback fighting the push. */
   var MAX_DETS = 25;
   setTimeout(function () {
     if (replaying) return;
@@ -1682,7 +1682,10 @@
     ctl("denoise=0");
     dtTouch = Date.now();
     ctl("det_max_dets=" + MAX_DETS);
-    ctl("det_motion=1"); var mb = document.querySelector('#mot-btns [data-mot="1"]'); if (mb) setSeg("mot-btns", mb);
+    /* MOTION defaults OFF (operator request). Its worker is frozen on the current build anyway,
+     * but the intent is: the temporal-integration path is now the way faint movers get reported,
+     * so the class-less motion safety net is off by default. */
+    ctl("det_motion=0"); var mb = document.querySelector('#mot-btns [data-mot="0"]'); if (mb) setSeg("mot-btns", mb);
     /* TEMPORAL defaults ON (operator request) — finding far/weak targets is the point of the
      * seeker, and the cost is latency on those faint targets only. Harmless on a detector build
      * that doesn't know the knob yet: it just ignores it. */
