@@ -409,6 +409,9 @@ static void *autobuild_thread(void *arg)
     (void)arg;
     static char sids[AUTOBUILD_MAX_SIDS][SID_LEN + 1];
     char kicked[SID_LEN + 1] = "";
+    int idle_ticks = 0;
+
+    fprintf(stderr, "rec: HD catch-up worker started (idle-only, %ds tick)\n", AUTOBUILD_TICK_S);
 
     for (;;) {
         sleep(AUTOBUILD_TICK_S);
@@ -417,7 +420,14 @@ static void *autobuild_thread(void *arg)
         pthread_mutex_lock(&g_lk);
         int busy = (g_job.state == 1);
         pthread_mutex_unlock(&g_lk);
-        if (busy) continue;                                   /* let it finish */
+        if (busy) {
+            /* An operator-requested build (opening a movie) is running -- wait it
+             * out rather than queue behind it. Say so occasionally: a silently
+             * yielding worker is indistinguishable from a dead one. */
+            if (++idle_ticks % 15 == 0) fprintf(stderr, "rec: HD catch-up waiting (a build is running)\n");
+            continue;
+        }
+        idle_ticks = 0;
 
         /* The build we kicked last tick is done. If it produced nothing, stop
          * retrying it forever -- otherwise one unencodable session blocks every
@@ -426,7 +436,7 @@ static void *autobuild_thread(void *arg)
             char p[720];
             snprintf(p, sizeof p, "%s/%s/native.mp4", g_rec.root, kicked);
             if (access(p, F_OK) != 0 && g_nskip < AUTOBUILD_MAX_SKIP)
-                snprintf(g_skip[g_nskip++], SID_LEN + 1, "%s", kicked);
+                snprintf(g_skip[g_nskip++], SID_LEN + 1, "%.*s", SID_LEN, kicked);
             kicked[0] = 0;
         }
 
@@ -435,7 +445,7 @@ static void *autobuild_thread(void *arg)
             if (autobuild_skipped(sids[i]) || !autobuild_wants(sids[i])) continue;
             if (chan_recording()) break;                       /* rule 1, re-checked */
             fprintf(stderr, "rec: auto-building HD for %s (%d skipped)\n", sids[i], g_nskip);
-            snprintf(kicked, sizeof kicked, "%s", sids[i]);
+            snprintf(kicked, sizeof kicked, "%.*s", SID_LEN, sids[i]);
             transcode_request(sids[i]);
             break;                                             /* one at a time */
         }
