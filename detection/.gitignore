@@ -4,6 +4,7 @@ detectiond
 build_engine
 capture_calib
 infer_probe
+test_temporal
 
 # Model + engine binaries live under /data/detection, never in the repo
 *.onnx

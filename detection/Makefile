@@ -77,7 +77,15 @@ infer_probe: tools/infer_probe.cpp infer.o preproc.o $(DEPS)
 	    -L$(CUDA_DIR)/lib64 -lnvinfer -lnvinfer_plugin -lcudart \
 	    -lopencv_core -lopencv_imgproc -lopencv_imgcodecs
 
-clean:
-	rm -f $(BIN) $(OBJ) $(TOOLS)
+# Unit tests for the pure decision logic. No GPU, no TensorRT, no OpenCV and no
+# board — so they run anywhere, including a dev box, and gate a change before it
+# ever reaches the Jetson. temporal.c decides what the detector reports, so the
+# guarantees quoted in README.md / docs/INTEGRATION.md are enforced here.
+test: tests/test_temporal.c src/temporal.c $(DEPS)
+	$(CC) $(CFLAGS) -o test_temporal tests/test_temporal.c src/temporal.c -lm
+	./test_temporal
 
-.PHONY: all tools clean
+clean:
+	rm -f $(BIN) $(OBJ) $(TOOLS) test_temporal
+
+.PHONY: all tools test clean
