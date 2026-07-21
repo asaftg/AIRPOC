@@ -225,7 +225,11 @@ static void handle_export(int fd, const char *qs)
              * minute-resolution, and operators rename freely). Colliding folders
              * would silently merge on extract, so disambiguate with the sid. */
             for (int i = 0; i < nsid && safe[0]; i++)
-                if (!strcmp(chosen[i], safe)) snprintf(safe, sizeof safe, "%s %s", chosen[i], tok);
+                if (!strcmp(chosen[i], safe))
+                    /* truncate the NAME, never the sid -- a cut-off sid would
+                     * collide all over again, which is the thing being fixed */
+                    snprintf(safe, sizeof safe, "%.*s %s",
+                             (int)(EXPORT_NAME_MAX - SID_LEN - 2), chosen[i], tok);
         }
         if (safe[0] && strcmp(safe, tok)) {
             int xn = snprintf(xform + xo, sizeof xform - xo,
