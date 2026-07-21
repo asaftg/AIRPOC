@@ -545,12 +545,32 @@
       else { vw = w; vh = w / ar; vx = 0; vy = (h - vh) / 2; }
       ctx.save(); ctx.beginPath(); ctx.rect(vx, vy, vw, vh); ctx.clip();
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      var drawDet = function (b, dashed, col, label, forceBox) {
+      var drawDet = function (b, dashed, col, label, forceBox, tracked) {
         if (!b.px || b.px.length < 4) return;
         var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
         var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
         if (bx + bw2 / 2 < vx || bx - bw2 / 2 > vx + vw || by + bh2 / 2 < vy || by - bh2 / 2 > vy + vh) return;
-        if (detStyle === "seeker" && !forceBox) {
+        if (tracked) {
+          /* TRACKED — CORNER BRACKETS: the four corners of the box only, no connecting edges.
+           * Shape (not colour) carries the tracking state, so class colour still answers "what
+           * is it" while the bracket answers "we're holding this one". Overrides both the plain
+           * rectangle and the seeker cross. Arms scale with the box but stay inside sane limits
+           * so a tiny far box doesn't collapse into a blob or a near one grow a full frame. */
+          var hw = bw2 / 2, hh = bh2 / 2;
+          var L = Math.max(5 * dpr, Math.min(18 * dpr, Math.min(bw2, bh2) * 0.3));
+          var x0 = bx - hw, x1 = bx + hw, y0 = by - hh, y1 = by + hh;
+          [["rgba(0,0,0,0.85)", 4.5 * dpr], [col, 2.4 * dpr]].forEach(function (s) {
+            ctx.strokeStyle = s[0]; ctx.lineWidth = s[1]; ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(x0, y0 + L); ctx.lineTo(x0, y0); ctx.lineTo(x0 + L, y0);   /* top-left */
+            ctx.moveTo(x1 - L, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y0 + L);   /* top-right */
+            ctx.moveTo(x0, y1 - L); ctx.lineTo(x0, y1); ctx.lineTo(x0 + L, y1);   /* bottom-left */
+            ctx.moveTo(x1 - L, y1); ctx.lineTo(x1, y1); ctx.lineTo(x1, y1 - L);   /* bottom-right */
+            ctx.stroke();
+          });
+          ctx.lineCap = "butt";
+          haloText(ctx, label, x0 + 2 * dpr, y0 - 3 * dpr, col, dpr);
+        } else if (detStyle === "seeker" && !forceBox) {
           /* HEAVY HALO CROSS — short thick arms with a centre gap over a dark halo,
            * readable on bright sky and dark bush (field pick, option E) */
           var a = 11 * dpr, g = 3.5 * dpr;
@@ -574,16 +594,20 @@
       };
       var seek = (detStyle === "seeker");
       (lastDet.dets || []).forEach(function (d) {
-        /* tbd:1 = the detector only reported this because it collected faint evidence over
-         * several frames, rather than seeing it outright. Distinct violet outline + a "·t" tag
-         * so the operator can tell an integrated call from a confident one at a glance — those
-         * carry ~0.2-0.4 s more latency and are the ones to sanity-check. */
-        var tbd = d.tbd === 1 || d.tbd === true;
-        var col = tbd ? "#c08cff" : (d.cls === "human" ? "#40c4ff" : amber);
+        /* Colour is the CLASS, always — never how the detection was arrived at. A tbd:1 box
+         * (promoted from faint evidence) is the same human/vehicle mark as any other: the
+         * operator reads colour as "what is it", so overloading it with provenance made a
+         * far human look like a different kind of thing. Provenance belongs in DEV, not on
+         * the glass. TRACKED state is the one thing that changes the mark's SHAPE (corners). */
+        var col = d.cls === "human" ? "#40c4ff" : amber;
         var cl = String(d.cls || "?");                   /* coerce: a non-string cls (e.g. a numeric id) would throw on [0]/.toUpperCase() and blank every overlay */
-        var lab = seek ? cl[0].toUpperCase() + Math.round((d.conf || 0) * 100) + (tbd ? "·t" : "")
-                       : cl.toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%" + (tbd ? " ·t" : "");
-        drawDet(d, false, col, lab);
+        var lab = seek ? cl[0].toUpperCase() + Math.round((d.conf || 0) * 100)
+                       : cl.toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
+        /* A box carrying a track id is a held target -> corner brackets. Today's detector is
+         * stateless and emits no tid, so nothing takes this path yet; it lights up by itself
+         * when the tracker (:8095) becomes the box source. Keyed on tid because that's the one
+         * identity field guaranteed by the contract — no guessing at state strings. */
+        drawDet(d, false, col, lab, false, d.tid !== undefined && d.tid !== null);
       });
       /* motion-head marks: ALWAYS a gentle thin dashed box (never the heavy cross), so a
        * mover reads as a soft hint distinct from the model's class marks */
