@@ -5,8 +5,11 @@ mmw_demoDDM firmware (**`agv3`** — crash-proof under point-flood overload, wit
 the empty-band comb gate in observe mode; see
 [`docs/FIRMWARE.md`](docs/FIRMWARE.md)) and emits a TLV point cloud over
 UART; this module pushes the profile, parses that stream with **zero frame
-loss**, runs a **temporal multi-target tracker** producing **class-less**
-target boxes, and serves a PPI previewer. Person/vehicle labelling is **not**
+loss**, runs a **temporal multi-target tracker** plus a **slow
+detector** for the faint/intermittent movers the per-frame tracker cannot
+confirm, merges them into one **class-less** box per object and conditions the
+published elevation (see [`docs/SLOWDET.md`](docs/SLOWDET.md)), and serves a PPI
+previewer. Person/vehicle labelling is **not**
 done here — that is the fusion module's job.
 
 ## I/O contract
