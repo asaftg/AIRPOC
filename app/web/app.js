@@ -529,6 +529,22 @@
     ctx.save(); ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.lineWidth = 3 * dpr; ctx.lineJoin = "round";
     ctx.strokeText(txt, x, y); ctx.fillStyle = col; ctx.fillText(txt, x, y); ctx.restore();
   }
+  /* THE lock symbol — four corner brackets over a dark halo. One function so the EO box and the
+   * radar mark draw the SAME shape: the operator must not have to learn two "locked" symbols
+   * for what is, to them, the same act of holding a target. */
+  function cornerBrackets(ctx, x0, y0, x1, y1, col, dpr) {
+    var L = Math.max(5 * dpr, Math.min(18 * dpr, Math.min(x1 - x0, y1 - y0) * 0.3));
+    [["rgba(0,0,0,0.85)", 4.5 * dpr], [col, 2.4 * dpr]].forEach(function (s) {
+      ctx.strokeStyle = s[0]; ctx.lineWidth = s[1]; ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(x0, y0 + L); ctx.lineTo(x0, y0); ctx.lineTo(x0 + L, y0);   /* top-left */
+      ctx.moveTo(x1 - L, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y0 + L);   /* top-right */
+      ctx.moveTo(x0, y1 - L); ctx.lineTo(x0, y1); ctx.lineTo(x0 + L, y1);   /* bottom-left */
+      ctx.moveTo(x1 - L, y1); ctx.lineTo(x1, y1); ctx.lineTo(x1, y1 - L);   /* bottom-right */
+      ctx.stroke();
+    });
+    ctx.lineCap = "butt";
+  }
 
   function drawEO() {
     var f = fit($("eo-ovl")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
@@ -579,10 +595,19 @@
         var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
         if (Math.abs(fx) > 1 || Math.abs(fy) > 1) return;      /* off-frame → not drawn */
         var lx = vx2 + (fx + 1) / 2 * vw2, ly = vy2 + (fy + 1) / 2 * vh2;
+        /* LOCKED radar target → the same corner-bracket symbol an EO lock gets. Holding a
+         * target is one act to the operator, so it must look identical whichever sensor
+         * found it; only the data behind it differs (radar brings range, EO brings class). */
+        if (engagedKey === ("rad:" + t.tid)) {
+          var rb = 16 * dpr;
+          cornerBrackets(ctx, lx - rb, ly - rb, lx + rb, ly + rb, css("--on"), dpr);
+          ctx.fillStyle = css("--on"); ctx.beginPath(); ctx.arc(lx, ly, 1.8 * dpr, 0, 2 * Math.PI); ctx.fill();
+          haloText(ctx, "LOCK " + t.rng.toFixed(0) + " m", lx - rb + 2 * dpr, ly - rb - 4 * dpr, css("--on"), dpr);
+          return;
+        }
         /* BROKEN RING (fixed size) — four arcs with cardinal gaps over a dark halo, so
          * the mark reads over bright sky and dark bush alike. Fixed size on purpose:
-         * the tracker's sx/sy estimates jitter, size-coding pulsed. No engaged/LOCK
-         * styling: tracking isn't a phase yet — all marks are equal. */
+         * the tracker's sx/sy estimates jitter, size-coding pulsed. */
         var col = tcolor(t.tid), rr = 14 * dpr, gp = 0.42;
         [["rgba(0,0,0,0.85)", 5 * dpr], [col, 2.6 * dpr]].forEach(function (s) {
           ctx.strokeStyle = s[0]; ctx.lineWidth = s[1]; ctx.lineCap = "round";
@@ -629,18 +654,8 @@
            * rectangle and the seeker cross. Arms scale with the box but stay inside sane limits
            * so a tiny far box doesn't collapse into a blob or a near one grow a full frame. */
           var hw = bw2 / 2, hh = bh2 / 2;
-          var L = Math.max(5 * dpr, Math.min(18 * dpr, Math.min(bw2, bh2) * 0.3));
           var x0 = bx - hw, x1 = bx + hw, y0 = by - hh, y1 = by + hh;
-          [["rgba(0,0,0,0.85)", 4.5 * dpr], [col, 2.4 * dpr]].forEach(function (s) {
-            ctx.strokeStyle = s[0]; ctx.lineWidth = s[1]; ctx.lineCap = "round";
-            ctx.beginPath();
-            ctx.moveTo(x0, y0 + L); ctx.lineTo(x0, y0); ctx.lineTo(x0 + L, y0);   /* top-left */
-            ctx.moveTo(x1 - L, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y0 + L);   /* top-right */
-            ctx.moveTo(x0, y1 - L); ctx.lineTo(x0, y1); ctx.lineTo(x0 + L, y1);   /* bottom-left */
-            ctx.moveTo(x1 - L, y1); ctx.lineTo(x1, y1); ctx.lineTo(x1, y1 - L);   /* bottom-right */
-            ctx.stroke();
-          });
-          ctx.lineCap = "butt";
+          cornerBrackets(ctx, x0, y0, x1, y1, col, dpr);   /* shared with the radar lock mark */
           haloText(ctx, label, x0 + 2 * dpr, y0 - 3 * dpr, col, dpr);
         } else if (detStyle === "seeker" && !forceBox) {
           /* HEAVY HALO CROSS — short thick arms with a centre gap over a dark halo,
