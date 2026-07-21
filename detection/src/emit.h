@@ -5,6 +5,13 @@
  * pixels (px = [cx,cy,w,h], full-res) and real-world angle (ang = [az,el,w,h]
  * radians) via the lens IFOV — angle is what fusion needs since the camera has
  * no range. Every box is stamped with its source ("app" model / "mot" motion).
+ *
+ * Boxes from the appearance model also carry the temporal-integration state
+ * (temporal.h): how long the evidence has been accumulating (age, hits), how far
+ * the target has actually travelled in a straight line (disp), and whether the box
+ * only exists because of that integration ("tbd":1) rather than clearing the
+ * per-frame confidence on its own. Consumers that do not care may ignore all four;
+ * they are additive and optional.
  */
 #ifndef DET_EMIT_H
 #define DET_EMIT_H
@@ -16,7 +23,10 @@ typedef struct {
     const char *src;    /* "app" (model) or "mot" (motion) */
     const char *cls;    /* "human"/"vehicle"/"drone", or NULL for an unclassified mover */
     float       conf;
-    int         age;    /* motion persistence age; <0 to omit */
+    int         age;    /* ticks since first seen; <0 to omit */
+    int         hits;   /* observations accumulated; <0 to omit */
+    float       disp;   /* net displacement in px from first seen; <0 to omit */
+    int         tbd;    /* 1 = promoted by temporal integration (below `conf` alone) */
     float       cx, cy, w, h;   /* full-res pixels */
 } DetBox;
 

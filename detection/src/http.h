@@ -9,6 +9,10 @@
  * live knobs back with http_get_knobs(). Client threads only ever read the
  * latest published snapshot, so a slow consumer drops frames and can never
  * stall the detector.
+ *
+ * Of these knobs exactly TWO are operator-facing and belong in the GUI: `conf`
+ * and `temporal`. Everything else is bench tuning, reached with curl. The
+ * mot_* knobs belong to the FROZEN motion worker (see config.h).
  */
 #ifndef DET_HTTP_H
 #define DET_HTTP_H
@@ -16,14 +20,23 @@
 #include <stddef.h>
 
 typedef struct {
-    double conf;
+    double conf;          /* "strong" tier: emitted immediately, no integration */
     int    cadence;       /* run detector every Nth captured frame */
-    int    motion;        /* motion worker on/off */
     int    max_dets;
     double nms;           /* box-merge IoU threshold (lower = merge more) */
+
+    /* temporal integration (track-before-detect) — see temporal.h */
+    int    temporal;      /* on/off; the operator-facing "EO temporal" button */
+    double tbd_lo;        /* candidate floor + evidence reference */
+    double tbd_confirm;   /* score needed to promote a weak track */
+    double tbd_decay;     /* score subtracted per missed tick */
+    int    tbd_max_miss;  /* consecutive missed ticks before a track is dropped */
+
+    /* motion worker — FROZEN, off by default (config.h) */
+    int    motion;
     double mot_k;         /* motion MAD threshold multiplier */
     double mot_window_s;  /* rolling-background window (seconds) */
-    int    mot_persist;   /* confirmation strength 1..5 (fraction of the ~1 s M-of-N window) */
+    int    mot_persist;   /* confirmation strength 1..5 */
     int    mot_down;      /* motion spatial downscale (1 = native) */
     int    mot_method;    /* 0 = background-subtraction, 1 = frame-difference */
     double mot_baseline_s;/* frame-diff baseline (seconds back) */
@@ -41,6 +54,9 @@ void http_set_det(double fps, double infer_ms_p50, double infer_ms_p95,
                   double e2e_ms_p50, double e2e_ms_p95,
                   const char *model, const char *precision);
 void http_set_motion(double fps, double stab_fail_pct, int candidates);
+/* Temporal integrator health: tracks carried, and how many of the boxes emitted on
+ * the last tick were promoted by integration rather than passed by `conf`. */
+void http_set_temporal(int live_tracks, int promoted_last);
 
 /* One-time static info for /stats. */
 void http_set_info(const char *version, double ifov_urad, int img_w, int img_h);

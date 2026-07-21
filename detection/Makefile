@@ -1,7 +1,8 @@
 # AIRPOC EO detector — on-device build (native aarch64 on the Jetson Orin Nano Super).
 #
 # Mixed C / C++ / CUDA:
-#   C   : main, tap consumer, HTTP/SSE, emit, identity stabilizer   (cc)
+#   C   : main, tap consumer, HTTP/SSE, emit, temporal integrator,
+#         identity stabilizer                                       (cc)
 #   CUDA: preproc kernel (Y10 -> model input)                        (nvcc)
 #   C++ : TensorRT inference (infer), motion worker + ECC (opencv)   (g++)
 # OpenCV is linked only into the motion objects; TensorRT/CUDA only where needed.
@@ -27,7 +28,7 @@ OPENCV_LIBS   ?= -lopencv_core -lopencv_imgproc -lopencv_video
 LDLIBS = -L$(CUDA_DIR)/lib64 -lnvinfer -lnvinfer_plugin -lcudart \
          -lpthread -lm -lrt $(OPENCV_LIBS)
 
-CSRC   = main.c tap_source.c http.c emit.c stab_identity.c
+CSRC   = main.c tap_source.c http.c emit.c temporal.c stab_identity.c
 CXXSRC = infer.cpp motion.cpp stab_ecc.cpp
 CUSRC  = preproc.cu
 OBJ    = $(CSRC:.c=.o) $(CXXSRC:.cpp=.o) $(CUSRC:.cu=.o)

@@ -1,6 +1,25 @@
-/* motion.h — CPU motion worker: the safety net that catches ANY moving target
- * the appearance model missed, at any size (a far tiny drone, but equally a
- * mid-range vehicle or a person lost to poor contrast/shade/low light).
+/* motion.h — CPU motion worker.
+ *
+ * ============================ FROZEN (2026-07-21) ============================
+ * NOT under development, OFF by default (DET_MOTION_DEFAULT 0). Measured across
+ * four recordings it does not do its job: background-subtraction absorbs slow or
+ * near-stationary targets, frame-difference misses slow far targets on a short
+ * baseline, and both flood on wind-blown foliage (128-353 surviving boxes on the
+ * day scene) — clutter no per-frame threshold can remove. Weak/far targets are now
+ * reached by track-before-detect integration on the appearance model (temporal.h),
+ * which supersedes this head.
+ *
+ * Retained, not deleted, for exactly one reason: track-before-detect can recover a
+ * target the model scores WEAKLY but not one it scores at ZERO (e.g. a 3 px drone
+ * it has no notion of); motion is the only path that would ever see those. Kept
+ * reachable via /ctl (motion=1) so it can be revived if the trained model shows
+ * that gap. Do not tune it, do not surface it in the operator GUI, and do not
+ * build on it without new evidence. Rationale: detection/README.md.
+ * =============================================================================
+ *
+ * The safety net that catches ANY moving target the appearance model missed, at
+ * any size (a far tiny drone, but equally a mid-range vehicle or a person lost to
+ * poor contrast/shade/low light).
  *
  * Runs on a (possibly downscaled) luma image and reports what moved relative to a
  * reference frame, then confirms it over time:

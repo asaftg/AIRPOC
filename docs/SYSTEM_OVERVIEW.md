@@ -58,7 +58,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Operator console (`app/`) | — | ✅ thin proxy console, running on the Jetson: relays EO video + radar/detector SSE, forwards controls, adds the radar scope + EO/detector overlays + record/replay (native-HD 60 fps, Convert-to-HD, library/offload) + tracking + day/night. No capture/ISP/AE/encode. Reserved: gimbal pointing, BRG/RNG, BATT/ALT | [`app/`](../app/README.md) |
 | Radar | `:8092` | ✅ V2 shipped 2026-07-11: crash-proof fw + guarded temporal tracker, 26 Hz / 0 drops, class-less boxes, GUI-consumed. Human ~300 m night / ~200 m day, vehicles radial ~424 m. Firmware `agv3` (2026-07-17): comb gate fixed and observing, awaiting calibration before arming. Open: 450-pt/frame chip budget ~420 full (half spent on threshold-level junk past 200 m) caps far range, tangential blindness (Phase 3), angle cal | [`radar/`](../radar/README.md) |
 | Record & replay (`recorder/`) | `:8093` | 🟡 records the full mission (camera, radar, detections, all metadata) to the NVMe without slowing the live system, and replays it looking like the live screen — full-resolution native video (denoised, smoothly seekable H.264), radar scope + detection boxes in sync, pause/step/scrub. On-device with the real camera + radar: recording, native replay, per-session HD-convert, and offload/export all verified; browse/tag included. Next: console-side polish (native `<video>` playback + live-rate radar/det replay streams) | [`recorder/`](../recorder/README.md) |
-| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + CPU motion safety-net, one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Stateless — temporal/tracking is the EO tracker's | [`detection/`](../detection/README.md) |
+| Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) + **track-before-detect temporal integration** (weak evidence integrated before the threshold, so far/low-contrast targets survive; strong ones unchanged and un-delayed), one box per target, feeding the console. Stock COCO placeholder (raw-head FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. Integration validated **offline only, not yet on the Jetson**. CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
 | Training data (`datasets/`) | — | 🟡 offline bench pipeline (Python; never runs on the seeker): FPV-strike footage → COCO vehicle/human set for the EO detector. Architecture + non-GPU spine unit-tested on a synthetic fixture; **the real-data stages have never been run** | [`datasets/`](../datasets/README.md) |
 | Fusion | — | ⬜ not started | — |
 | Tracking | — | ⬜ not started | — |
@@ -158,44 +158,66 @@ per-session `hd` flag drives the console badge) and **offloaded** as a streaming
 the live-rate radar/detection replay streams. Detail:
 [`recorder/`](../recorder/README.md).
 
-### Detection (`detection/`) — EO object detector, running on a placeholder model
+### Detection (`detection/`) — EO object detector with track-before-detect
 On-device detector (`detectiond`, `:8094`) that reads the EO camera tap
 (`airpoc.eo_y10`) and emits per-frame `human`/`vehicle`/`drone` boxes over
 `/stream` + `/stats` + `/ctl`, plus the `airpoc.det_wire` recorder tap — the same
-contract shape as the radar daemon; the console already consumes it. Two paths: a
-**TensorRT appearance model** at native 1440×1088 (RTMDet-tiny, Apache; raw-head
-export with decode + NMS in our C++) and a **CPU motion worker** — a *permissive*
-safety net for movers the model missed, run at native res on the model's `cadence`,
-with two selectable references (`mot_method`: background-subtraction vs frame-difference).
-Where they overlap the model wins → one box per target. Boxes carry pixels **and**
+contract shape as the radar daemon; the console already consumes it. A **TensorRT
+appearance model** at native 1440×1088 (RTMDet-tiny, Apache; raw-head export with
+decode + NMS in our C++) feeds a **temporal integrator**. Boxes carry pixels **and**
 real-world angle (via the lens IFOV) for fusion.
 
-**Deliberately stateless** — one fresh list of boxes per frame; all cross-frame
-work (temporal confirmation, smoothing, coasting, track IDs, detect-slow/track-fast,
-**and mover-clutter rejection**) is the **EO tracker's** job, which consumes this feed.
-The motion worker is deliberately noisy — it must not *miss* a mover; separating real
-targets (which translate) from wind-blown foliage (which oscillates in place) is the
-tracker's temporal-integration job, not a detector threshold. Measured on-device (hot
-GPU, native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near its floor for this
-chip, and the biggest live-latency lever is pinning the GPU clocks (a `jetson/` boot
-service). **Current model is a stock COCO placeholder** proving the pipeline; the
-trained mono model (data/training agent) drops in with no code change. Motion defaults
-**off** — the reference is compared in the current frame, so it needs real ego-motion
-(IMU/VIO, or the `-E` ECC stabilizer) before it is usable on a moving camera. Detail:
+**Track-before-detect (v0.6.0).** A confidence threshold is a *lossy gate*: whatever
+falls below it is destroyed, and no downstream tracker can recover it — so a far or
+low-contrast target the model scores at 0.2 every single frame is thrown away frame
+after frame. The detector therefore runs the model at a **low floor** and integrates
+the weak evidence along a short trajectory before deciding what to emit. A candidate
+already above `conf` goes out **immediately and unchanged** (zero added latency); a
+weaker one goes out only once its accumulated evidence confirms it, flagged `"tbd":1`.
+One track emits at most one box per tick, so **nothing is ever reported twice**. Boxes
+carry `age`, `hits` and `disp` (net displacement) for the tracker to consume.
+
+Measured offline on a 30 s daytime recording (real model, shipping integrator): the
+0.50 gate reported **3.5 boxes/tick and zero humans**; with integration, 17.7 boxes/tick
+and humans found — while the strong-tier boxes stayed byte-identical. Most of what was
+added is real (the parked cars the gate was discarding). **Not yet run on the Jetson.**
+
+> **⚠️ Contract change:** the detector is **no longer "deliberately stateless"** — it now
+> carries a short-horizon temporal integrator, because evidence must be integrated *before*
+> the threshold or it is gone. Identity, track IDs, coasting, occlusion, smoothing and
+> long-horizon clutter rejection remain the **EO tracker's**, and the tracker must consume
+> `age`/`hits`/`disp` rather than re-integrate what is already integrated here.
+
+> **⚠️ Honest limit:** integration amplifies the model's beliefs, *including its persistent
+> mistakes* — a hedge the model calls "vehicle" at 0.3 every tick is indistinguishable from
+> a real car at 0.3 every tick. Only a better model fixes that, which is why the stock COCO
+> placeholder is the real bottleneck. Also: `tbd_confirm` is a **latency** knob, not a
+> sensitivity one (raise `tbd_lo` to accept less), and `disp` is a hint — the association
+> can hop between nearby targets, so identity stays the tracker's job.
+
+> **🧊 The CPU motion worker is FROZEN** (2026-07-21) and off by default. Measured across
+> four recordings it did not do its job: it absorbs slow/near-stationary targets, misses
+> slow far ones, and floods on wind-blown foliage (128–353 boxes) — clutter no per-frame
+> threshold can remove. It is **frozen, not deleted**, for one reason: track-before-detect
+> recovers targets the model scores *weakly* but not ones it scores at **zero** (a 3 px
+> drone), and motion is the only path that would ever see those. Revive only on evidence.
+
+Measured on-device (hot GPU, native res): FP16 ~20.8 ms / INT8 ~14.7 ms; the model is near
+its floor for this chip, and the biggest live-latency lever is pinning the GPU clocks (a
+`jetson/` boot service). The integrator itself costs nothing measurable. **Current model is
+a stock COCO placeholder** proving the pipeline; the trained mono model (data/training
+agent) does **not** yet drop in unchanged. Detail:
 [`detection/README.md`](../detection/README.md) ·
 [`detection/docs/INTEGRATION.md`](../detection/docs/INTEGRATION.md).
-
-> **⚠️ Open decision (tracker phase):** the motion worker ships **two** reference methods
-> behind `mot_method` (background-subtraction vs frame-difference) *on purpose* — neither
-> was a clear winner on our test recordings (bg-sub absorbs slow movers; frame-diff needs
-> the right baseline). The **EO tracker phase must A/B both on real tracked targets and
-> delete the loser.** Not yet decided; default is frame-diff.
 
 ### Fusion / Tracking / Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
 current state, and a link to its module folder. (Tracking target *selection* lives in
-`app/` today; the *tracker/gimbal pointing* is the future module — and it owns the
-temporal layer over the detection feed: confirm, smooth, coast, detect-slow/track-fast.)
+`app/` today; the *tracker/gimbal pointing* is the future module. It owns identity,
+smoothing, coasting, occlusion/re-acquisition, long-horizon clutter rejection and
+detect-slow/track-fast — but **not** weak-evidence integration, which now happens inside
+the detector because it has to precede the confidence threshold. The tracker consumes the
+detector's `age`/`hits`/`disp` instead of recomputing them.)
 
 ## Maturity
 

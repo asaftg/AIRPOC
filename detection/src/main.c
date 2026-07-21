@@ -7,16 +7,24 @@
  * per-frame boxes on :8094 (/stream + /stats + /ctl), same contract shape as the
  * radar daemon, plus the airpoc.det_wire recorder tap.
  *
- * Two detection paths:
- *   - Appearance model (TensorRT, -e engine): runs on every cadence-th frame in
- *     the main loop; emits classified boxes (src "app").
- *   - Motion worker (motion.c): runs in its own thread at camera rate with its own
- *     tap reader (the tap allows many readers), catching any moving target the
- *     model missed; emits unclassified movers (src "mot"). -E = ECC stabilizer
- *     (default identity, correct for a static mount).
- * Where a mover overlaps a model box, the model box wins -> one box per target.
- * With no engine the model path is a heartbeat (empty dets); the motion path and
- * the whole contract still run, so the GUI/recorder integrate before the model.
+ * Detection path (appearance model + temporal integration):
+ *   The TensorRT model runs on every cadence-th frame. With temporal integration on
+ *   (the default) the model is run at the low floor `tbd_lo` instead of `conf`, and
+ *   every candidate goes through the track-before-detect integrator (temporal.c),
+ *   which is the SINGLE place that decides what is emitted: a candidate already at
+ *   or above `conf` goes out immediately and unchanged, a weaker one goes out only
+ *   once its accumulated evidence confirms it (flagged "tbd":1). One track emits at
+ *   most one box per tick, so nothing is ever reported twice. With temporal off the
+ *   model runs at `conf` and its boxes are emitted directly, as before.
+ *
+ * Motion worker (motion.cpp): FROZEN and off by default — see config.h. Retained
+ * only as the one path that could ever see a target the model scores at zero. When
+ * enabled it runs in its own thread on the same cadence tick with its own tap reader,
+ * and emits unclassified movers (src "mot"); where a mover overlaps a model box the
+ * model box wins, so there is still one box per target. -E = ECC stabilizer.
+ *
+ * With no engine the model path is a heartbeat (empty dets); the whole contract
+ * still runs, so the GUI/recorder integrate before the model.
  */
 #define _GNU_SOURCE
 #include "config.h"
@@ -25,6 +33,7 @@
 #include "emit.h"
 #include "infer.h"
 #include "motion.h"
+#include "temporal.h"
 #include "coco.h"
 #include "airpoc_tap.h"
 #include <getopt.h>
@@ -46,7 +55,7 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
-/* Movers produced by the motion thread, read by the main (emit) loop. */
+/* Movers produced by the (frozen) motion thread, read by the main (emit) loop. */
 static pthread_mutex_t g_mov_lock = PTHREAD_MUTEX_INITIALIZER;
 static Mover  g_movers[MAX_MOV_CAP];
 static int    g_nmov = 0;
@@ -62,11 +71,14 @@ typedef struct {
 static void on_ctl(const DetKnobs *k, void *user)
 {
     (void)user;
-    fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d motion=%d max_dets=%d "
-            "nms=%.2f mot_k=%.1f mot_window_s=%.1f mot_persist=%d mot_down=%d "
-            "mot_method=%d mot_baseline_s=%.2f\n",
-            k->conf, k->cadence, k->motion, k->max_dets, k->nms, k->mot_k,
-            k->mot_window_s, k->mot_persist, k->mot_down, k->mot_method, k->mot_baseline_s);
+    fprintf(stderr, "detectiond: /ctl conf=%.2f cadence=%d max_dets=%d nms=%.2f "
+            "temporal=%d tbd_lo=%.2f tbd_confirm=%.2f tbd_decay=%.2f tbd_max_miss=%d "
+            "| motion=%d (frozen) mot_k=%.1f mot_window_s=%.1f mot_persist=%d "
+            "mot_down=%d mot_method=%d mot_baseline_s=%.2f\n",
+            k->conf, k->cadence, k->max_dets, k->nms,
+            k->temporal, k->tbd_lo, k->tbd_confirm, k->tbd_decay, k->tbd_max_miss,
+            k->motion, k->mot_k, k->mot_window_s, k->mot_persist, k->mot_down,
+            k->mot_method, k->mot_baseline_s);
 }
 
 static void *motion_thread(void *arg)
@@ -76,9 +88,8 @@ static void *motion_thread(void *arg)
     if (!src) { fprintf(stderr, "detectiond: motion thread init failed\n"); return NULL; }
 
     /* The worker is built lazily and rebuilt when mot_down changes (the downscale is
-     * fixed at construction). Motion runs on the same `cadence` tick as the appearance
-     * model (one rate for both): far/small movers are slow in pixels and don't need the
-     * full camera rate, and the lower rate is what makes native resolution affordable. */
+     * fixed at construction). Motion runs on the SAME `cadence` tick as the appearance
+     * model. FROZEN: off by default, retained per the note in config.h. */
     MotionWorker *mw = NULL;
     int cur_down = -1;
     Mover local[MAX_MOV_CAP];
@@ -108,7 +119,6 @@ static void *motion_thread(void *arg)
             if (!mw) { fprintf(stderr, "detectiond: motion_new(down=%d) failed\n", cur_down); usleep(100000); continue; }
         }
 
-        /* run on the same cadence tick as the appearance model (one rate for both) */
         int cadence = k.cadence > 0 ? k.cadence : 1;
         if ((f.meta[EO_META_V4L2SEQ] % (uint32_t)cadence) != 0) continue;
 
@@ -225,12 +235,18 @@ int main(int argc, char **argv)
     DetBox *dets = malloc(sizeof(DetBox) * MAX_DETS_CAP);
     DetBox *movers = malloc(sizeof(DetBox) * MAX_MOV_CAP);
     Mover *msnap = malloc(sizeof(Mover) * MAX_MOV_CAP);
-    if (!src || !json || !iboxes || !dets || !movers || !msnap) { perror("alloc"); return 1; }
+    TbdIn  *tin  = malloc(sizeof(TbdIn) * MAX_DETS_CAP);
+    TbdOut *tout = malloc(sizeof(TbdOut) * MAX_DETS_CAP);
+    TbdCtx *tbd  = tbd_new();
+    if (!src || !json || !iboxes || !dets || !movers || !msnap || !tin || !tout || !tbd) {
+        perror("alloc"); return 1;
+    }
 
     uint64_t last_t_src = 0, last_rx_ns = 0;
     double fps = 0, det_fps = 0, last_infer_ms = 0, infer_ms_max = 0;
     unsigned long gaps = 0;
     uint64_t last_tick_t = 0;
+    int prev_temporal = -1;
     DetFrame f;
 
     while (g_run) {
@@ -257,20 +273,58 @@ int main(int argc, char **argv)
         int cadence = k.cadence > 0 ? k.cadence : 1;
         if ((v4l2_seq % (uint32_t)cadence) != 0) continue;   /* not a detector tick */
 
-        /* Appearance model on this tick. */
-        int nd = 0;
+        /* Carried evidence is only meaningful across a continuous feed. Drop it when
+         * temporal is switched on, or after a tap lap left a hole in the sequence. */
+        if (k.temporal != prev_temporal || f.gap_before) tbd_reset(tbd);
+        prev_temporal = k.temporal;
+
+        /* --- appearance model on this tick --- */
+        int nd = 0, n_promoted = 0;
         if (engine) {
-            int nb = infer_run(engine, f.y10, f.w, f.h, (float)k.conf, (float)k.nms, k.max_dets,
+            /* With integration on, run the model at the candidate floor so the weak
+             * evidence survives to be integrated; otherwise run at the emit threshold. */
+            float run_conf = k.temporal ? (float)k.tbd_lo : (float)k.conf;
+            int nb = infer_run(engine, f.y10, f.w, f.h, run_conf, (float)k.nms, k.max_dets,
                                iboxes, MAX_DETS_CAP, &last_infer_ms);
             if (last_infer_ms > infer_ms_max) infer_ms_max = last_infer_ms;
-            for (int i = 0; i < nb && nd < MAX_DETS_CAP; i++) {
-                const char *cls = coco_to_airpoc(iboxes[i].cls);
-                if (!cls) continue;                          /* not one of our classes */
-                dets[nd].src = "app"; dets[nd].cls = cls; dets[nd].conf = iboxes[i].conf;
-                dets[nd].age = -1;
-                dets[nd].cx = iboxes[i].cx; dets[nd].cy = iboxes[i].cy;
-                dets[nd].w = iboxes[i].w; dets[nd].h = iboxes[i].h;
-                nd++;
+
+            if (k.temporal) {
+                int ni = 0;
+                for (int i = 0; i < nb && ni < MAX_DETS_CAP; i++) {
+                    const char *cls = coco_to_airpoc(iboxes[i].cls);
+                    if (!cls) continue;                      /* not one of our classes */
+                    tin[ni].cx = iboxes[i].cx; tin[ni].cy = iboxes[i].cy;
+                    tin[ni].w = iboxes[i].w;   tin[ni].h = iboxes[i].h;
+                    tin[ni].conf = iboxes[i].conf; tin[ni].cls = cls;
+                    ni++;
+                }
+                double tick_fps = det_fps > 0.5 ? det_fps
+                                                : (fps > 1.0 ? fps / cadence : 60.0 / cadence);
+                TbdParams tp = { .lo = k.tbd_lo, .hi = k.conf, .confirm = k.tbd_confirm,
+                                 .miss_penalty = k.tbd_decay, .max_miss = k.tbd_max_miss,
+                                 .fps = tick_fps };
+                int no = tbd_process(tbd, tin, ni, &tp, tout, MAX_DETS_CAP);
+                for (int i = 0; i < no && nd < MAX_DETS_CAP; i++) {
+                    dets[nd].src = "app"; dets[nd].cls = tout[i].cls;
+                    dets[nd].conf = tout[i].conf;
+                    dets[nd].age = tout[i].age; dets[nd].hits = tout[i].hits;
+                    dets[nd].disp = tout[i].net_disp; dets[nd].tbd = tout[i].tbd;
+                    dets[nd].cx = tout[i].cx; dets[nd].cy = tout[i].cy;
+                    dets[nd].w = tout[i].w;   dets[nd].h = tout[i].h;
+                    n_promoted += tout[i].tbd;
+                    nd++;
+                }
+            } else {
+                for (int i = 0; i < nb && nd < MAX_DETS_CAP; i++) {
+                    const char *cls = coco_to_airpoc(iboxes[i].cls);
+                    if (!cls) continue;
+                    dets[nd].src = "app"; dets[nd].cls = cls; dets[nd].conf = iboxes[i].conf;
+                    dets[nd].age = -1; dets[nd].hits = -1; dets[nd].disp = -1.0f;
+                    dets[nd].tbd = 0;
+                    dets[nd].cx = iboxes[i].cx; dets[nd].cy = iboxes[i].cy;
+                    dets[nd].w = iboxes[i].w; dets[nd].h = iboxes[i].h;
+                    nd++;
+                }
             }
         }
 
@@ -284,7 +338,8 @@ int main(int argc, char **argv)
         for (int i = 0; i < nmsnap && nm < MAX_MOV_CAP; i++) {
             if (overlaps(&msnap[i], dets, nd)) continue;
             movers[nm].src = "mot"; movers[nm].cls = 0; movers[nm].conf = msnap[i].conf;
-            movers[nm].age = msnap[i].age;
+            movers[nm].age = msnap[i].age; movers[nm].hits = -1; movers[nm].disp = -1.0f;
+            movers[nm].tbd = 0;
             movers[nm].cx = msnap[i].cx; movers[nm].cy = msnap[i].cy;
             movers[nm].w = msnap[i].w; movers[nm].h = msnap[i].h;
             nm++;
@@ -316,6 +371,7 @@ int main(int argc, char **argv)
         if (engine)
             http_set_det(det_fps, last_infer_ms, infer_ms_max, last_infer_ms, infer_ms_max,
                          model_name, infer_precision(engine));
+        http_set_temporal(tbd_live_tracks(tbd), n_promoted);
         http_set_motion(mfps, sf ? 100.0 : 0.0, nmsnap);
     }
 
@@ -325,6 +381,7 @@ int main(int argc, char **argv)
     tap_destroy(&wire_tap);
     if (engine) infer_close(engine);
     src->close(src);
-    free(json); free(iboxes); free(dets); free(movers); free(msnap);
+    tbd_free(tbd);
+    free(json); free(iboxes); free(dets); free(movers); free(msnap); free(tin); free(tout);
     return 0;
 }

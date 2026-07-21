@@ -33,6 +33,15 @@ static size_t append_box(char *buf, size_t cap, size_t off, const DetBox *b, dou
     if (b->age >= 0)
         off = adv(off, cap, snprintf(buf + off, cap - off, "\"age\":%d,", b->age));
     if (off >= cap) return off;
+    if (b->hits >= 0)
+        off = adv(off, cap, snprintf(buf + off, cap - off, "\"hits\":%d,", b->hits));
+    if (off >= cap) return off;
+    if (b->disp >= 0)
+        off = adv(off, cap, snprintf(buf + off, cap - off, "\"disp\":%.1f,", b->disp));
+    if (off >= cap) return off;
+    if (b->tbd)
+        off = adv(off, cap, snprintf(buf + off, cap - off, "\"tbd\":1,"));
+    if (off >= cap) return off;
     off = adv(off, cap, snprintf(buf + off, cap - off,
         "\"conf\":%.3f,\"px\":[%.1f,%.1f,%.1f,%.1f],"
         "\"ang\":[%.4f,%.4f,%.4f,%.4f]}",
@@ -73,7 +82,9 @@ size_t det_frame_json(char *buf, size_t cap, const DetHdr *h,
          * Measured from t_pub_ns, NOT t_src_ns: the IMX296/V4L2 driver stamps
          * t_src on a clock that is NOT CLOCK_MONOTONIC-comparable (observed ~30 s
          * ahead of tap_now_ns), so t_src is only a frame-correlation key here.
-         * t_pub and t_out are both CLOCK_MONOTONIC (systemwide) -> a valid diff. */
+         * t_pub and t_out are both CLOCK_MONOTONIC (systemwide) -> a valid diff.
+         * NOTE this is per-tick pipeline latency; a box promoted by temporal
+         * integration ("tbd":1) additionally waited `age` ticks for its evidence. */
         h->t_out_ns >= h->t_pub_ns ? (h->t_out_ns - h->t_pub_ns) / 1e6 : 0.0,
         h->night ? "true" : "false",
         h->illum_on ? "true" : "false", h->illum_present ? "true" : "false",

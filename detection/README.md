@@ -4,28 +4,47 @@ On-device detector for the AIRPOC EO camera. Reads native IMX296 frames from the
 EO pipeline's shared-memory tap and emits per-frame boxes — `human`, `vehicle`,
 `drone` — for the EO tracker and fusion modules over HTTP on `:8094`.
 
-**This module detects only — it is deliberately stateless (one fresh list of
-boxes per frame).** All cross-frame reasoning — temporal confirmation, smoothing,
-coasting, track IDs, detect-slow/track-fast — belongs to the **EO tracker**
-(separate module), which consumes this feed. We emit what it needs to do that:
-class + confidence, the frame id, and the exposure timestamp as the correlation key.
+> ### ⚠️ CONTRACT CHANGE (v0.6.0) — the detector is no longer stateless
+> It used to be documented as "deliberately stateless, one fresh list of boxes per
+> frame, all cross-frame work belongs to the EO tracker". **That is no longer true.**
+> The detector now carries a **short-horizon temporal integrator** (track-before-detect)
+> because a confidence threshold is a *lossy gate*: evidence below it is destroyed and
+> no downstream tracker can ever recover it. Integrating weak evidence therefore has to
+> happen **inside** the detector, before the gate.
+>
+> **What still belongs to the EO tracker:** identity, track IDs, coasting, occlusion and
+> re-acquisition, smoothing, long-horizon clutter rejection, detect-slow/track-fast.
+> **The tracker must not re-integrate what is already integrated here** — it consumes
+> `age` / `hits` / `disp` off the wire instead of recomputing them.
 
-Two detection paths:
-- **Appearance model** (TensorRT, GPU) at native 1440×1088 — classified boxes.
-- **Motion worker** (OpenCV, CPU thread, on the detector `cadence`) — a **deliberately
-  permissive** safety net that catches any *moving* target the model missed (far tiny
-  drone, or a mid-range vehicle / person lost to poor contrast). It diffs the current
-  frame against a "no-mover" reference — **two selectable methods** (`mot_method`):
-  background-subtraction (median of the last `mot_window_s`) or frame-difference (vs
-  `mot_baseline_s` ago) — removes the night row read-noise, and confirms a mover with an
-  M-of-N tracker over ~1 s. Emits unclassified `movers`. Where a mover overlaps a model
-  box the model wins → one box per target. **It is not meant to be clean:** clutter
-  rejection (keep tracks that *translate*, drop wind-blown foliage that oscillates in
-  place) is the EO tracker's temporal-integration job, not the detector's.
+## The two things that find targets
+
+**1. Appearance model + temporal integration (the detection path).**
+TensorRT RTMDet-tiny at native 1440×1088, run on every `cadence`-th frame. With
+`temporal=1` (the default) the model is run at the low floor `tbd_lo` rather than at
+`conf`, and every candidate is fed to the **track-before-detect integrator**
+(`src/temporal.c`), which is the *single* place that decides what leaves the detector:
+
+- a candidate already at/above `conf` is emitted **immediately, unchanged, with its raw
+  confidence** — zero added latency, byte-identical to a non-temporal build;
+- a weaker one is emitted only once its accumulated evidence crosses `tbd_confirm`,
+  and is flagged **`"tbd":1`** on the wire.
+
+Because emission is per-track through one code path, **a target can never be reported
+twice** (once as "strong" and once as "integrated") in the same tick.
+
+The score is a sequential likelihood ratio: on a hit `S += presence + (logit(conf) −
+logit(tbd_lo))`, on a missed tick `S −= tbd_decay`. Evidence is *weighted*, not merely
+counted — a 0.45 look confirms far faster than a 0.16 one — and flicker decays and dies
+while a steady weak target climbs. The integrator never emits a predicted or coasted
+box: only boxes the model actually produced on that tick, so the detector never invents
+a target. Full rationale in [`src/temporal.h`](src/temporal.h).
+
+**2. Motion worker — FROZEN.** See below. Off by default, not under development.
 
 Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 
-## Status — running on the Jetson, verified
+## Status
 - **Model:** stock COCO-pretrained **RTMDet-tiny** (Apache-2.0), exported raw-head
   (decode done in our C++, not in the engine). Verified correct on a known image.
   This is a **placeholder** proving the pipeline. `human`/`vehicle` today
@@ -38,36 +57,50 @@ Full design + rationale: the repo plan and [`docs/INTEGRATION.md`](docs/INTEGRAT
   no detections) while the daemon otherwise looks normal. The class remap in
   `src/coco.h` is COCO-index based and is itself a documented placeholder.
   Both need a code change before the trained model can be handed over.
-- **Motion:** worker with **two reference methods** (`mot_method`), validated offline
-  across night/day recordings — both kept so the EO-tracker phase picks the winner:
-  - `0` **background-subtraction** — median of the last `mot_window_s`. Best on a stable
-    scene with high-contrast movers (a bright far walker on dark road). *Absorbs* a slow /
-    near-stationary target that lingers in view; costs a median rebuild.
-  - `1` **frame-difference** (default) — vs the frame `mot_baseline_s` (default 2 s) ago.
-    Catches the slow persistent movers the median absorbs; cheaper. A too-short baseline
-    misses a slow far target; a long baseline over a moving camera needs ego-motion.
+- **Temporal integration:** implemented and validated **offline only** — measured on a
+  30 s daytime recording (`REC 2026-07-11 11:53 radar v2 day`, 2:58–3:28, cadence 4 ⇒
+  450 ticks) by running the shipping `temporal.c` over the real model's output:
 
-  Runs at **native resolution** (`mot_down`=1) on the **same `cadence` tick as the model**
-  (one rate for both — 4 ≈ 15 Hz): far/small movers are slow in pixels, so the cadence
-  rate keeps native affordable; downscaling would blind exactly the targets this net is
-  for. **Off by default** — the reference is compared in the current frame, so a *moving*
-  camera needs ego-motion alignment (the `-E` ECC stabilizer, IMU/VIO later) behind
-  `stabilize()` first; safe on a static/holding mount. Knobs: `mot_method`,
-  `mot_baseline_s`, `mot_down`, `mot_window_s`, `mot_k`, `mot_persist`, and `cadence`.
-  > Pitfall: at native the worker floods on wind-blown foliage in daytime — genuine
-  > motion, not noise. It's rejected **downstream by the EO tracker** (foliage oscillates
-  > in place; a real target translates), not by any detector threshold — no `mot_k` /
-  > baseline setting removes foliage without also deleting the far targets.
-- **Contract + recorder tap live;** the app/console already consumes `:8094`.
+  | | boxes/tick | humans reported |
+  |---|---|---|
+  | today (`conf` ≥ 0.50, no integration) | 3.5 | **0** |
+  | with integration (`tbd_lo` 0.15, `tbd_confirm` 3.0) | 17.7 | 4.0 |
 
-> ### ⚠️ OPEN DECISION — two motion methods ship on purpose (revisit in the tracker phase)
-> The motion worker deliberately carries **both** reference methods behind the `mot_method`
-> knob — `0` background-subtraction and `1` frame-difference — because on our recordings
-> **neither is a clear winner**: bg-sub *absorbs* slow/near-stationary movers (it lost two
-> loitering people), frame-diff catches those but needs the right `mot_baseline_s`.
-> **This is temporary.** The **EO-tracker phase must A/B the two on real tracked targets,
-> pick the winner, and delete the loser** — do not assume one is chosen. Evidence lives in
-> the session notes; the default today is frame-diff (`mot_method=1`).
+  The strong-tier boxes were **identical** in both runs (1564 of them), confirming the
+  no-latency / no-change guarantee. Most of what integration added on that clip is
+  **real** — the row of parked cars the 0.50 gate was discarding — and it recovered
+  people the gate reported as *nothing at all*. **Not yet run on the Jetson.**
+
+> ### ⚠️ Honest limits of track-before-detect — read before tuning
+> - **It amplifies the model's beliefs, including its persistent mistakes.** A hedge the
+>   model calls "vehicle" at 0.3 *every* tick is, by construction, indistinguishable from
+>   a real car at 0.3 every tick. Integration cannot fix a bad prior — only a better model
+>   can. Expect more false boxes on the stock COCO placeholder than on the trained model.
+> - **`tbd_confirm` is a LATENCY knob, not a sensitivity knob.** A target the model keeps
+>   seeing crosses any threshold sooner or later. Measured on the clip above: sweeping
+>   `tbd_confirm` 2.0 → 8.0 changed the box count by only 13%, while raising `tbd_lo`
+>   0.15 → 0.25 cut it 24%. **To accept fewer things, raise `tbd_lo`.**
+> - **`disp` is a hint, not a measurement.** The cross-frame link exists only to accumulate
+>   evidence; it is a gated nearest-neighbour and *will* hop between nearby targets. The
+>   emitted box is always the model's real box for that tick, so detections stay honest —
+>   but `age`/`hits`/`disp` can belong to a hopped identity. Identity is the tracker's job.
+
+> ### 🧊 FROZEN — the motion worker (2026-07-21)
+> The motion head is **retained but not under development**, and is **off by default**.
+> Measured across four recordings it does not do its job: background-subtraction *absorbs*
+> slow or near-stationary targets (it lost two loitering people), frame-difference misses
+> slow far targets when the baseline is short, and **both flood on wind-blown foliage**
+> (128–353 surviving boxes on the day scene) — clutter no per-frame threshold can remove,
+> because any threshold that kills foliage also kills far targets. Temporal integration
+> supersedes it as the route to weak/far targets.
+>
+> **It is frozen rather than deleted for exactly one reason:** track-before-detect can
+> recover a target the model scores *weakly*, but **not one the model scores at zero**
+> (a 3 px drone it has no notion of). Motion is the only path that would ever see those.
+> It stays reachable via `/ctl` (`motion=1`) with its knobs live, so it can be revived if
+> the trained model shows that gap. **Do not tune it, do not surface it in the operator
+> GUI, and do not build on it without new evidence.** Both reference methods
+> (`mot_method` 0 = background-subtraction, 1 = frame-difference) are preserved as-is.
 
 ### Latency (measured on-device, hot GPU, native resolution)
 | engine | per-inference | max fps |
@@ -83,6 +116,13 @@ platform boot service in `jetson/` — not a detector change. INT8 is held as an
 option for the terminal high-frame-rate phase, pending an accuracy gate on the
 trained model.
 
+The integrator itself costs nothing measurable next to inference: a few hundred float
+ops per candidate, no allocation after startup, fixed-size track table.
+
+**Integration latency (weak targets only):** a promoted target waits roughly
+`tbd_confirm ÷ per-hit score` ticks — with the defaults, ~2 ticks for a 0.45 candidate
+and ~6 for a 0.15 one, i.e. **~0.13–0.40 s at cadence 4**. Strong targets wait zero.
+
 ## Build & run (on the Jetson)
 ```
 cd detection && make            # C + CUDA (nvcc) + C++ (TensorRT, OpenCV)
@@ -96,20 +136,27 @@ make tools                      # build_engine + capture_calib
 #    then add:  --int8 --calib /data/detection/calib
 
 ./detectiond -p 8094 -e /data/detection/engines/rtmdet-t-raw.fp16.trt10.engine
-./detectiond -p 8094            # model-less: motion + heartbeat only
+./detectiond -p 8094            # model-less: heartbeat only
 curl -s localhost:8094/stats | jq
 curl -N localhost:8094/stream   # live detection messages
+
+curl -s 'localhost:8094/ctl?temporal=0'                  # integration off
+curl -s 'localhost:8094/ctl?tbd_lo=0.25&tbd_confirm=5'   # accept less / wait longer
 ```
 Flags: `-e` engine, `-f/-x/-i` optics (lens focal → the pixel→angle mapping),
-`-E` ECC stabilizer, `-t` tap. Started by the launcher (`app/launcher/start.sh`)
-on the stack. Never opens `/dev/video0` — it only reads the EO shm tap, so run the
-EO pipeline (or the launcher) first.
+`-E` ECC stabilizer (frozen motion path only), `-t` tap. Started by the launcher
+(`app/launcher/start.sh`) on the stack. Never opens `/dev/video0` — it only reads the
+EO shm tap, so run the EO pipeline (or the launcher) first.
 
 ## I/O contract (full schema in [`docs/INTEGRATION.md`](docs/INTEGRATION.md))
 - **Input:** shm tap `airpoc.eo_y10` (Y10 1440×1088, 16-slot ring) — read-only.
 - **Output:** HTTP `:8094` `/stream` (SSE, one message per tick) + `/stats` +
-  `/ctl` (live knobs: `conf`, `cadence`, `motion`, …); shm tap `airpoc.det_wire`
-  (byte-verbatim `/stream` JSON) for the recorder.
+  `/ctl`; shm tap `airpoc.det_wire` (byte-verbatim `/stream` JSON) for the recorder.
+
+**Operator-facing knobs — exactly two.** `conf` and `temporal` ("EO temporal"). Every
+other knob (`tbd_lo`, `tbd_confirm`, `tbd_decay`, `tbd_max_miss`, `cadence`, `nms`,
+`max_dets`, and all `mot_*`) is **bench tuning reached with `curl`** and must not be
+surfaced in the operator GUI.
 
 ## Layout
 ```
@@ -120,11 +167,12 @@ detection/
        source.h tap_source.c  frame source (live tap; replay sources land next)
        preproc.cu/.h          Y10 -> normalized model input (CUDA)
        infer.cpp/.h           TensorRT engine + raw-head decode + NMS
-       motion.cpp/.h          motion worker (OpenCV, native, bg-sub | frame-diff, on cadence)
+       temporal.c/.h          track-before-detect evidence integrator (the emit decision)
+       motion.cpp/.h          FROZEN motion worker (OpenCV, native, on cadence)
        stab.h stab_identity.c stab_ecc.cpp   frame-alignment interface + impls
        http.h http.c          /stream + /stats + /ctl
        emit.h emit.c          detection-message JSON + pixel->angle mapping
-       main.c                 lifecycle + two-path merge
+       main.c                 lifecycle + detection path + frozen-mover merge
   tools/ build_engine.cpp     ONNX -> TRT engine (FP16 / INT8 w/ entropy calibrator)
          capture_calib.c      grab Y10 frames from the tap for INT8 calibration
          infer_probe.cpp      run a still image through the real infer path (model sanity check)
@@ -145,4 +193,3 @@ It reads the image as mono and stretches it to the model input, then packs Y10
 exactly as the tap does. Use a known image (e.g. mmdetection's `demo.jpg`): a
 correct pipeline reports the obvious cars/people at sensible confidence. This is
 how the current stock engine was verified.
-```

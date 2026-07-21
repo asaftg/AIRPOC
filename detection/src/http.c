@@ -19,8 +19,11 @@ static uint64_t g_seq = 0;
 /* live knobs (owned here so /stats echoes what was applied) */
 static DetKnobs g_k = {
     .conf = DET_CONF_DEFAULT, .cadence = DET_CADENCE_DEFAULT,
-    .motion = DET_MOTION_DEFAULT, .max_dets = DET_MAXDETS_DEFAULT,
-    .nms = DET_NMS_DEFAULT,
+    .max_dets = DET_MAXDETS_DEFAULT, .nms = DET_NMS_DEFAULT,
+    .temporal = DET_TEMPORAL_DEFAULT, .tbd_lo = DET_TBD_LO_DEFAULT,
+    .tbd_confirm = DET_TBD_CONFIRM_DEFAULT, .tbd_decay = DET_TBD_DECAY_DEFAULT,
+    .tbd_max_miss = DET_TBD_MAXMISS_DEFAULT,
+    .motion = DET_MOTION_DEFAULT,
     .mot_k = DET_MOT_K_DEFAULT, .mot_window_s = DET_MOT_WINDOW_S_DEFAULT,
     .mot_persist = DET_MOT_PERSIST_DEFAULT,
     .mot_down = DET_MOT_DOWN_DEFAULT,
@@ -46,6 +49,9 @@ static struct {
 static struct {
     int active; double fps, stab_fail_pct; int candidates;
 } g_mot;
+static struct {
+    int active, tracks, promoted;
+} g_tbd;
 
 void http_publish(const char *json, size_t len)
 {
@@ -94,6 +100,13 @@ void http_set_motion(double fps, double stab_fail_pct, int candidates)
     pthread_mutex_unlock(&g_lock);
 }
 
+void http_set_temporal(int live_tracks, int promoted_last)
+{
+    pthread_mutex_lock(&g_lock);
+    g_tbd.active = 1; g_tbd.tracks = live_tracks; g_tbd.promoted = promoted_last;
+    pthread_mutex_unlock(&g_lock);
+}
+
 void http_set_info(const char *version, double ifov_urad, int img_w, int img_h)
 {
     pthread_mutex_lock(&g_lock);
@@ -125,18 +138,25 @@ static int build_stats(char *b, size_t cap)
         "\"frame_id\":%llu},"
         "\"det\":{\"active\":%s,\"fps\":%.1f,\"model\":\"%s\",\"precision\":\"%s\","
         "\"infer_ms\":{\"p50\":%.2f,\"p95\":%.2f},\"e2e_ms\":{\"p50\":%.2f,\"p95\":%.2f}},"
-        "\"motion\":{\"active\":%s,\"fps\":%.1f,\"stab_fail_pct\":%.1f,\"candidates\":%d},"
-        "\"knobs\":{\"conf\":%.2f,\"cadence\":%d,\"motion\":%d,\"max_dets\":%d,"
-        "\"nms\":%.2f,\"mot_k\":%.1f,\"mot_window_s\":%.1f,\"mot_persist\":%d,"
+        "\"temporal\":{\"active\":%s,\"tracks\":%d,\"promoted\":%d},"
+        "\"motion\":{\"active\":%s,\"frozen\":true,\"fps\":%.1f,\"stab_fail_pct\":%.1f,"
+        "\"candidates\":%d},"
+        "\"knobs\":{\"conf\":%.2f,\"cadence\":%d,\"max_dets\":%d,\"nms\":%.2f,"
+        "\"temporal\":%d,\"tbd_lo\":%.2f,\"tbd_confirm\":%.2f,\"tbd_decay\":%.2f,"
+        "\"tbd_max_miss\":%d,"
+        "\"motion\":%d,\"mot_k\":%.1f,\"mot_window_s\":%.1f,\"mot_persist\":%d,"
         "\"mot_down\":%d,\"mot_method\":%d,\"mot_baseline_s\":%.2f}}\n",
         g_version, g_ifov_urad, g_img_w, g_img_h,
         g_tap.connected ? "true" : "false", g_tap.fps, g_tap.gaps, g_tap.drops_cum,
         g_tap.frame_id,
         g_det.active ? "true" : "false", g_det.fps, g_det.model, g_det.precision,
         g_det.infer_p50, g_det.infer_p95, g_det.e2e_p50, g_det.e2e_p95,
+        g_tbd.active ? "true" : "false", g_tbd.tracks, g_tbd.promoted,
         g_mot.active ? "true" : "false", g_mot.fps, g_mot.stab_fail_pct, g_mot.candidates,
-        g_k.conf, g_k.cadence, g_k.motion, g_k.max_dets, g_k.nms, g_k.mot_k,
-        g_k.mot_window_s, g_k.mot_persist, g_k.mot_down, g_k.mot_method, g_k.mot_baseline_s);
+        g_k.conf, g_k.cadence, g_k.max_dets, g_k.nms,
+        g_k.temporal, g_k.tbd_lo, g_k.tbd_confirm, g_k.tbd_decay, g_k.tbd_max_miss,
+        g_k.motion, g_k.mot_k, g_k.mot_window_s, g_k.mot_persist, g_k.mot_down,
+        g_k.mot_method, g_k.mot_baseline_s);
 }
 
 static void *client(void *arg)
@@ -149,43 +169,60 @@ static void *client(void *arg)
 
     if (!strncmp(req, "GET /stats", 10)) {
         pthread_mutex_lock(&g_lock);
-        char body[1024];
+        char body[2048];
         int bl = build_stats(body, sizeof body);
         pthread_mutex_unlock(&g_lock);
+        if (bl < 0) bl = 0;
+        if ((size_t)bl >= sizeof body) bl = (int)sizeof body - 1;
         dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
                     "Content-Length: %d\r\nConnection: close\r\n\r\n%s", bl, body);
         close(fd); return NULL;
     }
 
-    /* GET /ctl?conf=&cadence=&motion=&max_dets=&mot_k=&mot_window_s=&mot_persist=
-     * Absent params keep their current value. Clamped server-side. Always 200. */
+    /* GET /ctl?conf=&cadence=&temporal=&tbd_*=&motion=&mot_*=
+     * Absent params keep their current value. Clamped server-side. Always 200.
+     * Names are matched by substring, so no knob name may contain another. */
     if (!strncmp(req, "GET /ctl", 8)) {
         char *q;
         pthread_mutex_lock(&g_lock);
         DetKnobs k = g_k;
         pthread_mutex_unlock(&g_lock);
-        if ((q = strstr(req, "conf=")))        k.conf = atof(q + 5);
-        if ((q = strstr(req, "cadence=")))     k.cadence = atoi(q + 8);
-        if ((q = strstr(req, "motion=")))      k.motion = atoi(q + 7);
-        if ((q = strstr(req, "max_dets=")))    k.max_dets = atoi(q + 9);
-        if ((q = strstr(req, "nms=")))         k.nms = atof(q + 4);
-        if ((q = strstr(req, "mot_k=")))       k.mot_k = atof(q + 6);
-        if ((q = strstr(req, "mot_window_s="))) k.mot_window_s = atof(q + 13);
-        if ((q = strstr(req, "mot_persist=")))  k.mot_persist = atoi(q + 12);
-        if ((q = strstr(req, "mot_down=")))     k.mot_down = atoi(q + 9);
-        if ((q = strstr(req, "mot_method=")))   k.mot_method = atoi(q + 11);
+        if ((q = strstr(req, "conf=")))          k.conf = atof(q + 5);
+        if ((q = strstr(req, "cadence=")))       k.cadence = atoi(q + 8);
+        if ((q = strstr(req, "max_dets=")))      k.max_dets = atoi(q + 9);
+        if ((q = strstr(req, "nms=")))           k.nms = atof(q + 4);
+        if ((q = strstr(req, "temporal=")))      k.temporal = atoi(q + 9);
+        if ((q = strstr(req, "tbd_lo=")))        k.tbd_lo = atof(q + 7);
+        if ((q = strstr(req, "tbd_confirm=")))   k.tbd_confirm = atof(q + 12);
+        if ((q = strstr(req, "tbd_decay=")))     k.tbd_decay = atof(q + 10);
+        if ((q = strstr(req, "tbd_max_miss=")))  k.tbd_max_miss = atoi(q + 13);
+        if ((q = strstr(req, "motion=")))        k.motion = atoi(q + 7);
+        if ((q = strstr(req, "mot_k=")))         k.mot_k = atof(q + 6);
+        if ((q = strstr(req, "mot_window_s=")))  k.mot_window_s = atof(q + 13);
+        if ((q = strstr(req, "mot_persist=")))   k.mot_persist = atoi(q + 12);
+        if ((q = strstr(req, "mot_down=")))      k.mot_down = atoi(q + 9);
+        if ((q = strstr(req, "mot_method=")))    k.mot_method = atoi(q + 11);
         if ((q = strstr(req, "mot_baseline_s="))) k.mot_baseline_s = atof(q + 15);
+
         k.conf = clampd(k.conf, DET_CONF_MIN, DET_CONF_MAX);
         k.cadence = clampi(k.cadence, DET_CADENCE_MIN, DET_CADENCE_MAX);
-        k.motion = k.motion ? 1 : 0;
         k.max_dets = clampi(k.max_dets, DET_MAXDETS_MIN, DET_MAXDETS_MAX);
         k.nms = clampd(k.nms, DET_NMS_MIN, DET_NMS_MAX);
+        k.temporal = k.temporal ? 1 : 0;
+        k.tbd_lo = clampd(k.tbd_lo, DET_TBD_LO_MIN, DET_TBD_LO_MAX);
+        /* the candidate floor is meaningless above the immediate-emit tier */
+        if (k.tbd_lo > k.conf) k.tbd_lo = k.conf;
+        k.tbd_confirm = clampd(k.tbd_confirm, DET_TBD_CONFIRM_MIN, DET_TBD_CONFIRM_MAX);
+        k.tbd_decay = clampd(k.tbd_decay, DET_TBD_DECAY_MIN, DET_TBD_DECAY_MAX);
+        k.tbd_max_miss = clampi(k.tbd_max_miss, DET_TBD_MAXMISS_MIN, DET_TBD_MAXMISS_MAX);
+        k.motion = k.motion ? 1 : 0;
         k.mot_k = clampd(k.mot_k, DET_MOT_K_MIN, DET_MOT_K_MAX);
         k.mot_window_s = clampd(k.mot_window_s, DET_MOT_WINDOW_S_MIN, DET_MOT_WINDOW_S_MAX);
         k.mot_persist = clampi(k.mot_persist, DET_MOT_PERSIST_MIN, DET_MOT_PERSIST_MAX);
         k.mot_down = clampi(k.mot_down, DET_MOT_DOWN_MIN, DET_MOT_DOWN_MAX);
         k.mot_method = clampi(k.mot_method, DET_MOT_METHOD_MIN, DET_MOT_METHOD_MAX);
         k.mot_baseline_s = clampd(k.mot_baseline_s, DET_MOT_BASELINE_S_MIN, DET_MOT_BASELINE_S_MAX);
+
         pthread_mutex_lock(&g_lock);
         g_k = k;
         pthread_mutex_unlock(&g_lock);
