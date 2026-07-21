@@ -445,3 +445,11 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
   #dlg-name,#dlg-note,.dlg-tagadd{font-size:16px}
   .tagchip{font-size:12px;padding:6px 10px}
 }
+/* Which sensor a target-list row came from. Radar and EO are independent objects until
+ * fusion exists, so the row must say which sensor is claiming it — a range with no class is
+ * a radar target, a class with no range is an EO track. */
+.tsrc{font-size:9px;letter-spacing:.5px;padding:0 3px;border-radius:2px;margin-right:4px;
+  border:1px solid var(--bd3);color:var(--muted)}
+.tsrc.eo{color:#40c4ff;border-color:#2f6f8f}
+.tsrc.rad{color:var(--amber);border-color:var(--bd3)}
+.tsrc.fus{color:var(--on);border-color:#2e6b3f}

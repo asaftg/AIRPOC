@@ -20,7 +20,9 @@
   var css = function (n) { return getComputedStyle(document.body).getPropertyValue(n).trim(); };
 
   var zoom = 1;
-  var trackMode = "auto", engagedTid = null, sentEngage = null;
+  /* MANUAL is the default: AUTO needs a ranking we have not agreed yet (it would pick row #1
+   * of the merged list). Manual means the operator declares the target — nothing self-selects. */
+  var trackMode = "man", engagedKey = null, sentEngage = null, sentTrkEngage = null;
   var illumMode = "auto";
   var lastStats = {}, lastRadar = null;
   var eoDownN = 0, nextLiveHeal = 0, lastEoc = true;   /* live-view EO self-heal (see poll) */
@@ -176,8 +178,8 @@
     b.classList.toggle("auto", m === "auto"); b.classList.toggle("man", m === "man");
     document.body.classList.toggle("manual", m === "man");
     $("stage").classList.toggle("manual", m === "man");
-    if (m === "auto") { engagedTid = null; $("track-hint").hidden = true; }
-    else { $("track-hint").hidden = (engagedTid !== null); }
+    if (m === "auto") { engage(null); $("track-hint").hidden = true; }
+    else { $("track-hint").hidden = (engagedKey !== null); }
     ctl("track=" + m);
   }
   $("track").onclick = function () { setTrack(trackMode === "auto" ? "man" : "auto"); };
@@ -352,28 +354,63 @@
                el: Math.atan2(t.z || 0, Math.hypot(t.x, t.y)) * 180 / Math.PI };  /* elevation from radar z */
     });   /* no client filtering — the daemon gates points/clusters server-side now */
   }
-  /* AUTO priority: fused (EO+radar) first [pending detector], then nearer, then conf. */
-  function pickAuto(ts) { return ts.slice().sort(function (a, b) { return (a.rng - b.rng) || (b.conf - a.conf); })[0] || null; }
 
-  /* Target list (top 5 by importance): fused > higher confidence > nearer. Fusion isn't
-   * wired yet, so today this is radar-only (conf then range). No GUI-side row hold —
-   * the daemon's tracker already confirms/coasts, so rows come straight from the frame. */
-  function importance(t) { return (t.fused ? 2e6 : 0) + (t.conf || 0) * 1e3 - t.rng; }
-  var lastTgtHtml = "";
-  function renderTargetList(radar) {
-    var rows = targets(radar).map(function (t) { return { t: t }; });
-    rows.sort(function (a, b) { return importance(b.t) - importance(a.t); });
-    rows = rows.slice(0, 5);
+  /* ── ONE target list, TWO independent sensors ───────────────────────────────────────────
+   * Radar targets and EO tracks are separate objects with separate id spaces — there is no
+   * fusion yet, so nothing here dedups them (that is fusion's job, and guessing at it would
+   * merge two different things). Each row is keyed "<src>:<tid>" so the ids can't collide,
+   * and each sensor shows what it actually knows:
+   *    EO  (tracker) — class, confidence, azimuth/elevation. No range: a camera has none.
+   *    RDR (radar)   — range and speed. No class: the radar emits class-less boxes.
+   *    FUS           — placeholder; fusion will emit range AND class on one row.
+   * Persistence is each daemon's own: both run temporal trackers with stable ids, confirm
+   * and coast, so rows come straight off the wire without a GUI-side hold (a hold here
+   * would double-persist what the daemons already did). */
+  function eoTracks() {
+    if (!lastTrk || lastTrk.connected === false) return [];
+    return (lastTrk.tracks || []).map(function (t) {
+      var a = t.ang || [0, 0, 0, 0], D = 180 / Math.PI;
+      return { src: "eo", tid: t.tid, key: "eo:" + t.tid, cls: t.cls || "unknown", conf: t.conf || 0,
+               az: a[0] * D, el: a[1] * D, state: t.state, lock: t.lock, px: t.px, raw: t };
+    });
+  }
+  function radarTargets() {
+    return targets(lastRadar).map(function (t) {
+      return { src: "rad", tid: t.tid, key: "rad:" + t.tid, rng: t.rng,
+               spd: Math.hypot(t.vx, t.vy), az: t.az, el: t.el, conf: t.conf || 0, raw: t };
+    });
+  }
+  /* fusion lands here later: { src:"fus", … } rows carrying range AND class together. */
+  function allTargets() { return eoTracks().concat(radarTargets()); }
+
+  /* Rank: engaged always first (never let the held target scroll off), then fused, then EO
+   * confirmed tracks, then everything else by confidence / nearness. */
+  function importance(t) {
+    if (t.key === engagedKey) return 9e9;
+    var s = (t.src === "fus" ? 4e6 : t.src === "eo" ? 2e6 : 0);
+    if (t.src === "eo" && t.state === "conf") s += 1e6;
+    return s + (t.conf || 0) * 1e3 - (t.rng || 0);
+  }
+  var lastTgtHtml = "", TGT_SLOTS = 6;
+  function renderTargetList() {
+    var rows = allTargets().sort(function (a, b) { return importance(b) - importance(a); }).slice(0, TGT_SLOTS);
     $("v-tgtcount").textContent = rows.length;
-    /* Always render 5 fixed slots so the panel never resizes as targets come and go. */
+    /* Fixed slots so the panel never resizes as targets come and go. */
     var out = [];
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < TGT_SLOTS; i++) {
       if (i < rows.length) {
-        var r = rows[i], t = r.t, col = tcolor(t.tid), spd = Math.hypot(t.vx, t.vy), az = t.az;
-        out.push('<li class="tgt-row' + (t.tid === engagedTid ? ' eng' : '') + '" data-tid="' + t.tid + '" style="border-left-color:' + col + '">'
+        var t = rows[i], col = tcolor(t.key), mid, rgt;
+        if (t.src === "eo") {
+          mid = String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
+          rgt = (t.az >= 0 ? "+" : "") + t.az.toFixed(0) + "° / " + (t.el >= 0 ? "+" : "") + t.el.toFixed(0) + "°";
+        } else {
+          mid = t.spd.toFixed(1) + " m/s · " + (t.az >= 0 ? "+" : "") + t.az.toFixed(0) + "°";
+          rgt = t.rng.toFixed(0) + " m";
+        }
+        out.push('<li class="tgt-row' + (t.key === engagedKey ? ' eng' : '') + '" data-key="' + t.key + '" style="border-left-color:' + col + '">'
           + '<span class="tid"><span class="swatch" style="background:' + col + '"></span></span>'
-          + '<span class="meta">' + spd.toFixed(1) + ' m/s · ' + (az >= 0 ? "+" : "") + az.toFixed(0) + '°</span>'
-          + '<span class="rng">' + t.rng.toFixed(0) + ' m</span></li>');
+          + '<span class="meta"><b class="tsrc ' + t.src + '">' + (t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR") + '</b> ' + mid + '</span>'
+          + '<span class="rng">' + rgt + '</span></li>');
       } else {
         out.push('<li class="tgt-row empty"><span class="tid">—</span><span class="meta"></span><span class="rng"></span></li>');
       }
@@ -384,10 +421,21 @@
   /* No GUI-side persistence: the radar daemon is a temporal tracker now (stable tids,
    * M-of-N confirm, coasting through dropouts, park-hold). "In the frame" already means
    * "present" — adding a hold+fade here would double-persist. Draw the wire verbatim. */
-  function engage(tid) {
-    engagedTid = tid;
-    $("track-hint").hidden = (trackMode !== "man") || (tid !== null);
-    if (tid !== sentEngage) { sentEngage = tid; ctl("engage=" + (tid === null ? -1 : tid)); }
+  /* Selecting a target DECLARES the tracking state; each module then acts in its own domain
+   * off that declaration (the tracker runs its lock loop; radar FOV / zoom / illuminator are
+   * their owners' jobs, not ours). Two wires go out:
+   *   trk_engage=<tid>  — only for an EO track, since that is the only thing the EO tracker
+   *                       can lock. -1 clears it.
+   *   engage=<tid>      — the console's own declared engagement, for any source, so a
+   *                       radar-only pick is still published state rather than a dead click.
+   * The tracker's wire (mode/engaged) is what we REFLECT — see onTrkFrame. */
+  function engage(key) {
+    engagedKey = key;
+    $("track-hint").hidden = (trackMode !== "man") || (key !== null);
+    var eoTid = (key && key.indexOf("eo:") === 0) ? parseInt(key.slice(3), 10) : -1;
+    if (eoTid !== sentTrkEngage) { sentTrkEngage = eoTid; ctl("trk_engage=" + eoTid); }
+    var tid = key ? parseInt(key.split(":")[1], 10) : -1;
+    if (tid !== sentEngage) { sentEngage = tid; ctl("engage=" + tid); }
   }
 
   /* ── radar→EO overlay settings — pure client-side render (not fusion). AZ/EL trim is
@@ -440,6 +488,9 @@
   var detStyle = "box";
   try { var dsv = localStorage.getItem("detStyle"); if (dsv === "seeker" || dsv === "box") detStyle = dsv; } catch (x) {}
   function initDetStyle() { var b = document.querySelector('#dst-btns [data-dst="' + detStyle + '"]'); if (b) setSeg("dst-btns", b); }
+  document.querySelectorAll("#rawdet-btns [data-rawdet]").forEach(function (b) {
+    b.onclick = function () { showRawDet = b.dataset.rawdet === "1"; setSeg("rawdet-btns", b); drawEO(); };
+  });
   document.querySelectorAll("#dst-btns [data-dst]").forEach(function (b) {
     b.onclick = function () { detStyle = b.dataset.dst; setSeg("dst-btns", b); try { localStorage.setItem("detStyle", detStyle); } catch (x) {} drawEO(); };
   });
@@ -454,6 +505,20 @@
   function fit(cv) { var dpr = window.devicePixelRatio || 1, w = cv.offsetWidth || 1, h = cv.offsetHeight || 1; cv.width = Math.max(1, w * dpr | 0); cv.height = Math.max(1, h * dpr | 0); return { ctx: cv.getContext("2d"), w: cv.width, h: cv.height, dpr: dpr }; }
   /* dark halo under on-video labels — thin text survives bright sky and dark bush alike
    * (the standard OSD treatment; the marks get the same via a two-pass stroke) */
+  /* Where each EO track's box landed last draw, in 0..1 panel coords — so a tap hit-tests the
+   * box the operator actually SAW rather than re-deriving the projection (which drifts out of
+   * sync the moment zoom/letterbox handling changes on one side only). */
+  var eoBoxes = [];
+  var showRawDet = false;          /* raw detector boxes: DEV overlay, off by default */
+  function eoBoxHit(xf, yf) {
+    var best = null, bestA = 1e9;
+    eoBoxes.forEach(function (b) {
+      if (xf < b.x0 || xf > b.x1 || yf < b.y0 || yf > b.y1) return;
+      var a = (b.x1 - b.x0) * (b.y1 - b.y0);
+      if (a < bestA) { bestA = a; best = b.key; }        /* smallest box containing the tap wins */
+    });
+    return best;
+  }
   function haloText(ctx, txt, x, y, col, dpr) {
     ctx.save(); ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.lineWidth = 3 * dpr; ctx.lineJoin = "round";
     ctx.strokeText(txt, x, y); ctx.fillStyle = col; ctx.fillText(txt, x, y); ctx.restore();
@@ -478,6 +543,15 @@
      * Bracket size = the target's real angular extent at its range. The engaged target
      * is green and keeps an off-frame edge arrow; the rest clip at the video edge.
      * Works in replay too — both video and radar come from the recording there. */
+    /* The tracker is the ONLY source of EO boxes now, so if it's down say so rather than
+     * showing an empty frame that looks like "nothing out there". Live only — a replay has
+     * no tracker. */
+    if (!replaying && !trkConnected()) {
+      ctx.save();
+      ctx.font = (11 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "center";
+      haloText(ctx, "EO TRACK · NOT CONNECTED", cx, 22 * dpr, css("--err"), dpr);
+      ctx.restore();
+    }
     var es = lastStats.eo || {};
     /* hfov/vfov describe the ZOOMED (cropped) frame that was streamed. A NATIVE replay shows the
      * FULL uncropped frame, which spans zoom x that angle — so scale the FOV up there, exactly as
@@ -524,8 +598,9 @@
      * class+conf; movers[] dashed class-less. Works in replay too: lastDet is fed by
      * the replay det poller there (recorded boxes over recorded video); a NATIVE replay
      * shows the full uncropped frame, so the zoom crop doesn't apply to it. */
-    if (lastDet && (lastDet.dets || lastDet.movers)) {
-      var im = lastDet.img || { w: 1440, h: 1088 };
+    var trkTracks = eoTracks();
+    if (trkTracks.length || (lastDet && showRawDet && (lastDet.dets || lastDet.movers))) {
+      var im = (lastTrk && lastTrk.img) || (lastDet && lastDet.img) || { w: 1440, h: 1088 };
       var z = (replaying && replayVideoSrc === "native") ? 1 : (es.zoom || 1);
       var cw = im.w / z, ch = im.h / z, ox = (im.w - cw) / 2, oy = (im.h - ch) / 2;
       var sw = es.dw || cw, sh = es.dh || ch, ar = sw / sh;   /* streamed frame sets the letterbox */
@@ -592,27 +667,43 @@
         }
       };
       var seek = (detStyle === "seeker");
-      (lastDet.dets || []).forEach(function (d) {
-        /* Colour is the CLASS, always — never how the detection was arrived at. A tbd:1 box
-         * (promoted from faint evidence) is the same human/vehicle mark as any other: the
-         * operator reads colour as "what is it", so overloading it with provenance made a
-         * far human look like a different kind of thing. Provenance belongs in DEV, not on
-         * the glass. TRACKED state is the one thing that changes the mark's SHAPE (corners). */
-        var col = d.cls === "human" ? "#40c4ff" : amber;
-        var cl = String(d.cls || "?");                   /* coerce: a non-string cls (e.g. a numeric id) would throw on [0]/.toUpperCase() and blank every overlay */
-        var lab = seek ? cl[0].toUpperCase() + Math.round((d.conf || 0) * 100)
-                       : cl.toUpperCase() + " " + Math.round((d.conf || 0) * 100) + "%";
-        /* A box carrying a track id is a held target -> corner brackets. Today's detector is
-         * stateless and emits no tid, so nothing takes this path yet; it lights up by itself
-         * when the tracker (:8095) becomes the box source. Keyed on tid because that's the one
-         * identity field guaranteed by the contract — no guessing at state strings.
-         * tbd:1 = promoted from collected evidence -> small "t" corner tag (class colour kept). */
-        drawDet(d, false, col, lab, false, d.tid !== undefined && d.tid !== null, d.tbd === 1 || d.tbd === true);
-      });
-      /* motion-head marks: ALWAYS a gentle thin dashed box (never the heavy cross), so a
-       * mover reads as a soft hint distinct from the model's class marks */
-      (lastDet.movers || []).forEach(function (mv) {
-        drawDet(mv, true, "rgba(150,157,168,0.9)", "MOT ·" + (mv.age || 0), true);
+      /* RAW DETECTOR boxes — dev overlay only, OFF by default. These are the tracker's INPUT;
+       * drawing them alongside its output is the double-display the tracker exists to remove.
+       * Kept behind a toggle because seeing input vs output side by side is how you tell a
+       * tracker fault from a detector fault. Deliberately dim so they read as background. */
+      if (showRawDet && lastDet) {
+        (lastDet.dets || []).forEach(function (d) {
+          drawDet(d, true, "rgba(150,157,168,0.55)", "", true);
+        });
+        (lastDet.movers || []).forEach(function (mv) {
+          drawDet(mv, true, "rgba(150,157,168,0.45)", "", true);
+        });
+      }
+      /* EO TRACKS — the operator's boxes. Colour is the CLASS, always: never how the target
+       * was arrived at (a far human promoted from faint evidence is still a human). SHAPE
+       * carries state — a confirmed/held track gets corner brackets, and "t" tags a target
+       * that only exists because the detector integrated faint evidence for it. */
+      eoBoxes = [];
+      trkTracks.forEach(function (t) {
+        var col = t.cls === "human" ? "#40c4ff" : amber;
+        var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
+        var eng = (t.key === engagedKey);
+        var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
+                       : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
+        if (eng) lab = "LOCK " + lab;
+        /* engaged wins the green LOCK colour — that phase is live now, and the held target
+         * must be unmistakable at a glance even against its own class colour. */
+        drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
+                t.state === "conf" || t.state === "coast" || eng,
+                t.raw && (t.raw.tbd === 1 || t.raw.tbd === true));
+        /* remember where it landed, in 0..1 panel coords, so a tap can hit-test the drawn
+         * box instead of re-deriving the projection (which would drift out of sync). */
+        if (t.px && t.px.length >= 4) {
+          var ex = vx + (t.px[0] - ox) / cw * vw, ey = vy + (t.px[1] - oy) / ch * vh;
+          var ew = t.px[2] / cw * vw, eh = t.px[3] / ch * vh;
+          eoBoxes.push({ key: t.key, x0: (ex - ew / 2) / w, x1: (ex + ew / 2) / w,
+                                     y0: (ey - eh / 2) / h, y1: (ey + eh / 2) / h });
+        }
       });
       ctx.restore();
     }
@@ -795,28 +886,39 @@
     });
   }
 
-  /* ── manual selection: tap the EO (project click az) or the radar target ── */
+  /* ── Selection: three surfaces, one result — declare the target and enter track mode.
+   * Tapping an EO box, a radar circle, or a list row all do the same thing. Any of them
+   * switches TRACK to MANUAL first, so a pick is never swallowed by AUTO. ── */
+  function pick(key) {
+    if (!key) return;
+    if (trackMode !== "man") setTrack("man");
+    engage(key);
+  }
+  /* EO panel: prefer the EO TRACK whose box was tapped (that is the thing the tracker can
+   * actually lock); fall back to projecting the click azimuth onto a radar target. */
   $("eo").addEventListener("click", function (e) {
-    if (roiArm || trackMode !== "man" || e.target.closest("#cluster") || e.target.closest("#zoombar")) return;
+    if (roiArm || e.target.closest("#cluster") || e.target.closest("#zoombar")) return;
+    var r = this.getBoundingClientRect();
+    var cxp = (e.clientX - r.left) / r.width, cyp = (e.clientY - r.top) / r.height;   /* 0..1 in the panel */
+    var hit = eoBoxHit(cxp, cyp);
+    if (hit) { pick(hit); return; }
     var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
-    var ts = targets(lastRadar); if (!ts.length || !eoHfov) return;
-    var r = this.getBoundingClientRect(), frac = (e.clientX - r.left) / r.width - 0.5;
-    var azClick = frac * eoHfov;
-    engage(ts.slice().sort(function (a, b) { return Math.abs(a.az - azClick) - Math.abs(b.az - azClick); })[0].tid);
+    var ts = radarTargets(); if (!ts.length || !eoHfov) return;
+    var azClick = (cxp - 0.5) * eoHfov;
+    pick(ts.slice().sort(function (a, b) { return Math.abs(a.az - azClick) - Math.abs(b.az - azClick); })[0].key);
   });
   $("radar-cv").addEventListener("click", function (e) {
-    if (roiArm || trackMode !== "man" || !radarGeom) return;
+    if (roiArm || !radarGeom) return;
     var r = this.getBoundingClientRect(), g = radarGeom;
     var px = (e.clientX - r.left) * (this.width / r.width), py = (e.clientY - r.top) * (this.height / r.height);
     var best = null, bd = 1e9;
     targets(lastRadar).forEach(function (t) { var dx = g.cx + t.x * g.scale - px, dy = g.cy - t.y * g.scale - py, d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = t; } });
-    if (best && bd < 40 * g.dpr) engage(best.tid);
+    if (best && bd < 40 * g.dpr) pick("rad:" + best.tid);
   });
-  /* tap a target-list row → select it (switches TRACK to MANUAL) */
+  /* tap a target-list row → select it */
   $("tgt-list").addEventListener("click", function (e) {
-    var li = e.target.closest("[data-tid]"); if (!li) return;
-    if (trackMode !== "man") setTrack("man");
-    engage(parseInt(li.dataset.tid, 10));
+    var li = e.target.closest("[data-key]"); if (!li) return;
+    pick(li.dataset.key);
   });
 
   /* ── ZULU ── */
@@ -926,13 +1028,17 @@
       rLastFid = d.frame_id; rLastTs = d.timestamp;
     }
     $("v-tracks").textContent = d.connected ? (Math.round(rHz) + " Hz · " + (d.num_targets || 0) + " TRK") : "no data";
-    if (!d.connected) { updateViewRange(null); engage(trackMode === "man" ? engagedTid : null); renderTargetList(null); draw(true, true); return; }
-    var cur = targets(d), present = {};
-    cur.forEach(function (t) { present[t.tid] = 1; });
+    if (!d.connected) { updateViewRange(null); renderTargetList(); draw(true, true); return; }
     updateViewRange(d);
-    if (trackMode === "auto") { var best = pickAuto(cur); engage(best ? best.tid : null); }
-    else if (engagedTid !== null && !present[engagedTid]) engage(null);   /* engaged target gone */
-    renderTargetList(d); draw(true, true);
+    /* Drop the engagement only if the RADAR target we hold has gone. An EO engagement is the
+     * tracker's to keep or drop (reflected in onTrkFrame) — a radar dropout must not clear it. */
+    if (engagedKey && engagedKey.indexOf("rad:") === 0) {
+      var present = {};
+      targets(d).forEach(function (t) { present["rad:" + t.tid] = 1; });
+      if (!present[engagedKey]) engage(null);
+    }
+    if (trackMode === "auto") { var top = allTargets().sort(function (a, b) { return importance(b) - importance(a); })[0]; engage(top ? top.key : null); }
+    renderTargetList(); draw(true, true);
   }
   /* NaN-safe JSON. The feeds/recorder occasionally emit bare NaN/Infinity (invalid JSON), which
    * makes JSON.parse throw and silently freezes an overlay on its last frame — the scope then
@@ -986,6 +1092,35 @@
     };
     detES.onerror = function () { if (!replaying) { lastDet = null; draw(true, false); } };   /* auto-reconnects */
   }
+
+  /* EO TRACKER — SSE push from /trk/stream. This is the SINGLE source of the EO boxes the
+   * operator sees: the tracker turns the detector's per-frame boxes into targets with
+   * identity (stable tid, confirm/coast, engaged lock). The raw detector boxes are a DEV
+   * overlay only — drawing both was the double-display this module removes. A dead tracker
+   * reads as NOT CONNECTED; it never silently falls back to raw detections. */
+  var lastTrk = null, trkES = null;
+  function openTrkStream() {
+    if (trkES) { trkES.close(); trkES = null; }
+    trkES = new EventSource("/trk/stream");
+    trkES.onmessage = function (e) {
+      if (replaying) return;
+      var m = parseJSONsafe(e.data); if (m) lastTrk = (m.connected === false) ? null : m;
+      onTrkFrame();
+    };
+    trkES.onerror = function () { if (!replaying) { lastTrk = null; onTrkFrame(); } };   /* auto-reconnects */
+  }
+  /* mode/engaged are reflected FROM THE WIRE, never from the button press — the tracker owns
+   * the lock, so if it rejects or drops an engage the console must show that truth. */
+  function onTrkFrame() {
+    if (lastTrk && typeof lastTrk.engaged === "number") {
+      var wire = lastTrk.engaged >= 0 ? ("eo:" + lastTrk.engaged) : null;
+      if (wire && wire !== engagedKey) { engagedKey = wire; $("track-hint").hidden = true; }
+      else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0) engagedKey = null;
+    }
+    renderTargetList();
+    draw(true, false);
+  }
+  function trkConnected() { return !!(lastTrk && lastTrk.connected !== false); }
 
   /* Reflect the EO feed's ISP state into the DEV panel (guarded so a poll never fights a
    * control the operator is actively touching). */
@@ -1664,7 +1799,8 @@
 
   setInterval(poll, 160); poll();
   openRadarStream();   /* live = SSE push; replay opens its own radar SSE (poll fallback) in openReplay */
-  openDetStream();                                  /* EO detector boxes (SSE push, live); replay opens its own det SSE (poll fallback) in openReplay */
+  openDetStream();                                  /* raw detector boxes — DEV overlay only now */
+  openTrkStream();                                  /* EO TRACKER — the operator's EO boxes + engaged lock */
   initRadarOv();                                    /* overlay toggle (browser) + AZ/EL trim (from the Jetson) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
   setInterval(pollRstats, 400); pollRstats();

@@ -8,4 +8,5 @@ pkill -f "[.]/app -p 8080"   2>/dev/null
 pkill -x eo_pipeline         2>/dev/null
 pkill -x radar_preview       2>/dev/null
 pkill -x detectiond          2>/dev/null
+pkill -x trackerd            2>/dev/null
 echo "stop requested"

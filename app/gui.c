@@ -14,6 +14,7 @@
 #include "eo_client.h"
 #include "radar.h"
 #include "det.h"
+#include "trk.h"
 #include "web_assets.h"
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -362,6 +363,49 @@ static void handle_dstats(int fd)
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
 }
 
+/* Push EO-tracker messages to the browser as SSE. The tracker is the SINGLE source of the
+ * EO boxes the operator sees (raw detector boxes are dev-only), so a dead tracker must read
+ * as NOT CONNECTED rather than silently falling back to detections. */
+static void handle_trk_stream(int fd)
+{
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\nConnection: close\r\n\r\n");
+    int cap = 262144;
+    char *b = malloc(cap);
+    if (!b) return;
+    unsigned seq = 0;
+    for (;;) {
+        int n = trk_wait_frame(&seq, b, cap, 1500);
+        const char *payload = (n > 0) ? b : "{\"connected\":false}";
+        if (dprintf(fd, "data: %s\n\n", payload) < 0) break;
+    }
+    free(b);
+}
+
+/* latest tracker message verbatim (one-shot poll) */
+static void handle_trk(int fd)
+{
+    int cap = 262144;
+    char *b = malloc(cap);
+    if (!b) return;                     /* client() owns the single close(fd) — don't double-close */
+    int n = trk_get_frame_json(b, cap);
+    if (n <= 0 || !trk_connected())
+        n = snprintf(b, cap, "{\"connected\":false,\"tracks\":[]}\n");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n", n);
+    ssize_t w = write(fd, b, n); (void)w;
+    free(b);
+}
+
+/* the tracker's /stats (health + knobs), for readback */
+static void handle_tstats(int fd)
+{
+    char s[8192]; int n = trk_get_stats(s, sizeof s);
+    if (n <= 0) n = snprintf(s, sizeof s, "{}");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
+}
+
 /* the daemon's /stats (its 6 control values + fps/drops), for slider init + readback */
 static void handle_rstats(int fd)
 {
@@ -438,6 +482,8 @@ static void handle_rec(int cfd, const char *req)
 
 static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "gain=",
                                  "expms=", "gaincap=", "median=", "denoise=", "disp_fps=", "fps=", "res=" };
+/* the tracker's knobs (eotrack/docs/INTEGRATION.md); GUI sends them as trk_<key>= */
+static const char *TRK_KEYS[] = { "engage", "lock", "gate_base", "confirm", "coast_s", "clutter_s" };
 /* the daemon's nine live controls; the GUI sends them namespaced as radar_<key>= */
 static const char *RADAR_KEYS[] = { "eps", "minpts", "speed", "snrmin", "fov", "elmax", "doppler",
                                     "confirm", "coast", "park" };
@@ -454,6 +500,26 @@ static void handle_ctl(const char *req)
     char *p;
     if ((p = strstr(query, "track=")))  { g_track_man = (strncmp(p + 6, "man", 3) == 0); return; }
     if ((p = strstr(query, "engage="))) { g_engage = atoi(p + 7); return; }
+
+    /* tracker controls: strip the trk_ namespace and forward to trackerd's /ctl. The EO
+     * tracker owns identity + the engaged lock loop, so an EO pick arrives here as
+     * trk_engage=<tid> and the tracker's own wire (mode/engaged) is what the console and
+     * every other consumer reflects — never the button press. */
+    char tq[256]; int tn = 0;
+    for (unsigned k = 0; k < sizeof(TRK_KEYS) / sizeof(TRK_KEYS[0]); k++) {
+        char pref[24]; int pl = snprintf(pref, sizeof pref, "trk_%s=", TRK_KEYS[k]);
+        char *rp = strstr(query, pref);
+        if (!rp) continue;
+        rp += pl;
+        char val[24]; int vi = 0;
+        while (rp[vi] && rp[vi] != '&' && vi < (int)sizeof(val) - 1) { val[vi] = rp[vi]; vi++; }
+        val[vi] = 0;
+        if (tn >= (int)sizeof(tq) - 1) break;
+        int w = snprintf(tq + tn, sizeof(tq) - (size_t)tn, "%s%s=%s", tn ? "&" : "", TRK_KEYS[k], val);
+        if (w < 0) break;
+        tn += w;
+    }
+    if (tn > 0) { if (tn >= (int)sizeof(tq)) tn = (int)sizeof(tq) - 1; tq[tn] = 0; trk_ctl(tq); return; }
 
     /* radar controls: strip the radar_ namespace and forward to the daemon's /ctl */
     char dq[512]; int dn = 0;
@@ -607,6 +673,9 @@ static void *client(void *arg)
     else if (has(req, "/radar"))     handle_radar(fd);
     else if (has(req, "/det/stream")) handle_det_stream(fd);
     else if (has(req, "/dstats"))    handle_dstats(fd);
+    else if (has(req, "/trk/stream")) handle_trk_stream(fd);
+    else if (has(req, "/tstats"))    handle_tstats(fd);
+    else if (has(req, "/trk"))       handle_trk(fd);
     else if (has(req, "/uiprefs"))   handle_uiprefs(fd, req);
     else if (has(req, "/det"))       handle_det(fd);
     else if (has(req, "/ctl")) {
