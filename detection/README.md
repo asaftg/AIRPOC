@@ -79,6 +79,26 @@ The algorithm and its maths live in code comments in
 > The box is always real; `age`/`hits`/`disp` may have picked up a neighbour's history.
 > Real identity is the tracker's job.
 
+> **Pitfall — a slewing seeker silently stops reporting faint targets. UNVALIDATED.**
+> Following a candidate between frames only searches a small window around where it was:
+> roughly the box size plus 24 px, at the default rate. When the whole head is moving, the
+> entire image shifts by more than that and the link breaks, so faint targets never
+> accumulate enough evidence and simply stop being reported — quietly, with no error.
+> Confident detections are unaffected. At the current lens and detect rate:
+>
+> | head motion | image shift per look | link |
+> |---|---|---|
+> | 5°/s | 20 px | holds |
+> | 10°/s | 41 px | marginal |
+> | 20°/s | 81 px | **breaks** |
+>
+> **All validation so far is a static ground scene**, so this has never been exercised. It is
+> the same weakness that made the motion worker unusable, and the real fix is the same: feed
+> the head's own movement into the prediction (gimbal rate or IMU, behind `stabilize()`),
+> which cannot be done until that data exists. Until then, treat faint-target reporting as a
+> **search-and-hold capability, not a slew capability**, and re-check it the first time the
+> detector runs on a moving mount.
+
 ### Where to set the confidence floor (measured, 30 s day clip, stock model)
 | `tbd_lo` | boxes/tick | people/tick |
 |---|---|---|
