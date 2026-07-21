@@ -283,11 +283,11 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
 .lib-disk{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
 .lib-disk>div:first-child,#lib-diskbar{width:120px;height:8px;background:var(--bd2);border-radius:4px;overflow:hidden;position:relative}
 #lib-diskbar{width:120px}#lib-diskbar::after{content:"";position:absolute;inset:0 auto 0 0;width:var(--used,0%);background:var(--amber)}
-/* Card width drives preview size: the grid already scrolls, so prefer FEWER, BIGGER cards over
- * cramming a wide screen with tiny ones (at 230px a 1920px screen packed 7 columns and the
- * poster was ~190px tall — too small to recognise a scene). 320px min ≈ 5 columns at 1920,
- * ~270px posters, and you scroll for the rest. */
-.lib-grid{flex:1;overflow-y:auto;padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;align-content:start}
+/* Card width drives preview size. The grid scrolls, so prefer FEWER, BIGGER cards over cramming
+ * a wide screen with tiny ones: at 230px a 1920px screen packed 7 columns into ~190px posters,
+ * too small to tell one scene from another at 100% browser zoom. 440px min = 4 columns at 1920
+ * (~460px cards, ~345px posters); scroll for the rest. */
+.lib-grid{flex:1;overflow-y:auto;padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px;align-content:start}
 .lib-empty{padding:40px;text-align:center;color:var(--dim)}
 .lib-card{background:var(--panel);border:1px solid var(--bd);border-radius:6px;overflow:hidden;cursor:pointer;position:relative;display:flex;flex-direction:column}
 .lib-card:hover{border-color:var(--amber)}
