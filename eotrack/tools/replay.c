@@ -201,6 +201,23 @@ int main(void)
       CHECK(found && pcy < 530, "parked track holds position, did not snap onto the passing car");
       trk_core_free(c); }
 
+    /* 12. tbd provenance: flagged by a faint (tbd) detection, cleared once the detector
+     *     stops emitting tbd for TRK_TBD_CLEAR_S (temporal off / nothing faint). */
+    { TrkCore *c = trk_core_new();
+      uint64_t ts = 1000; int em = 0;
+      for (int k = 0; k < 12; k++) {
+          TrkDet d = { .src=0, .cls=2, .conf=0.3, .cx=500, .cy=500, .w=40, .h=30, .tbd=1, .hits=-1, .age=-1 };
+          ts += (uint64_t)(DT*1e9);
+          em = trk_core_step(c, &d, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
+      CHECK(em >= 1 && out[0].tbd == 1, "track flagged tbd from a faint detection");
+      /* detector temporal now OFF: strong detections, no tbd, for ~3 s */
+      for (int k = 0; k < 45; k++) {
+          TrkDet d = { .src=0, .cls=2, .conf=0.8, .cx=500, .cy=500, .w=40, .h=30, .tbd=0, .hits=-1, .age=-1 };
+          ts += (uint64_t)(DT*1e9);
+          em = trk_core_step(c, &d, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
+      CHECK(em >= 1 && out[0].tbd == 0, "tbd cleared after the detector stops emitting it");
+      trk_core_free(c); }
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }

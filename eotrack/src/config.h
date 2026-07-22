@@ -124,6 +124,11 @@
  * track is never dropped. */
 #define TRK_DEDUP_CONTAIN       0.55
 
+/* Clear the sticky tbd (faint-evidence provenance) flag on all tracks if no detection has
+ * carried tbd for this long - i.e. the detector's temporal path is off (or nothing is
+ * currently faint). Keeps the flag meaningful instead of on-everything-forever. */
+#define TRK_TBD_CLEAR_S         2.0
+
 /* Output smoothing = a FIRM position low-pass (EMA), NOT a predictive alpha-beta.
  * A velocity/momentum term overshoots on jerky hand-held motion (it predicts the
  * target keeps moving, then it reverses), which reads as "wobble". Measured: an

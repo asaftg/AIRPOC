@@ -69,6 +69,7 @@ struct TrkCore {
     TrkKnobs k;
     double   meas_fps;           /* EMA of measured tick rate */
     int      live, emitted;
+    int      frames_since_tbd;   /* ticks since any detection carried tbd (temporal-off detector) */
 };
 
 typedef struct { int ti, di; double d2; } Pair;
@@ -173,6 +174,16 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
     double fps = c->meas_fps > 1.0 ? c->meas_fps : 1.0;
     double gate_scale = TRK_GATE_REF_FPS / fps;
     if (n > TRK_MAX_IN) n = TRK_MAX_IN;
+
+    /* tbd provenance: the flag means "only reported because the detector integrated faint
+     * evidence". When the detector's temporal path is OFF it emits no tbd on any box, so if
+     * we have not seen a tbd detection for a while the feature is off (or nothing is faint)
+     * and every track's sticky flag is cleared - otherwise it would mark everything forever. */
+    int any_tbd = 0;
+    for (int di = 0; di < n; di++) if (dets[di].tbd) { any_tbd = 1; break; }
+    c->frames_since_tbd = any_tbd ? 0 : c->frames_since_tbd + 1;
+    if (c->frames_since_tbd > (int)(TRK_TBD_CLEAR_S * fps + 0.5))
+        for (int i = 0; i < TRK_MAX_TRACKS; i++) c->tr[i].tbd = 0;
 
     /* 1. predict every track's IMAGE position by the camera motion (ego) PLUS the
      * target's own world velocity. This is the key to tracking under a moving sensor:
