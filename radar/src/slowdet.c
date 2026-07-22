@@ -57,6 +57,8 @@ struct SlowDet {
     int   head, count;
     float pocc[NPR * NPA];
     int   next_id;
+    float snr_min;                /* operator MIN SNR (dB)   */
+    float speed_min;              /* operator MIN SPD (m/s)  */
     float bestdd[MAXPTS];
     int   bestj[MAXPTS], bestf[MAXPTS];
 };
@@ -69,7 +71,16 @@ static inline float hop_reach(float r) {
            clampf((r - HOP_R0) / (HOP_R1 - HOP_R0), 0.0f, 1.0f);
 }
 
-SlowDet *slowdet_new(void) { return (SlowDet *)calloc(1, sizeof(SlowDet)); }
+SlowDet *slowdet_new(void) {
+    SlowDet *sd = (SlowDet *)calloc(1, sizeof(SlowDet));
+    if (sd) { sd->snr_min = SNR_MIN; sd->speed_min = MIN_SPEED; }
+    return sd;
+}
+void slowdet_set_gates(SlowDet *sd, double snr_min_db, double speed_min_mps) {
+    if (!sd) return;
+    if (snr_min_db   >= 0.0 && snr_min_db   <= 60.0) sd->snr_min   = (float)snr_min_db;
+    if (speed_min_mps >= 0.0 && speed_min_mps <= 5.0) sd->speed_min = (float)speed_min_mps;
+}
 void     slowdet_free(SlowDet *sd) { free(sd); }
 
 static int lower_bound_r(const float *r, int n, float key) {
@@ -86,7 +97,7 @@ int slowdet_step(SlowDet *sd, const RadarPoint *pts, int n, double now_s,
     /* cull + insertion-sort by range */
     for (int k = 0; k < n; k++) {
         float r = pts[k].range, az = pts[k].az;
-        if (r <= R_MIN || fabsf(az) >= AZ_LIM || !(pts[k].snr >= SNR_MIN)) continue;
+        if (r <= R_MIN || fabsf(az) >= AZ_LIM || !(pts[k].snr >= sd->snr_min)) continue;
         if (nf.n >= MAXPTS) break;
         int i = nf.n++, p = i;
         while (p > 0 && nf.r[p - 1] > r) {
@@ -155,7 +166,7 @@ int slowdet_step(SlowDet *sd, const RadarPoint *pts, int n, double now_s,
         if (span < SPAN_MIN) continue;
         float dr = fabsf(nf.r[i] - nf.r0[i]);
         float speed = dr / (float)span;
-        if (speed < MIN_SPEED) continue;
+        if (speed < sd->speed_min) continue;
 
         int dup = 0;
         for (int o = 0; o < nout; o++)

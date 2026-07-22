@@ -20,6 +20,18 @@
 
 typedef struct SlowDet SlowDet;
 
+/* Operator gates, shared with the cluster tracker so F and S behave as ONE
+ * tracker under one set of controls.
+ *   snr_min_db   - point strength gate, same meaning as cluster's MIN SNR
+ *   speed_min_mps- how fast a thing must actually travel (POSITION-derived,
+ *                  over the chain's life) to be declared a mover. Same intent
+ *                  as cluster's MIN SPD.
+ * The internal Doppler-liveness gate used to chain hops is deliberately NOT
+ * bound to this: a walking human reads below 0.5 m/s in ~62% of frames, so
+ * raising the operator's MIN SPD onto it would sever the chain and delete the
+ * far targets this detector exists to catch. */
+void     slowdet_set_gates(SlowDet *, double snr_min_db, double speed_min_mps);
+
 SlowDet *slowdet_new(void);
 void     slowdet_free(SlowDet *);
 

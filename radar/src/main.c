@@ -48,6 +48,10 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
+/* What the /ctl callback needs to reach: both detectors. */
+typedef struct { RadarClusterer *clust; SlowDet *slow; } CtlTargets;
+static CtlTargets g_ctl_targets;
+
 /* /scene handler — enable/disable or clear the static occupancy layer. */
 static void on_scene(int on, int reset, double halflife_s, void *user) {
     SceneMap *s = (SceneMap *)user;
@@ -60,9 +64,11 @@ static void on_scene(int on, int reset, double halflife_s, void *user) {
 static void on_ctl(double eps_m, int min_pts, double speed_min, double snr_min,
                    double fov_half, double el_max, double doppler, int confirm,
                    double coast_s, double park_s, void *user) {
-    cluster_set_dbscan((RadarClusterer *)user, eps_m, min_pts);
-    cluster_set_gates((RadarClusterer *)user, speed_min, snr_min, fov_half, el_max, doppler);
-    cluster_set_track((RadarClusterer *)user, confirm, coast_s, park_s);
+    cluster_set_dbscan(((CtlTargets *)user)->clust, eps_m, min_pts);
+    cluster_set_gates(((CtlTargets *)user)->clust, speed_min, snr_min, fov_half, el_max, doppler);
+    /* F and S are one tracker to the operator: the same MIN SNR / MIN SPD. */
+    slowdet_set_gates(((CtlTargets *)user)->slow, snr_min, speed_min);
+    cluster_set_track(((CtlTargets *)user)->clust, confirm, coast_s, park_s);
 }
 
 static double now_s(void) {
@@ -304,7 +310,8 @@ int main(int argc, char **argv) {
     if (!ctx.clust || !ctx.slow || !ctx.fuse || !ctx.json) { perror("malloc"); return 1; }
 
     http_start(http_port, webroot);
-    http_set_ctl_cb(on_ctl, ctx.clust);      /* GET /ctl?eps=&minpts= -> DBSCAN */
+    g_ctl_targets.clust = ctx.clust; g_ctl_targets.slow = ctx.slow;
+    http_set_ctl_cb(on_ctl, &g_ctl_targets);      /* GET /ctl?eps=&minpts= -> DBSCAN */
     http_set_scene_cb(on_scene, ctx.scene);  /* GET /scene?on=&reset= */
     fprintf(stderr, "radar_preview: previewer http://0.0.0.0:%d/  profile=%s\n",
             http_port, profile);
