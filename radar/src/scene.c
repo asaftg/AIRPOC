@@ -14,12 +14,14 @@ struct SceneMap {
     float         frames_eff;     /* discounted frame count (the denominator)    */
     unsigned int  frames_raw;     /* frames since reset, for "map age"           */
     double        halflife_s;     /* 0 = never forget                            */
+    double        pub_hz;         /* snapshot publish rate                       */
     int           enabled;
 };
 
 SceneMap *scene_new(void) {
     SceneMap *s = (SceneMap *)calloc(1, sizeof(*s));
-    if (s) { s->enabled = 1; s->halflife_s = SCENE_HALFLIFE_DEFAULT; }
+    if (s) { s->enabled = 1; s->halflife_s = SCENE_HALFLIFE_DEFAULT;
+             s->pub_hz = SCENE_RATE_DEFAULT_HZ; }
     return s;
 }
 void scene_free(SceneMap *s) { free(s); }
@@ -38,6 +40,13 @@ void scene_set_halflife(SceneMap *s, double seconds) {
     s->halflife_s = seconds;
 }
 double scene_halflife(const SceneMap *s) { return s ? s->halflife_s : 0.0; }
+void scene_set_rate(SceneMap *s, double hz) {
+    if (!s) return;
+    if (hz < 0.2) hz = 0.2;
+    if (hz > 26.0) hz = 26.0;
+    s->pub_hz = hz;
+}
+double scene_rate(const SceneMap *s) { return s ? s->pub_hz : SCENE_RATE_DEFAULT_HZ; }
 
 void scene_step(SceneMap *s, const RadarPoint *pts, int n, double dt) {
     if (!s || !s->enabled) return;
@@ -88,9 +97,9 @@ int scene_json(const SceneMap *s, char *buf, size_t cap) {
     size_t off = 0;
     int w = snprintf(buf, cap,
         "{\"scene\":%d,\"frames\":%u,\"halflife_s\":%.1f,\"nr\":%d,\"na\":%d,"
-        "\"r_step\":%.3f,\"az0\":%.1f,\"az_step\":%.2f,\"cells\":[",
+        "\"r_step\":%.3f,\"az0\":%.1f,\"az_step\":%.2f,\"rate_hz\":%.1f,\"cells\":[",
         s->enabled, s->frames_raw, s->halflife_s, SCENE_NR, SCENE_NA,
-        (double)SCENE_RSTEP, (double)SCENE_AZ0, (double)SCENE_ASTEP);
+        (double)SCENE_RSTEP, (double)SCENE_AZ0, (double)SCENE_ASTEP, s->pub_hz);
     if (w < 0 || (size_t)w >= cap) return 0;
     off = (size_t)w;
 

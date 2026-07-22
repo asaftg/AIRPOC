@@ -37,6 +37,10 @@
  * invalidates at once, so the real driver is platform motion - use that
  * once the gimbal encoders land. 0 = never forget. */
 #define SCENE_HALFLIFE_DEFAULT 60.0
+/* Snapshot publish rate. The map ACCUMULATES every frame regardless; this only
+ * controls how often it is serialised for GET /scene. Serialising a few
+ * thousand cells is the cost, so this is a display/CPU trade, not a data one. */
+#define SCENE_RATE_DEFAULT_HZ 5.0
 #define SCENE_DOP_MAX 0.1f    /* m/s — "not moving" */
 
 typedef struct SceneMap SceneMap;
@@ -57,6 +61,10 @@ int       scene_enabled(const SceneMap *);
 /* Evidence half-life in seconds; 0 = never forget. */
 void      scene_set_halflife(SceneMap *, double seconds);
 double    scene_halflife(const SceneMap *);
+
+/* Snapshot publish rate in Hz (clamped 0.2 .. 26). Accumulation is unaffected. */
+void      scene_set_rate(SceneMap *, double hz);
+double    scene_rate(const SceneMap *);
 
 /* Serialise the lit cells as JSON into buf. Returns bytes written (0 if it
  * would not fit). Sparse: only cells that have ever been occupied. */

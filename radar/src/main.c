@@ -53,10 +53,11 @@ typedef struct { RadarClusterer *clust; SlowDet *slow; } CtlTargets;
 static CtlTargets g_ctl_targets;
 
 /* /scene handler — enable/disable or clear the static occupancy layer. */
-static void on_scene(int on, int reset, double halflife_s, void *user) {
+static void on_scene(int on, int reset, double halflife_s, double rate_hz, void *user) {
     SceneMap *s = (SceneMap *)user;
     if (on >= 0) scene_set_enabled(s, on);
     if (halflife_s >= 0.0) scene_set_halflife(s, halflife_s);
+    if (rate_hz > 0.0) scene_set_rate(s, rate_hz);
     if (reset)   scene_reset(s);
 }
 
@@ -137,7 +138,7 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
 
     /* Static occupancy display layer: fold this frame in, publish ~1 Hz. */
     scene_step(c->scene, c->frame.points, n, dt);
-    if (c->scene_json && t - c->scene_pub_t >= 1.0) {
+    if (c->scene_json && t - c->scene_pub_t >= 1.0 / scene_rate(c->scene)) {
         int sl = scene_json(c->scene, c->scene_json, SCENE_JSON_CAP);
         if (sl > 0) http_set_scene(c->scene_json, (size_t)sl);
         c->scene_pub_t = t;

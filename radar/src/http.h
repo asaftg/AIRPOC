@@ -42,6 +42,6 @@ void http_set_scene(const char *json, size_t len);
 
 /* Register the handler for GET /scene?on=0|1&reset=1. Called with the parsed
  * flags (on = -1 when absent); `user` passed back verbatim. */
-void http_set_scene_cb(void (*cb)(int on, int reset, double halflife_s, void *user), void *user);
+void http_set_scene_cb(void (*cb)(int on, int reset, double halflife_s, double rate_hz, void *user), void *user);
 
 #endif /* AIRPOC_HTTP_H */

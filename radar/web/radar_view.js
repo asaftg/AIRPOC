@@ -191,7 +191,7 @@ function connect() {
   if (sceneClr) sceneClr.onclick = () => fetch("/scene?reset=1").catch(() => {});
   const pollScene = () => fetch("/scene")
       .then(r => r.json()).then(s => view.setScene(s)).catch(() => {});
-  pollScene(); setInterval(pollScene, 1000);
+  pollScene(); setInterval(pollScene, 200);
 
   const es = new EventSource("/stream");
   es.onmessage = (e) => { try { view.update(JSON.parse(e.data)); } catch (_) {} };
