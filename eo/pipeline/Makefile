@@ -2,9 +2,14 @@
 # Deps: libjpeg-turbo dev headers  ->  sudo apt-get install -y libjpeg-turbo8-dev
 #
 #   make            -> libeo.a (the module) + eo_pipeline (the preview/bench tool)
-#   make libeo.a    -> just the linkable module (what the GUI links against)
+#   make libeo.a    -> just the linkable module
 #
-# A consumer (e.g. the GUI) links libeo.a and includes eo.h — nothing else.
+# libeo.a has NO consumer today, and peer modules must NOT link it. The camera is
+# single-owner V4L2: eo_start() opens /dev/video0 and eo_pipeline holds it, so a second
+# process linking libeo.a would simply fail to start. Peers read frames from the
+# airpoc.eo_y10 shared-memory tap (detector, recorder); the console talks HTTP :8091.
+# libeo.a is the reusable core for whatever process OWNS the camera — i.e. for a future
+# different top-level EO binary, NOT for a module running alongside this one.
 ILLUM   = ../../illuminator/src
 CC      ?= cc
 CFLAGS  ?= -O3 -Wall -Wextra -pthread -I$(ILLUM)   # -O3: auto-vectorize the pixel loops
