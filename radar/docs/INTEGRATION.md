@@ -73,7 +73,7 @@ if it trends to ~0 the frame period is too aggressive and frames will drop.
   "num_points": 18, "num_targets": 2,
   "points":  [{"x":-11.9,"y":30.5,"z":0.1,"v":0.45,"snr":42.0,"r":32.7,"az":-21.4,"el":0.2,"tid":1}],
   "targets": [{"tid":1,"x":-11.6,"y":30.2,"z":0.1,"vx":1.34,"vy":0.25,"vz":0.04,
-               "sx":0.95,"sy":0.99,"sz":0.25,"conf":1.0,"np":61,
+               "sx":0.95,"sy":0.99,"sz":0.25,"conf":1.0,"np":61,"sus":0,"mv_class":1,
                "class":"radar_detection"}] }
 ```
 
@@ -119,3 +119,10 @@ GUI prefers to proxy rather than hit :8092 cross-origin, forward `/stream` and
 scene** (walking person + receding vehicle + static clutter) — same parser,
 clusterer, wire format, and endpoints as the radio. Build and test the GUI
 integration entirely without the Jetson, then drop `-s` on the device.
+
+## For fusion
+
+The fusion module (`fusion/`, `:8096`) consumes this stream and joins it with the
+EO tracker's. It recomputes az/el from `x,y,z`, applies the radar<->EO mount trim
+on its side, and passes `sus`/`mv_class`/`conf`/`np` through on the fused wire.
+Contract: [`fusion/docs/INTEGRATION.md`](../../fusion/docs/INTEGRATION.md).

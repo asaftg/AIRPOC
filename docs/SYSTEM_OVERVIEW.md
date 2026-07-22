@@ -14,7 +14,7 @@ points the head at the target.
 
 ```
   EO camera ──► detection ──► EO tracker ──┐
-  Radar ──────► radar tracker ─────────────┼──► fusion ──► gimbal pointing ──► guidance
+  Radar ──────► radar tracker ─────────────┼──► fusion (:8096) ──► gimbal pointing ──► guidance
   Thermal (optional, later) ───────────────┘
     └── EO-blind fallback: radar tracker ──► gimbal ──► guidance, STANDALONE
   NIR illuminator ──(lights the EO scene, continuous)              (effector)
@@ -62,7 +62,7 @@ is software MJPEG; the detector/tracker consumes frames on-device. Platform brin
 | Detection | — | 🟡 EO detector live on `:8094` — TensorRT model (native 1440×1088) that **collects faint evidence over several frames before reporting**, so a distant target the model only half-recognises still gets reported, while confident ones go out immediately and unchanged. One box per target, feeding the console. Stock off-the-shelf placeholder model (FP16 ~20 ms / INT8 ~14.7 ms on-device); trained mono model + accuracy pending. **Running on the Jetson and measured live** (adds no compute: 22.73 ms vs 22.68 ms with it off). CPU motion worker **frozen** | [`detection/`](../detection/README.md) |
 | EO tracker (`eotrack/`) | `:8095` | ✅ live on the Jetson beside the detector: turns the detector's per-frame boxes into persistent, smoothed, coasted tracks with **stable IDs**, and serves them as an angle-domain track stream that **mirrors the radar tracker's wire** so fusion joins both the same way. Stare mode plus an operator-engaged **60 fps camera-rate lock** (`airpoc.eo_y10`). Owns identity/smoothing/coasting; **not** weak-evidence integration (the detector's) nor rejecting the model's persistent false positives (a better model's). Open: velocity-gated association for the crossing-vehicle ID-swap | [`eotrack/`](../eotrack/README.md) |
 | Training data (`datasets/`) | — | 🟡 offline bench pipeline (Python; never runs on the seeker): FPV-strike footage → COCO vehicle/human set for the EO detector. Architecture + non-GPU spine unit-tested on a synthetic fixture; **the real-data stages have never been run** | [`datasets/`](../datasets/README.md) |
-| Fusion | — | ⬜ not started — joins the EO + radar track streams into one target, assigns the global id, adds range | — |
+| Fusion (`fusion/`) | `:8096` | 🟡 shipped 2026-07-22, offline-verified: `fusiond` joins the EO tracker + radar tracker streams into **one target picture** — fused rows carry radar range/closing-speed + EO angles/class under a fusion-assigned **global id**; unmatched targets pass through source-tagged, and a constituent never appears twice (consumers render the wire as-is). Matching is azimuth + motion agreement (radar elevation is nearly ignored by design); pairs confirm over several co-observations and split only after sustained disagreement. Owns the radar<->EO mount trim (`/ctl`, persisted; observe-only estimator in `/stats`). Offline gates green incl. a real recorded radar+EO pair; not yet run against the live daemons | [`fusion/`](../fusion/README.md) |
 | Gimbal | — | ⬜ not started | — |
 | Guidance | — | ⬜ not started | — |
 
@@ -259,13 +259,20 @@ Detail: [`eotrack/README.md`](../eotrack/README.md) ·
 [`eotrack/docs/INTEGRATION.md`](../eotrack/docs/INTEGRATION.md) ·
 [`app/docs/GUI.md`](../app/docs/GUI.md).
 
-### Fusion / Gimbal / Guidance (not started)
+### Fusion (`fusion/`, :8096)
+`fusiond` consumes the two tracker streams (`:8092` + `:8095`) and publishes the one
+target picture on `:8096` — fused rows (radar range/doppler + EO angles/class, one
+global id), plus single-sensor passthrough rows, with the guarantee that a per-sensor
+track never appears twice on the wire. Never in the EO-blind critical path: the
+radar->gimbal chain consumes `:8092` directly and runs with fusiond dead. The module
+owns the radar<->EO mount trim and the class label. Contract:
+[`fusion/docs/INTEGRATION.md`](../fusion/docs/INTEGRATION.md) (includes the operator-
+console and launcher wiring specs). Detail: [`fusion/README.md`](../fusion/README.md).
+
+### Gimbal / Guidance (not started)
 Stubs for the module owners to fill. Each should add: purpose, hardware/interfaces,
 current state, and a link to its module folder. (Tracking target *selection* lives in
-`app/` today; the per-sensor **trackers already exist** — EO in `eotrack/`, radar built into
-the radar daemon — so fusion's job is to join their two track streams into one target, assign
-the global id, and add range. It consumes each tracker's `age`/`hits`/`disp` and the
-size-growth cue rather than recomputing them.)
+`app/` today.)
 
 ## Maturity
 
@@ -294,4 +301,5 @@ adding that evidence — not relabelling it.
 | Detection | Bench-verified | on-device latency FP16 ~20.8 ms / INT8 ~14.7 ms; verified correct on one known image | **no accuracy figures at all** — no mAP, no false-positive rate, no DRI ranges; and a trained 3-class model does not currently load |
 | Training data (`datasets/`) | **Unrun** | the non-GPU spine unit-tested against a synthetic fixture | every stage that touches real data has never executed |
 | EO tracker (`eotrack/`) | Bench-verified | live on the Jetson beside the detector 2026-07-21, both feeds connected, holding vehicle tracks with stable IDs; offline replay + lock/ego unit tests pass (`make check`) | no field run yet; the crossing-vehicle ID-swap is unfixed (velocity-gated association pending). Console overlay + launcher wiring now DONE (tracker is the console's EO box source; `trackerd` in START/STOP) but not yet run end-to-end on the box |
-| Fusion / gimbal / guidance | Not started | — | — |
+| Fusion (`fusion/`) | **Unrun** | offline gates green (`make check` 2026-07-22): synthetic scenarios, a real recorded radar+EO pair through the real parsers/core (REC 2026-07-20 1251), and a loopback smoke — but never executed against the live daemons on the box | live bench run + walk-out trim calibration; association constants tuned only on one recording |
+| Gimbal / guidance | Not started | — | — |

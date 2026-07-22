@@ -12,7 +12,7 @@ silently.
 
 ## Live rings
 
-All six taps below are live, plus one recorder-internal channel. Geometry is set
+All taps below are live (`trk_wire`/`fus_wire` whenever their daemons run), plus one recorder-internal channel. Geometry is set
 by the **publisher**, not by the recorder.
 
 | ring | slots | payload cap | publisher | carries |
@@ -23,6 +23,8 @@ by the **publisher**, not by the recorder.
 | `airpoc.radar_wire` | 16 | 256 KiB | `radar/src/main.c` | radar frame JSON (the SSE payload) |
 | `airpoc.radar_cli` | 64 | 8 KiB | `radar/src/main.c` | chip CLI telemetry (~1 Hz). Exists on no other path — unrecorded means gone |
 | `airpoc.det_wire` | 16 | 128 KiB | `detection/src/main.c` | detector frame JSON |
+| `airpoc.trk_wire` | 16 | 128 KiB | `eotrack/src/main.c` | EO tracker frame JSON (the `:8095` SSE payload) |
+| `airpoc.fus_wire` | 16 | 128 KiB | `fusion/src/main.c` | fused target-picture JSON (the `:8096` SSE payload) |
 | *(events)* | — | — | recorder-internal | 5 Hz stats/events the recorder writes itself; not a tap |
 
 > **Usable depth is `n_slots - 2`, not `n_slots`.** `tap_read` keeps a slot of

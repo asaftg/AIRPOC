@@ -1,0 +1,14 @@
+[Unit]
+Description=AIRPOC late-fusion daemon (fusiond :8096)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/asaftg/AIRPOC/fusion/fusiond -p 8096 -r 127.0.0.1:8092 -t 127.0.0.1:8095
+WorkingDirectory=/home/asaftg/AIRPOC/fusion
+Restart=always
+RestartSec=2
+User=asaftg
+
+[Install]
+WantedBy=multi-user.target

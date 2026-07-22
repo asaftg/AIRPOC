@@ -102,3 +102,6 @@ Consume `:8095/stream` and `:8092/stream` and join on angle + time. EO angles ar
 sensor-frame (apply the radar<->EO mount trim on your side); use `s_ang` for the association
 gate, `grow` as a range-closure cue, and `coast_s`/`t_meas_ns` for staleness. `tid` is
 per-sensor and transient - assign the global id and the class label in fusion.
+
+That module now exists: `fusion/` (`fusiond`, `:8096`) - contract in
+[`fusion/docs/INTEGRATION.md`](../../fusion/docs/INTEGRATION.md).
