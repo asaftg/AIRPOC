@@ -23,8 +23,9 @@ while [ $i -lt 100 ]; do
 done
 [ $i -lt 100 ] || fail "feeds never connected: $STATS"
 
-# a fused row must appear on /stream within 5 s
-STREAM=$(curl -s --max-time 5 "http://127.0.0.1:18096/stream" | head -c 20000 || true)
+# a fused row must appear on /stream within 5 s (marriage needs ~0.8 s of
+# evidence now, so sample enough of the stream to cover several seconds)
+STREAM=$(curl -s --max-time 5 "http://127.0.0.1:18096/stream" | head -c 150000 || true)
 case "$STREAM" in
     *'"src":"fus"'*) : ;;
     *) fail "no fused row on /stream" ;;

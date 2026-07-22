@@ -45,12 +45,47 @@
 #define FUS_GROW_ARM_GPRED 0.03     /* 1/s */
 #define FUS_GROW_ARM_AGE_S 1.0
 
-/* chi-square 99% gates by degrees of freedom used (2/3/4 terms) */
+/* chi-square 99% gates by degrees of freedom used (2..5 terms) */
 #define FUS_CHI2_2  9.21
 #define FUS_CHI2_3  11.34
 #define FUS_CHI2_4  13.28
+#define FUS_CHI2_5  15.09
 #define FUS_GATE_INCUMBENT 1.5      /* existing pair keeps matching at gate x1.5 */
 #define FUS_STICKY_BONUS   3.0      /* subtracted from an incumbent's D^2 in assignment */
+
+/* Physical-size consistency: the pair hypothesis carries the radar's range, so
+ * the EO box converts to metres and must roughly agree with the radar's box.
+ * Log-ratio cost: a 2x mismatch is one sigma, a 4-5x mismatch (walker vs
+ * parked car) is a strong veto. Radar boxes are rough - keep it soft. TUNE. */
+#define FUS_SIG_LNSIZE  0.69       /* one sigma = 2x size ratio */
+#define FUS_SIZE_MIN_M  0.3        /* floor on either width, m */
+
+/* Passing signature: a same-object pair's angle residual is stationary noise;
+ * a radar target sliding past a parked object shows a monotonic residual
+ * trend. Net drift beyond this across the trend window blocks confirmation
+ * and fast-divorces a fused pair. TUNE on crossing/passing recordings. */
+#define FUS_TREND_WIN   8          /* co-fresh evals in the trend window */
+#define FUS_TREND_NET   0.0105     /* rad (0.6 deg) net drift across the window */
+
+/* A marriage needs time as well as hits: a driving car sweeping along a row
+ * of parked cars confirms 4-of-6 in ~0.3 s, before its drift is visible.
+ * Requiring this much observation span lets the drift show first. TUNE. */
+#define FUS_CONFIRM_SPAN_S 0.7
+
+/* Slow drifters: a wrong pair drifting at ~0.2 deg/s never trips the short
+ * trend window. Every married pair remembers the residual it married at;
+ * moving this far from it (mean of the ring vs the reference) is definitive
+ * evidence of a wrong marriage - divorce immediately. TUNE. */
+#define FUS_DRIFT_ABS   0.014      /* rad (0.8 deg) from the marriage reference */
+
+/* After a drift divorce, the radar tid may not marry ANYONE for this long -
+ * a sweeping radar target otherwise chains through every parked car in turn. */
+#define FUS_RAD_COOLDOWN_S 1.5
+
+/* Trim estimator sampling: only ISOLATED geometry teaches the trim - a radar
+ * verified mover with exactly one confirmed EO candidate within the window.
+ * (Sampling matched pairs only was selection-biased when the trim was off.) */
+#define FUS_EST_ISO_RAD 0.035      /* rad (~2 deg): isolation window */
 
 /* ---- pair lifecycle (co-fresh evaluations; time knobs are /ctl-settable) ---- */
 #define FUS_CONFIRM_DEFAULT 3       /* /ctl confirm: promote at confirm+1 of 2*confirm */

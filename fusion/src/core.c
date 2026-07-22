@@ -41,14 +41,18 @@ typedef struct { int used; uint32_t gid;
     int rb_r_tid, rb_r_cnt;
     int rb_e_tid, rb_e_cnt;
     uint64_t born_ns, last_live_ns;
+    double res[FUS_TREND_WIN]; int nres, res_head;  /* pair az-residual ring (trend) */
+    double res_ref; int have_ref;    /* residual at marriage (slow-drift divorce) */
 } FTrk;
 
 typedef struct { int used; int r_tid, e_tid;
     uint32_t hist; int n;            /* co-fresh eval window (bit 0 = newest) */
-    uint64_t rs_seen, es_seen, last_hit_ns;
+    uint64_t rs_seen, es_seen, last_hit_ns, first_ns;
+    double res[FUS_TREND_WIN]; int nres;   /* az residual per eval (trend veto) */
 } Cand;
 
 typedef struct { int r_tid, e_tid; uint64_t until_ns; } Bar;
+typedef struct { int r_tid; uint64_t until_ns; } RBar;   /* drift-divorce cooldown */
 
 struct FusCore {
     FusKnobs k;
@@ -61,6 +65,7 @@ struct FusCore {
     FTrk trk[FUS_MAX_TRK];
     Cand cand[FUS_MAX_CAND];
     Bar  bar[16]; int nbar;
+    RBar rbar[16]; int nrbar;
     uint32_t next_gid;
     uint64_t reset_until_ns[2];      /* [0]=radar, [1]=EO: sigma x2 grace */
     /* trim residual estimator (observe-only) */
@@ -186,13 +191,31 @@ static void bar_add(FusCore *c, int r_tid, int e_tid, uint64_t t)
     c->bar[slot].until_ns = t + (uint64_t)(FUS_REPAIR_BAR_S * 1e9);
 }
 
+/* drift-divorce cooldown: this radar tid may not marry ANYONE for a while */
+static int rad_barred(const FusCore *c, int r_tid, uint64_t t)
+{
+    for (int i = 0; i < c->nrbar; i++)
+        if (c->rbar[i].r_tid == r_tid && t < c->rbar[i].until_ns) return 1;
+    return 0;
+}
+static void rbar_add(FusCore *c, int r_tid, uint64_t t)
+{
+    int slot = 0;
+    if (c->nrbar < 16) slot = c->nrbar++;
+    else { uint64_t best = UINT64_MAX;
+           for (int i = 0; i < 16; i++) if (c->rbar[i].until_ns < best) { best = c->rbar[i].until_ns; slot = i; } }
+    c->rbar[slot].r_tid = r_tid;
+    c->rbar[slot].until_ns = t + (uint64_t)(FUS_RAD_COOLDOWN_S * 1e9);
+}
+
 /* --------------------- association distance ------------------------------ */
 
 /* D^2 between a radar slot and an EO track, both taken as-published (the wires
  * are already smoothed; prediction is only used for staleness inflation).
- * Returns D^2 and the chi-square gate for the number of terms used. */
+ * Returns D^2 and the chi-square gate for the number of terms used; the raw
+ * azimuth residual (rig frame) comes back for the trend bookkeeping. */
 static double pair_d2(const FusCore *c, const RSlot *r, const FusEoTrk *e,
-                      uint64_t t, double *gate_out)
+                      uint64_t t, double *gate_out, double *resid_az_out)
 {
     double infl = 1.0;                     /* sigma scale during a reset grace */
     if (t < c->reset_until_ns[0] || t < c->reset_until_ns[1]) infl = 2.0;
@@ -224,9 +247,32 @@ static double pair_d2(const FusCore *c, const RSlot *r, const FusEoTrk *e,
         d2 += sq(g_pred - e->grow) / sq(FUS_SIG_GROW); terms++;
     }
 
-    double gate = terms >= 4 ? FUS_CHI2_4 : terms == 3 ? FUS_CHI2_3 : FUS_CHI2_2;
+    /* physical-size consistency: the pair hypothesis carries the radar's
+     * range, so the EO box has a width in metres - it must roughly agree
+     * with the radar's box. This is what stops a radar walker (a ~1 m blob)
+     * from claiming the EO track of a 4-5 m parked car one gate-width away. */
+    double w_eo = e->aw * r->r;
+    double w_rad = 2.0 * fmax(fmax(r->t.sx, r->t.sy), FUS_SIZE_MIN_M / 2);
+    if (w_eo > FUS_SIZE_MIN_M) {
+        d2 += sq(log(w_eo / w_rad) / FUS_SIG_LNSIZE); terms++;
+    }
+
+    double gate = terms >= 5 ? FUS_CHI2_5 : terms == 4 ? FUS_CHI2_4
+                : terms == 3 ? FUS_CHI2_3 : FUS_CHI2_2;
     *gate_out = gate * sq(c->k.gate);
+    if (resid_az_out) *resid_az_out = d_az;
     return d2;
+}
+
+/* Net residual drift across a sample window: mean of the newest third minus
+ * mean of the oldest third. Stationary noise -> ~0; a radar target sliding
+ * past a parked object -> a monotonic trend that crosses FUS_TREND_NET. */
+static double trend_net(const double *res, int n)
+{
+    int k = n / 3; if (k < 1) k = 1;
+    double a = 0, b = 0;
+    for (int i = 0; i < k; i++) { a += res[i]; b += res[n - 1 - i]; }
+    return (b - a) / k;
 }
 
 /* --------------------------- pass stages ---------------------------------- */
@@ -371,18 +417,42 @@ static void sustain_fused(FusCore *c, uint64_t t)
         if (!in_eo_fov(c, r_az(c, r), r_el(c, r))) {     /* FOV edge: freeze, not evidence */
             f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t; continue;
         }
-        double gate, d2 = pair_d2(c, r, e, t, &gate);
+        double gate, resid, d2 = pair_d2(c, r, e, t, &gate, &resid);
         double dt = f->cofresh_ns ? clampd(since_s(t, f->cofresh_ns), 0, 0.5) : 0;
         f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t;
-        if (d2 < gate * FUS_GATE_INCUMBENT) {
-            f->miss_s = 0;
-            /* healthy co-observation: feed the observe-only trim estimator */
-            if (r->t.mv == 1 && e->state == 1 && e->coast_s == 0) {
-                c->est_az[c->est_head] = e->az - r->az;   /* the trim that would zero it */
-                c->est_el[c->est_head] = e->el - r->el;
-                c->est_head = (c->est_head + 1) % FUS_TRIM_EST_RING;
-                if (c->est_n < FUS_TRIM_EST_RING) c->est_n++;
+        /* pair residual ring: a sustained trend means the radar target is
+         * sliding PAST this EO object (a pass-by), not riding with it */
+        f->res[f->res_head] = resid;
+        f->res_head = (f->res_head + 1) % FUS_TREND_WIN;
+        if (f->nres < FUS_TREND_WIN) f->nres++;
+        int drifting = 0;         /* short-window trend: counts as a miss */
+        int departed = 0;         /* median walked off the marriage reference: divorce now */
+        if (f->nres >= FUS_TREND_WIN) {
+            double ordered[FUS_TREND_WIN], sorted[FUS_TREND_WIN];
+            for (int j = 0; j < FUS_TREND_WIN; j++)
+                ordered[j] = sorted[j] = f->res[(f->res_head + j) % FUS_TREND_WIN];
+            for (int a = 1; a < FUS_TREND_WIN; a++) {   /* insertion sort */
+                double v = sorted[a]; int b = a;
+                while (b > 0 && sorted[b-1] > v) { sorted[b] = sorted[b-1]; b--; }
+                sorted[b] = v;
             }
+            double med = 0.5 * (sorted[FUS_TREND_WIN/2 - 1] + sorted[FUS_TREND_WIN/2]);
+            drifting = fabs(trend_net(ordered, FUS_TREND_WIN)) > FUS_TREND_NET;
+            /* slow drift: the MEDIAN (a couple of blink outliers cannot move
+             * it) walking away from the residual this pair married at is
+             * definitive evidence of a wrong marriage */
+            if (!f->have_ref) { f->res_ref = med; f->have_ref = 1; }
+            else if (fabs(med - f->res_ref) > FUS_DRIFT_ABS) departed = 1;
+        }
+        if (departed) {
+            /* divorce now, and bar the radar tid from marrying anyone - a
+             * sweeping radar target otherwise chains through every parked
+             * object in its path */
+            f->miss_s = c->k.divorce_s + 1;
+            rbar_add(c, f->r_tid, t);
+        }
+        if (d2 < gate * FUS_GATE_INCUMBENT && !drifting && !departed) {
+            f->miss_s = 0;
         } else {
             f->miss_s += dt;
             if (f->miss_s > c->k.divorce_s) {
@@ -405,6 +475,7 @@ static void sustain_fused(FusCore *c, uint64_t t)
                     memset(f->votes, 0, sizeof f->votes); f->cls = 0;
                 }
                 f->fused = 0; f->miss_s = 0;
+                f->nres = 0; f->res_head = 0; f->have_ref = 0;
             }
         }
     }
@@ -435,6 +506,7 @@ static void promote(FusCore *c, Cand *cd, uint64_t t)
     keep->fused = 1; keep->fused_ns = t; keep->miss_s = 0;
     keep->rs_seen = c->rad_seq; keep->es_seen = c->eo_seq; keep->cofresh_ns = t;
     keep->last_live_ns = t;
+    keep->nres = 0; keep->res_head = 0; keep->have_ref = 0;
     drop->used = 0;
     cd->used = 0;
 }
@@ -453,7 +525,7 @@ static void candidates(FusCore *c, uint64_t t)
     }
     if (!rad_fresh(c, t) || !eo_fresh(c, t)) return;
 
-    typedef struct { double d2; int ri, ei; } Edge;
+    typedef struct { double d2, resid; int ri, ei; } Edge;
     Edge edge[FUS_MAX_RAD * 4];
     int ne = 0;
     for (int ri = 0; ri < c->nrad && ne < (int)(sizeof edge / sizeof edge[0]); ri++) {
@@ -461,6 +533,7 @@ static void candidates(FusCore *c, uint64_t t)
         FTrk *fr = trk_by_rtid(c, r->t.tid);
         if (fr && fr->fused) continue;
         if (r->t.sus || r->t.conf < FUS_MIN_RAD_CONF) continue;
+        if (rad_barred(c, r->t.tid, t)) continue;    /* drift-divorce cooldown */
         if (!in_eo_fov(c, r_az(c, r), r_el(c, r))) continue;
         for (int ei = 0; ei < c->neo && ne < (int)(sizeof edge / sizeof edge[0]); ei++) {
             FusEoTrk *e = &c->eo[ei];
@@ -468,10 +541,10 @@ static void candidates(FusCore *c, uint64_t t)
             if (fe && fe->fused) continue;
             if (e->state != 1 || e->coast_s > FUS_EO_COFRESH_S) continue;
             if (barred(c, r->t.tid, e->tid, t)) continue;
-            double gate, d2 = pair_d2(c, r, e, t, &gate);
+            double gate, resid, d2 = pair_d2(c, r, e, t, &gate, &resid);
             if (d2 >= gate) continue;
             if (cand_find(c, r->t.tid, e->tid)) d2 -= FUS_STICKY_BONUS;
-            edge[ne].d2 = d2; edge[ne].ri = ri; edge[ne].ei = ei; ne++;
+            edge[ne].d2 = d2; edge[ne].ri = ri; edge[ne].ei = ei; edge[ne].resid = resid; ne++;
         }
     }
     /* insertion sort ascending (ne is small) */
@@ -493,11 +566,15 @@ static void candidates(FusCore *c, uint64_t t)
             memset(cd, 0, sizeof *cd);
             cd->used = 1; cd->r_tid = rt; cd->e_tid = et;
             cd->rs_seen = c->rad_seq - 1; cd->es_seen = c->eo_seq - 1;
+            cd->first_ns = t;
         }
         if (c->rad_seq > cd->rs_seen && c->eo_seq > cd->es_seen) {
             cd->hist = (cd->hist << 1) | 1;
             cd->n++; cd->last_hit_ns = t;
             cd->rs_seen = c->rad_seq; cd->es_seen = c->eo_seq;
+            if (cd->nres < FUS_TREND_WIN) cd->res[cd->nres++] = edge[i].resid;
+            else { memmove(cd->res, cd->res + 1, (FUS_TREND_WIN - 1) * sizeof cd->res[0]);
+                   cd->res[FUS_TREND_WIN - 1] = edge[i].resid; }
         }
     }
     /* advance a miss for candidates that had a co-fresh chance but no winning edge */
@@ -510,15 +587,50 @@ static void candidates(FusCore *c, uint64_t t)
             cd->rs_seen = c->rad_seq; cd->es_seen = c->eo_seq;
         }
     }
-    /* confirm: confirm+1 hits within the last 2*confirm evals */
+    /* confirm: confirm+1 hits within the last 2*confirm evals - and the
+     * residual must be STATIONARY. A candidate whose residual is trending is
+     * a pass-by (the radar target sliding across a parked object), however
+     * close the two momentarily are: don't marry them. */
     int M = c->k.confirm + 1, W = 2 * c->k.confirm;
     if (W > 30) W = 30;
     for (int i = 0; i < FUS_MAX_CAND; i++) {
         Cand *cd = &c->cand[i]; if (!cd->used || cd->n < M) continue;
         int hits = 0;
         for (int b = 0; b < W; b++) hits += (cd->hist >> b) & 1;
-        if (hits >= M) promote(c, cd, t);
+        if (hits >= M) {
+            if (cd->first_ns && since_s(t, cd->first_ns) < FUS_CONFIRM_SPAN_S)
+                continue;                       /* not enough time for drift to show */
+            if (cd->nres >= 3 && fabs(trend_net(cd->res, cd->nres)) > FUS_TREND_NET)
+                continue;                       /* drifting: keep watching, don't marry */
+            promote(c, cd, t);
+        }
         else if (cd->n >= W && hits < M / 2) cd->used = 0;
+    }
+}
+
+/* Trim estimator: learn only from ISOLATED geometry - a radar verified mover
+ * whose neighbourhood holds exactly ONE confirmed EO track. In a row of
+ * parked cars nothing is isolated and nothing is learned; on a lone walker
+ * the residual is unambiguous. This replaces sampling matched pairs, which
+ * was selection-biased exactly when the trim was wrong. */
+static void estimator_scan(FusCore *c, uint64_t t)
+{
+    if (!rad_fresh(c, t) || !eo_fresh(c, t)) return;
+    for (int i = 0; i < c->nrad; i++) {
+        RSlot *r = &c->rad[i];
+        if (r->t.mv != 1 || r->t.sus) continue;
+        double raz = r_az(c, r);
+        FusEoTrk *only = NULL; int nnear = 0;
+        for (int j = 0; j < c->neo; j++) {
+            FusEoTrk *e = &c->eo[j];
+            if (e->state != 1 || e->coast_s > FUS_EO_COFRESH_S) continue;
+            if (fabs(e->az - raz) < FUS_EST_ISO_RAD) { nnear++; only = e; }
+        }
+        if (nnear != 1) continue;
+        c->est_az[c->est_head] = only->az - r->az;   /* the trim that would zero it */
+        c->est_el[c->est_head] = only->el - r->el;
+        c->est_head = (c->est_head + 1) % FUS_TRIM_EST_RING;
+        if (c->est_n < FUS_TRIM_EST_RING) c->est_n++;
     }
 }
 
@@ -651,6 +763,7 @@ static int pass(FusCore *c, uint64_t t, FusOut *out, int max)
     ensure_rows(c, t);
     sustain_fused(c, t);
     candidates(c, t);
+    estimator_scan(c, t);
     kill_dead(c, t);
     return compose(c, t, out, max);
 }
