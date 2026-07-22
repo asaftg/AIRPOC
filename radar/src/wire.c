@@ -15,12 +15,7 @@ static void ap(char *buf, size_t cap, size_t *off, const char *fmt, ...) {
     if (*off >= cap) *off = cap - 1;   /* saturate; caller sees truncation */
 }
 
-static void num(char *buf, size_t cap, size_t *off, float v) {
-    if (isfinite(v)) ap(buf, cap, off, "%.3f", v);
-    else             ap(buf, cap, off, "null");
-}
-
-/* integer-dB variant for per-point SNR (precision matched to the sensor) */
+/* integer-dB SNR (precision matched to the sensor); null if not finite */
 static void num0(char *buf, size_t cap, size_t *off, float v) {
     if (isfinite(v)) ap(buf, cap, off, "%.0f", v);
     else             ap(buf, cap, off, "null");
