@@ -129,17 +129,31 @@ pipeline counters.
 ```bash
 sudo apt-get install -y libjpeg-turbo8-dev
 make                 # -> libeo.a (the module) + eo_pipeline (the preview)
-make libeo.a         # just the linkable module (what the GUI links)
+make libeo.a         # just the linkable module (no consumer today — see INTEGRATION.md)
 ./eo_pipeline -d /dev/video0 -p 8091 -i /dev/ttyUSB0   # -i = illuminator port (optional)
 ```
-**Production run — as a service** (boot-persistent + auto-restart; the reliable way):
+**How it actually runs in production (verified on the Jetson, 2026-07-17):** the
+`:8088` **launcher** starts it, via `app/launcher/start.sh` — *not* systemd.
+`eo-pipeline.service` ships in this directory but is **NOT installed** on the box
+(`systemctl is-enabled eo-pipeline` → no such unit). `start.sh` is a one-shot
+idempotent starter: it health-checks each producer (port bound **and** shm tap
+present), `setsid`-detaches the ones that are down, and exits. **It has no heal or
+respawn loop** — it only re-runs on the launcher's `/start`, `/reattach` or `/resume`.
+
+> **Consequence — there is no automatic restart today.** If `eo_pipeline` exits (see
+> *Camera-drop behaviour* below), nothing brings it back until someone triggers a start
+> from `:8088`. Radar and the detector share this exposure. A launcher heal loop (or
+> installing the systemd unit instead) is the open fix; do not assume auto-recovery.
+
+Restart EO **only** (leaves radar/detector/console alone):
 ```bash
-sudo cp eo-pipeline.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now eo-pipeline
-journalctl -u eo-pipeline -f      # logs
+cd ~/AIRPOC && git pull && cd eo/pipeline && make
+pkill -x eo_pipeline                        # start.sh matches by exact name
+( setsid ./eo_pipeline -d /dev/video0 -p 8091 -i /dev/ttyUSB0 >/tmp/airpoc-8091.log 2>&1 </dev/null & )
+sudo -n systemctl restart airpoc-recorder   # re-attach recorder to the fresh shm taps
 ```
-Runs from this persistent clone (not `/tmp`) and `Restart=always` brings it back if the
-single-owner camera is briefly grabbed — no stale binaries, no manual bounces.
+Note `</dev/null`: with a live stdin the process exits on EOF ("shutting down").
+Logs: `/tmp/airpoc-8091.log`.
 
 ## Design notes
 - **Copy the frame out of the V4L2 mmap before processing.** The DMA buffer is
@@ -167,9 +181,14 @@ single-owner camera is briefly grabbed — no stale binaries, no manual bounces.
 - **Wire the real detector into `consume_frame()`** — the hook already receives every
   raw full-native Y10 frame inside libeo (and `eo_latest()` hands the same raw frame to
   a linked consumer), so the detector plugs in without any datapath change.
-- **Camera-drop resilience in-process** — currently `Restart=always` (systemd) handles a
-  dropped/held camera by restarting; a nicer refinement is an in-process reopen-retry so
-  the process never exits. Low priority given the service already auto-recovers.
+- **Camera-drop behaviour** — a dequeue failure or a stalled sensor (no frame within
+  `CAP_DQ_TIMEOUT_MS`, `capture.c`) makes the process log, clear `connected`, and
+  `_Exit(1)`. It deliberately does **not** limp on the last frame while `/stats` still
+  claims `connected:1` — that silently froze the feed forever and left the detector
+  chewing a stale frame. **Open item:** nothing auto-restarts it (see the run section —
+  no systemd, launcher has no heal loop), so today this is an *honest hard-down*, not
+  self-healing. Fix is either a launcher heal loop (covers radar + detector too) or an
+  in-process reopen-retry.
 
 ## Status
 > `-Wall -Wextra` clean; verified on the Orin Nano Super by **counting client-received
