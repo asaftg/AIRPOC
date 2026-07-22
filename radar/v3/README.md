@@ -1,21 +1,26 @@
-# Radar V3 firmware (agv3) - built + triple-reviewed 2026-07-11; FLASH-READY (not yet flashed)
+# Radar V3 (shipped 2026-07-21 — flashed, built, live on the Jetson)
 
-agv3 = agv2 (crash fix + comb gate) + the comb-gate margin scale FIX and
-on-hardware live-calibration tooling. agv2's dB->raw margin conversion was
-2^14 (16384x) too small, so the gate rejected nothing at any setting. Fixed
-(~87082 raw LSB/dB, verified vs TI SWRU526). ADDS:
-  - observe-only mode (emptyBandGateCfg mode 2): measures per-frame margins,
-    rejects NOTHING - for calibration.
-  - per-frame margin telemetry (min/max/histogram) via queryDemoStatus.
-  - raw-LSB threshold override (5th arg) bypassing the dB model.
-appimage sha256 e26c7460...eae3. Flash: fw/flash_agv3.cfg. Rollback: v2 agv2.
+Tag `AIRPOC-RADAR-V3.0`. See [`../VERSIONS.md`](../VERSIONS.md) for the
+fw+cfg+sw matrix and the revert procedure.
 
-REVIEWS (3/3 pass): scale-correct (TRM re-derivation); SHIP (no ABI skew, 3-core
-clean rebuild, crash fix byte-intact, gate-off bit-identical); GO-calibrate.
+- **fw/**: `agv3` appimage (sha `e26c7460`) — **ON-CHIP since 2026-07-17**.
+  agv3 = agv2 (overload crash fix + DDMA empty-band comb gate) + the comb-gate
+  dB->raw margin scale FIX (agv2's conversion was 2^14 too small, so the gate
+  rejected nothing at any setting; ~87082 raw LSB/dB, verified vs TI SWRU526),
+  plus observe-only mode and per-detection margin telemetry in
+  `queryDemoStatus`. The gate currently runs in **observe mode (2)**: it
+  measures margins and rejects nothing, pending calibration before arming.
+  `src_mss/` + `src_datapath/` are the exact sources.
+- **cfg/**: `awr2944P_ag.cfg` as run (unchanged from V2).
+- **sw/**: `cluster.c` + **`slowdet.c`** + **`fuse.c`** (+ headers, `main.c`,
+  `Makefile`) — the two-detector stack. cluster confirms per frame; slowdet
+  chains faint intermittent echoes across frames; fuse merges them into one
+  class-less box per object and conditions the published elevation.
 
-CRITICAL - the gate is a range-vs-ghost knob and its margin ~= SNR-12dB, so a
-faint-far target (250-300m, ~16-18dB SNR -> ~4-8dB margin) sits NEAR the ghost
-regime (~0-4dB). NEVER arm reject (mode 1) before calibrating: observe on a
-garage (ghost cluster) AND an open scene with a real far human; the excess
-rejections while the far human is present must be < 0.2/frame. Garage alone
-mis-sets it. See ../docs/SHIP_RUNBOOK_V2.md step 7.
+Measured on the fixture corpus: negatives 0/0/49, positives identical to the
+reference, elevation frame-to-frame jump 4.06 deg -> 0.17 deg, 446 us/frame =
+1.2 % of the 26 Hz budget. Live on the bench the same day: a vehicle held at
+~157 m closing 12 m/s with elevation steady within 0.02 deg.
+
+What it does: [`../docs/SLOWDET.md`](../docs/SLOWDET.md).
+What we tried that failed: [`../docs/TRIAL_AND_ERROR.md`](../docs/TRIAL_AND_ERROR.md).

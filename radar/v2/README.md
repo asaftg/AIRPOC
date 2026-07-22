@@ -28,3 +28,20 @@ Known acceptances:
 tangential queue traffic weak until Phase 3; far-stand drift >15 m partial;
 +0.3 s confirm latency. Status map: ../docs/ROADMAP.md; ship record:
 ../docs/SHIP_RUNBOOK_V2.md.
+
+---
+
+## V2 as a revert point (recorded 2026-07-21)
+
+Tag `AIRPOC-RADAR-V2.0` marks commit `6b97705` — the last state with **one
+detector** (`cluster.c` only), which is what ran in the field through
+2026-07-20. `sw/` here holds that exact snapshot (`cluster.c`, `cluster.h`,
+`main.c`, `Makefile`).
+
+Note the **chip ran `agv3`** by then, not the agv2 image in `fw/` — agv3 is a
+pure firmware upgrade that did not change the software contract. The agv1/agv2
+images are retained here as older firmware rollback points. See
+[`../VERSIONS.md`](../VERSIONS.md) for the full fw+cfg+sw matrix.
+
+To go back to one detector from V3: `git revert f800699` then rebuild — the
+firmware and cfg do not change.
