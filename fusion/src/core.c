@@ -43,6 +43,9 @@ typedef struct { int used; uint32_t gid;
     uint64_t born_ns, last_live_ns;
     double res[FUS_TREND_WIN]; int nres, res_head;  /* pair az-residual ring (trend) */
     double res_ref; int have_ref;    /* residual at marriage (slow-drift divorce) */
+    /* stationary-hold: radar dropped a target the camera sees standing still */
+    int hold_state;                  /* 0 none / 1 holding / 2 broken */
+    double hold_r, hold_az, hold_el, hold_aw;
 } FTrk;
 
 typedef struct { int used; int r_tid, e_tid;
@@ -213,9 +216,16 @@ static void rbar_add(FusCore *c, int r_tid, uint64_t t)
 /* D^2 between a radar slot and an EO track, both taken as-published (the wires
  * are already smoothed; prediction is only used for staleness inflation).
  * Returns D^2 and the chi-square gate for the number of terms used; the raw
- * azimuth residual (rig frame) comes back for the trend bookkeeping. */
+ * azimuth residual (rig frame) comes back for the trend bookkeeping.
+ *
+ * `incumbent`: an established pair is judged on POSITION and SIZE only. The
+ * radar's velocity goes bad exactly when targets brake or turn (position-
+ * derived, radial-only on the slow path), and a braking car's garbage
+ * velocity must not divorce a correct marriage - the drift checks police
+ * pass-bys far better than the rate term ever did. Rate and growth agreement
+ * remain requirements for FORMING a pair. */
 static double pair_d2(const FusCore *c, const RSlot *r, const FusEoTrk *e,
-                      uint64_t t, double *gate_out, double *resid_az_out)
+                      uint64_t t, int incumbent, double *gate_out, double *resid_az_out)
 {
     double infl = 1.0;                     /* sigma scale during a reset grace */
     if (t < c->reset_until_ns[0] || t < c->reset_until_ns[1]) infl = 2.0;
@@ -237,14 +247,16 @@ static double pair_d2(const FusCore *c, const RSlot *r, const FusEoTrk *e,
     /* elevation: only when neither side moves fast vertically (climbing rule) */
     if (fabs(e->vel) < FUS_EL_RATE_DROP) { d2 += sq(d_el) / S_el; terms++; }
 
-    /* cross-range rate consistency */
-    double S_w = sq(infl) * (sq(FUS_SIG_RAD_RDOT / fmax(r->r, 1.0)) + sq(FUS_SIG_EO_RATE));
-    d2 += sq(r->omega - e->vaz) / S_w; terms++;
+    if (!incumbent) {
+        /* cross-range rate consistency */
+        double S_w = sq(infl) * (sq(FUS_SIG_RAD_RDOT / fmax(r->r, 1.0)) + sq(FUS_SIG_EO_RATE));
+        d2 += sq(r->omega - e->vaz) / S_w; terms++;
 
-    /* looming consistency: radar closure predicts EO box growth */
-    double g_pred = fmax(0.0, -r->rdot) / fmax(r->r, 1.0);
-    if (r->t.mv == 1 && g_pred > FUS_GROW_ARM_GPRED && e->age_s > FUS_GROW_ARM_AGE_S) {
-        d2 += sq(g_pred - e->grow) / sq(FUS_SIG_GROW); terms++;
+        /* looming consistency: radar closure predicts EO box growth */
+        double g_pred = fmax(0.0, -r->rdot) / fmax(r->r, 1.0);
+        if (r->t.mv == 1 && g_pred > FUS_GROW_ARM_GPRED && e->age_s > FUS_GROW_ARM_AGE_S) {
+            d2 += sq(g_pred - e->grow) / sq(FUS_SIG_GROW); terms++;
+        }
     }
 
     /* physical-size consistency: the pair hypothesis carries the radar's
@@ -283,7 +295,9 @@ static void update_liveness(FusCore *c, uint64_t t)
     for (int i = 0; i < FUS_MAX_TRK; i++) {
         FTrk *f = &c->trk[i]; if (!f->used) continue;
         if (f->r_tid >= 0) {
-            if (rlive && rad_by_tid(c, f->r_tid)) { f->r_lost_ns = 0; f->last_live_ns = t; }
+            if (rlive && rad_by_tid(c, f->r_tid)) {
+                f->r_lost_ns = 0; f->last_live_ns = t; f->hold_state = 0;
+            }
             else if (!f->r_lost_ns) f->r_lost_ns = t;
         }
         if (f->e_tid >= 0) {
@@ -417,7 +431,7 @@ static void sustain_fused(FusCore *c, uint64_t t)
         if (!in_eo_fov(c, r_az(c, r), r_el(c, r))) {     /* FOV edge: freeze, not evidence */
             f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t; continue;
         }
-        double gate, resid, d2 = pair_d2(c, r, e, t, &gate, &resid);
+        double gate, resid, d2 = pair_d2(c, r, e, t, 1, &gate, &resid);
         double dt = f->cofresh_ns ? clampd(since_s(t, f->cofresh_ns), 0, 0.5) : 0;
         f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t;
         /* pair residual ring: a sustained trend means the radar target is
@@ -453,6 +467,8 @@ static void sustain_fused(FusCore *c, uint64_t t)
         }
         if (d2 < gate * FUS_GATE_INCUMBENT && !drifting && !departed) {
             f->miss_s = 0;
+            f->hold_r = f->r_f;   /* last HEALTHY range - the id-steal frames
+                                   * that precede a divorce corrupt r_f */
         } else {
             f->miss_s += dt;
             if (f->miss_s > c->k.divorce_s) {
@@ -467,7 +483,19 @@ static void sustain_fused(FusCore *c, uint64_t t)
                              n->az = r_az(c, r); n->el = r_el(c, r);
                              n->vaz = r->omega; n->vel = 0;
                              n->have_r = 1; n->r_f = r->r; n->rdot_f = r->rdot; n->r_ns = t; }
-                    f->r_tid = -1; f->r_lost_ns = 0; f->have_r = 0;
+                    f->r_tid = -1; f->r_lost_ns = 0;
+                    /* the radar left (id stolen by another mover / data walked
+                     * off) while the camera sees this object STANDING STILL:
+                     * its last healthy range is still true - hold it. Any
+                     * other divorce wipes the range as before. */
+                    if (f->hold_r > 0 &&
+                        fabs(e->vaz) < 0.005 && fabs(e->vel) < 0.005) {
+                        f->r_f = f->hold_r; f->rdot_f = 0;
+                        f->r_lost_ns = t;
+                        f->hold_state = 1;
+                        f->hold_az = e->az; f->hold_el = e->el; f->hold_aw = e->aw;
+                    } else
+                        f->have_r = 0;
                 } else {                 /* radar keeps the gid */
                     if (n) { n->e_tid = f->e_tid;
                              n->az = e->az; n->el = e->el; n->vaz = e->vaz; n->vel = e->vel; }
@@ -507,6 +535,7 @@ static void promote(FusCore *c, Cand *cd, uint64_t t)
     keep->rs_seen = c->rad_seq; keep->es_seen = c->eo_seq; keep->cofresh_ns = t;
     keep->last_live_ns = t;
     keep->nres = 0; keep->res_head = 0; keep->have_ref = 0;
+    keep->hold_state = 0; keep->hold_r = 0;
     drop->used = 0;
     cd->used = 0;
 }
@@ -541,9 +570,14 @@ static void candidates(FusCore *c, uint64_t t)
             if (fe && fe->fused) continue;
             if (e->state != 1 || e->coast_s > FUS_EO_COFRESH_S) continue;
             if (barred(c, r->t.tid, e->tid, t)) continue;
-            double gate, resid, d2 = pair_d2(c, r, e, t, &gate, &resid);
+            /* an in-progress candidate is judged like a married pair (position
+             * + size, wider gate) so radar jitter cannot starve its courtship;
+             * only a BRAND NEW candidate faces the strict full test */
+            Cand *cd0 = cand_find(c, r->t.tid, e->tid);
+            double gate, resid, d2 = pair_d2(c, r, e, t, cd0 != NULL, &gate, &resid);
+            if (cd0) gate *= FUS_GATE_INCUMBENT;
             if (d2 >= gate) continue;
-            if (cand_find(c, r->t.tid, e->tid)) d2 -= FUS_STICKY_BONUS;
+            if (cd0) d2 -= FUS_STICKY_BONUS;
             edge[ne].d2 = d2; edge[ne].ri = ri; edge[ne].ei = ei; edge[ne].resid = resid; ne++;
         }
     }
@@ -560,6 +594,19 @@ static void candidates(FusCore *c, uint64_t t)
         rused[edge[i].ri] = 1; eused[edge[i].ei] = 1;
         int rt = c->rad[edge[i].ri].t.tid, et = c->eo[edge[i].ei].tid;
         Cand *cd = cand_find(c, rt, et);
+        if (!cd) {
+            /* radar tid churn: the same physical object re-numbered mid-
+             * courtship. If an existing candidate for this SAME camera track
+             * has a radar tid that just left the wire, the new tid inherits
+             * the courtship instead of starting from zero - that restart tax
+             * was most of the field's "too long to fuse". */
+            for (int k2 = 0; k2 < FUS_MAX_CAND; k2++) {
+                Cand *o2 = &c->cand[k2];
+                if (o2->used && o2->e_tid == et && !rad_by_tid(c, o2->r_tid)) {
+                    o2->r_tid = rt; cd = o2; break;
+                }
+            }
+        }
         if (!cd) {
             for (int k2 = 0; k2 < FUS_MAX_CAND; k2++) if (!c->cand[k2].used) { cd = &c->cand[k2]; break; }
             if (!cd) continue;
@@ -709,13 +756,36 @@ static int compose(FusCore *c, uint64_t t, FusOut *out, int max)
             f->have_r = 1; f->r_ns = t;
             o->r_m = f->r_f; o->rdot_mps = f->rdot_f; o->r_stale = 0;
         } else if (f->have_r && f->r_lost_ns) {
-            double lost = fmax(0, since_s(t, f->r_lost_ns));
-            if (lost < FUS_R_DROP_S) {
-                double dt = clampd(lost, 0, FUS_R_PROP_S);
-                o->r_m = f->r_f + f->rdot_f * dt;
-                o->rdot_mps = f->rdot_f;
-                o->r_stale = lost > FUS_R_STALE_S;
-            } else f->have_r = 0;
+            /* stationary-hold: the pair was married and the camera still sees
+             * the object STANDING STILL - then the last measured range stays
+             * true (a braking car the radar drops on stop keeps its range).
+             * The hold breaks permanently the moment the camera sees motion. */
+            if (f->fused && e && f->hold_state == 0) {
+                f->hold_state = 1;
+                if (f->hold_r <= 0) f->hold_r = f->r_f;  /* prefer last HEALTHY range */
+                f->hold_az = e->az; f->hold_el = e->el; f->hold_aw = e->aw;
+            }
+            /* "standing still" = angles static, angle rates near zero, and
+             * the box staying the SAME SIZE since the hold began. A target
+             * coming straight at the camera is angle-static too, but its box
+             * grows steadily - cumulative size change breaks the hold. (The
+             * instantaneous grow signal is too noisy to use: a real parked
+             * car's grow swings +-0.1 frame to frame.) */
+            if (f->hold_state == 1 && e &&
+                fabs(e->vaz) < 0.005 && fabs(e->vel) < 0.005 &&
+                f->hold_aw > 0 && fabs(log(e->aw / f->hold_aw)) < 0.14 &&
+                fabs(e->az - f->hold_az) < 0.012 && fabs(e->el - f->hold_el) < 0.012) {
+                o->r_m = f->hold_r; o->rdot_mps = 0; o->r_stale = 1;
+            } else {
+                if (f->hold_state == 1) f->hold_state = 2;
+                double lost = fmax(0, since_s(t, f->r_lost_ns));
+                if (lost < FUS_R_DROP_S) {
+                    double dt = clampd(lost, 0, FUS_R_PROP_S);
+                    o->r_m = f->r_f + f->rdot_f * dt;
+                    o->rdot_mps = f->rdot_f;
+                    o->r_stale = lost > FUS_R_STALE_S;
+                } else f->have_r = 0;
+            }
         }
 
         /* per-side passthrough */

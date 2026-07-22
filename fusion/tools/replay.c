@@ -41,6 +41,7 @@ typedef struct {
     double eo_az_bias;    /* offset applied ONLY to EO (simulates disagreement) */
     double aw;            /* EO angular width, rad (0 = default 0.01) */
     double rsx;           /* radar box half-extent, m (0 = default 1.0) */
+    int    vgarbage;      /* 1 = radar reports nonsense velocity (braking car) */
 } Tgt;
 
 typedef struct {
@@ -80,6 +81,7 @@ static int world_rad_frame(World *w, FusRadTgt *out)
         /* velocities consistent with (rdot, vaz): v = d/dt of the position */
         o->vx = g->rdot * sin(az) + r * cos(az) * g->vaz;
         o->vy = g->rdot * cos(az) - r * sin(az) * g->vaz;
+        if (g->vgarbage) { o->vx = 20; o->vy = -20; }
         o->vz = 0;
         o->sx = o->sy = g->rsx > 0 ? g->rsx : 1.0; o->sz = 0.5;
         o->conf = 1.0; o->np = 30; o->sus = 0; o->mv = 1;
@@ -99,7 +101,9 @@ static int world_eo_frame(World *w, FusEoTrk *out)
         o->cls = g->cls; o->cls_conf = 0.9; o->conf = 0.8;
         o->az = taz(g, w->t) + g->eo_az_bias + frand() * 2 * 0.0003;
         o->el = tel(g, w->t) + frand() * 2 * 0.0003;
-        o->aw = g->aw > 0 ? g->aw : 0.01; o->ah = 0.02;
+        /* angular size scales with range, like a real box */
+        double szscale = g->r0 > 0 ? g->r0 / fmax(tr(g, w->t), 10.0) : 1.0;
+        o->aw = (g->aw > 0 ? g->aw : 0.01) * szscale; o->ah = 0.02 * szscale;
         o->vaz = g->vaz; o->vel = g->vel;
         o->s_az = o->s_el = 0.001;
         o->grow = g->rdot < 0 ? -g->rdot / tr(g, w->t) : 0.0;
@@ -389,9 +393,11 @@ static void t_degrade(void)
     CHECK(find_src(rows, n, FUS_SRC_FUSED), "did not re-fuse after EO returned");
     gid = find_src(rows, n, FUS_SRC_FUSED)->gid;
     w.tgt[0].alive_rad = 0;
-    /* radar daemon still frames (empty targets); EO continues */
+    /* radar daemon still frames (empty targets); EO continues. The target is
+     * radially CLOSING, so the stationary-hold engages briefly and then
+     * breaks on cumulative box growth (~15%) - allow time for that. */
     t0 = w.t; int saw_stale = 0, saw_drop = 0; double r_at_loss = 0;
-    while (w.t < t0 + 4.0) {
+    while (w.t < t0 + 9.0) {
         w.t += 1.0 / 26.0;
         nr = world_rad_frame(&w, rf);
         fus_core_step_rad(c, rf, nr, sim_ns(w.t), rows, FUS_MAX_OUT);
@@ -552,6 +558,111 @@ static void t_sweep(void)
     printf("PASS sweep (car swept 3 parked cars, 0 wrong marriages)\n");
 }
 
+/* 8d: the braking car (field session 20260722T221055Z). While it brakes the
+ * radar's velocity goes garbage - the marriage must hold on position. When
+ * the radar then drops the stopped car, the camera still sees it standing
+ * still, so the range must be HELD; it drops once the camera sees motion. */
+static void t_braking(void)
+{
+    World w; world_init(&w, 1);
+    w.tgt[0] = (Tgt){ .az0 = 2 * D2R, .el0 = 0.3 * D2R, .r0 = 150, .rdot = -8,
+                      .cls = 2, .alive_rad = 1, .alive_eo = 1,
+                      .aw = 0.018, .rsx = 1.5 };
+    FusCore *c = fus_core_new();
+    FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
+    run(&w, c, 3.0, invariant, NULL);
+    CHECK(!g_fail, "invariant");
+    FusRadTgt rf[8]; FusEoTrk ef[8]; FusOut rows[FUS_MAX_OUT];
+    int nr = world_rad_frame(&w, rf);
+    int n = fus_core_step_rad(c, rf, nr, sim_ns(w.t += 0.01), rows, FUS_MAX_OUT);
+    const FusOut *f = find_src(rows, n, FUS_SRC_FUSED);
+    CHECK(f, "no fused row before braking");
+    uint32_t gid = f->gid;
+
+    /* brake: target stops, radar velocity becomes nonsense for 2 s */
+    w.tgt[0].rdot = 0; w.tgt[0].vgarbage = 1;
+    double t0 = w.t;
+    while (w.t < t0 + 2.0) {
+        w.t += 1.0 / 26.0;
+        nr = world_rad_frame(&w, rf);
+        n = fus_core_step_rad(c, rf, nr, sim_ns(w.t), rows, FUS_MAX_OUT);
+        int ne = world_eo_frame(&w, ef); w.eo_age[0] += 1.0 / 26.0;
+        n = fus_core_step_eo(c, ef, ne, sim_ns(w.t + 0.001), rows, FUS_MAX_OUT);
+        invariant(rows, n, w.t, NULL); if (g_fail) return;
+    }
+    f = find_src(rows, n, FUS_SRC_FUSED);
+    CHECK(f && f->gid == gid, "garbage radar velocity divorced a correct pair");
+
+    /* radar drops the stopped car entirely; camera still sees it standing */
+    w.tgt[0].alive_rad = 0;
+    t0 = w.t; const FusOut *er = NULL;
+    while (w.t < t0 + 6.0) {
+        w.t += 1.0 / 26.0;
+        nr = world_rad_frame(&w, rf);
+        fus_core_step_rad(c, rf, nr, sim_ns(w.t), rows, FUS_MAX_OUT);
+        int ne = world_eo_frame(&w, ef); w.eo_age[0] += 1.0 / 26.0;
+        n = fus_core_step_eo(c, ef, ne, sim_ns(w.t + 0.001), rows, FUS_MAX_OUT);
+        invariant(rows, n, w.t, NULL); if (g_fail) return;
+    }
+    for (int i = 0; i < n; i++) if (rows[i].gid == gid) er = &rows[i];
+    CHECK(er, "row vanished after radar drop");
+    CHECK(er->r_m > 100, "range not held for a standing target (r=%.0f) 6 s after radar drop", er->r_m);
+    CHECK(er->r_stale == 1, "held range not flagged");
+
+    /* the car drives off camera-visibly: the held range must drop */
+    w.tgt[0].rdot = -6; w.tgt[0].vaz = 0.5 * D2R;
+    t0 = w.t;
+    int dropped = 0;
+    while (w.t < t0 + 3.0) {
+        w.t += 1.0 / 26.0;
+        int ne = world_eo_frame(&w, ef); w.eo_age[0] += 1.0 / 26.0;
+        n = fus_core_step_eo(c, ef, ne, sim_ns(w.t), rows, FUS_MAX_OUT);
+        const FusOut *x = NULL;
+        for (int i = 0; i < n; i++) if (rows[i].gid == gid) x = &rows[i];
+        if (x && x->r_m < 0) { dropped = 1; break; }
+    }
+    CHECK(dropped, "range still shown after the standing target started moving");
+    fus_core_free(c);
+    printf("PASS braking (velocity lies survived, range held while standing, dropped on motion)\n");
+}
+
+/* 8e: radar tid churn mid-courtship (field session 20260722T221126Z: 6 tids
+ * in 10 s, five never finished courtship). The new tid must inherit the
+ * courtship progress, so total time-to-fuse stays near the nominal ~0.8 s. */
+static void t_churn(void)
+{
+    World w; world_init(&w, 1);
+    w.tgt[0] = (Tgt){ .az0 = 1 * D2R, .el0 = 0, .r0 = 200, .rdot = -5, .cls = 2,
+                      .alive_rad = 1, .alive_eo = 1 };
+    FusCore *c = fus_core_new();
+    FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
+    FusRadTgt rf[8]; FusEoTrk ef[8]; FusOut rows[FUS_MAX_OUT];
+    double t_fused = -1;
+    double next_rad = 0, next_eo = 0.001;
+    while (w.t < 4.0 && t_fused < 0) {
+        double tn = next_rad < next_eo ? next_rad : next_eo;
+        w.t = tn; int n;
+        /* radar re-numbers the target every 0.4 s (worse than the field) */
+        w.rad_tid_base = 1 + 10 * (int)(w.t / 0.4);
+        if (tn == next_rad) {
+            int nr = world_rad_frame(&w, rf);
+            n = fus_core_step_rad(c, rf, nr, sim_ns(tn), rows, FUS_MAX_OUT);
+            next_rad += 1.0 / 26.0;
+        } else {
+            w.eo_age[0] += 1.0 / 15.0;
+            int ne = world_eo_frame(&w, ef);
+            n = fus_core_step_eo(c, ef, ne, sim_ns(tn), rows, FUS_MAX_OUT);
+            next_eo += 1.0 / 15.0;
+        }
+        invariant(rows, n, w.t, NULL); if (g_fail) return;
+        if (find_src(rows, n, FUS_SRC_FUSED)) t_fused = w.t;
+    }
+    CHECK(t_fused > 0, "never fused under radar tid churn");
+    CHECK(t_fused < 1.5, "churn restart tax still present (fused at %.2f s)", t_fused);
+    fus_core_free(c);
+    printf("PASS churn (radar renumbering every 0.4 s, fused at %.2f s)\n", t_fused);
+}
+
 /* 9: emit round-trip sanity + absent-side conventions. */
 static void t_emit(void)
 {
@@ -641,6 +752,8 @@ int main(void)
     RUN(t_crossing);
     RUN(t_wrong_partner);
     RUN(t_sweep);
+    RUN(t_braking);
+    RUN(t_churn);
     RUN(t_emit);
     RUN(t_perf);
     if (g_total) { printf("REPLAY: FAIL\n"); return 1; }
