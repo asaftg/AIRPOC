@@ -96,6 +96,42 @@ class RadarView {
     if (Math.abs(v) < STATIC_DOPPLER_MPS) return `rgba(0,212,255,${s * 0.55})`;
     return v > 0 ? `rgba(255,85,85,${s})` : `rgba(80,170,255,${s})`;
   }
+  /* Scene layer: colour = echo strength (can I trust the bearing),
+     opacity = occupancy (is it really there). Rendered once per /scene
+     update into an offscreen canvas, then blitted every frame. */
+  sceneColour(snr, a) {
+    const t = Math.max(0, Math.min(1, (snr - 16) / 46));
+    let r, g, b;
+    if (t < 0.5) { const u = t * 2; r = 30 + u * -30; g = 80 + u * 140; b = 255 + u * -115; }
+    else         { const u = (t - 0.5) * 2; r = 0 + u * 255; g = 220 + u * -150; b = 140 + u * -100; }
+    return `rgba(${r | 0},${g | 0},${b | 0},${a})`;
+  }
+  buildSceneLayer() {
+    const s = this.scene;
+    this._sceneCanvas = null;
+    if (!s || !s.cells || !s.cells.length) return;
+    const { w, h } = this.geom();
+    const off = document.createElement("canvas");
+    off.width = w; off.height = h;
+    const c = off.getContext("2d"), cells = s.cells, D2R = Math.PI / 180;
+    const dpr = window.devicePixelRatio || 1;
+    for (let i = 0; i < cells.length; i += 4) {
+      const occ = cells[i + 2];
+      const r = (cells[i] + 0.5) * s.r_step;
+      const az = (s.az0 + (cells[i + 1] + 0.5) * s.az_step) * D2R;
+      const p = this.toCanvas(r * Math.sin(az), r * Math.cos(az));
+      if (p.px < -50 || p.px > w + 50 || p.py < -50 || p.py > h + 50) continue;
+      c.fillStyle = this.sceneColour(cells[i + 3], Math.max(0.06, occ / 255));
+      const sz = Math.max(1.5 * dpr, s.r_step * p.pxPerM);
+      c.fillRect(p.px - sz / 2, p.py - sz / 2, sz, sz);
+    }
+    this._sceneCanvas = off;
+  }
+  drawScene() {
+    if (!this.showScene || !this._sceneCanvas) return;
+    this.ctx.drawImage(this._sceneCanvas, 0, 0);
+  }
+  setScene(s) { this.scene = s; this.buildSceneLayer(); this.redraw(); }
   drawPoints(points) {
     const ctx = this.ctx, dpr = window.devicePixelRatio || 1, rad = 2 * dpr;
     for (const p of (points || [])) {
@@ -124,6 +160,7 @@ class RadarView {
     this.backdrop();
     const r = this.last;
     if (!r || !r.connected) return;
+    this.drawScene();
     this.drawPoints(r.points); this.drawTargets(r.targets);
   }
   update(r) {
@@ -138,6 +175,15 @@ class RadarView {
 // ── wiring: SSE stream + stats poll ──
 const view = new RadarView("ppi");
 function connect() {
+  view.showScene = true;
+  const sceneBox = document.getElementById("scene_on");
+  if (sceneBox) sceneBox.onchange = () => { view.showScene = sceneBox.checked; view.redraw(); };
+  const sceneClr = document.getElementById("scene_clear");
+  if (sceneClr) sceneClr.onclick = () => fetch("/scene?reset=1").catch(() => {});
+  const pollScene = () => fetch("/scene")
+      .then(r => r.json()).then(s => view.setScene(s)).catch(() => {});
+  pollScene(); setInterval(pollScene, 1000);
+
   const es = new EventSource("/stream");
   es.onmessage = (e) => { try { view.update(JSON.parse(e.data)); } catch (_) {} };
   es.onerror = () => { view.setDisconnected(); es.close(); setTimeout(connect, 1000); };
