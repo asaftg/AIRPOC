@@ -356,6 +356,27 @@
 
   $("to-control").onclick = function () { location.href = "http://" + location.hostname + ":8088/"; };  /* back to the START/STOP launcher */
 
+  /* WHERE A RAW RETURN IS. The radar wire is going POLAR-ONLY for points[]: the sensor measures
+   * r/az/el natively (range is quantised to 2.61 m bins), and the cartesian x,y,z it also carried
+   * was the same measurement a second time — about half the bytes of every point, on a feed that
+   * is 5 Mb/s and the largest single load on the operator's link. So the console derives them.
+   *
+   * x,y is still PREFERRED when present: a session recorded before the change replays carrying
+   * both, and it must render identically rather than through a different code path.
+   *
+   * `r` IS THE SLANT RANGE, NOT GROUND RANGE — checked against a real frame off the box:
+   * r == hypot(x, y, z) to 5 mm, while r vs hypot(x, y) is out by up to 89 m. So the ground
+   * range is r·cos(el) and elevation MUST be in the conversion. Dropping it puts every point
+   * too far out, worst at high elevation — and this frame had a median |el| of 12° with points
+   * out to 36°, so it would not have been subtle. Azimuth convention matches the rest of the
+   * console (targets[] does az = atan2(x, y)): degrees, + to the right of boresight.
+   * targets[] keeps its cartesian fields — fusion parses those — so this is points-only. */
+  function pointXY(p) {
+    if (typeof p.x === "number" && typeof p.y === "number") return [p.x, p.y];
+    var a = (p.az || 0) * Math.PI / 180, g = (p.r || 0) * Math.cos((p.el || 0) * Math.PI / 180);
+    return [g * Math.sin(a), g * Math.cos(a)];
+  }
+
   /* ── target model + selection (daemon schema: class-less objects) ── */
   function targets(radar) {
     if (!radar || !radar.targets) return [];
@@ -1504,8 +1525,9 @@
 
     /* raw returns — already gated server-side by the daemon (snr/speed/fov). v = +approaching */
     (radar.points || []).forEach(function (p) {
-      if (!inFov(p.x, p.y)) return;                 /* don't draw returns outside the FOV */
-      var pc = W2C(p.x, p.y);
+      var xy = pointXY(p);
+      if (!inFov(xy[0], xy[1])) return;             /* don't draw returns outside the FOV */
+      var pc = W2C(xy[0], xy[1]);
       ctx.fillStyle = pointStyle(p.v, p.snr);
       ctx.beginPath(); ctx.arc(pc[0], pc[1], 2 * dpr, 0, 2 * Math.PI); ctx.fill();
     });
