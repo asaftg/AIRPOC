@@ -1114,7 +1114,7 @@
           var hw = bw2 / 2, hh = bh2 / 2;
           var x0 = bx - hw, x1 = bx + hw, y0 = by - hh, y1 = by + hh;
           cornerBrackets(ctx, x0, y0, x1, y1, col, dpr);   /* shared with the radar lock mark */
-          haloText(ctx, label, x0 + 2 * dpr, y0 - 3 * dpr, col, dpr);
+          if (label) haloText(ctx, label, x0 + 2 * dpr, y0 - 3 * dpr, col, dpr);
         } else if (detStyle === "seeker" && !forceBox) {
           /* HEAVY HALO CROSS — short thick arms with a centre gap over a dark halo,
            * readable on bright sky and dark bush (field pick, option E) */
@@ -1136,7 +1136,7 @@
             });
           }
           ctx.setLineDash([]); ctx.lineCap = "butt";
-          haloText(ctx, label, bx + a + 3 * dpr, by - 4 * dpr, col, dpr);
+          if (label) haloText(ctx, label, bx + a + 3 * dpr, by - 4 * dpr, col, dpr);
         } else {
           /* FUSED in box mode → the same box, drawn heavier. Shape stays the class's; weight
            * says "two sensors agree on this one". */
@@ -1144,7 +1144,7 @@
           ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
           ctx.strokeRect(bx - bw2 / 2, by - bh2 / 2, bw2, bh2);
           ctx.setLineDash([]);
-          haloText(ctx, label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr, col, dpr);
+          if (label) haloText(ctx, label, bx - bw2 / 2 + 2 * dpr, by - bh2 / 2 - 3 * dpr, col, dpr);
         }
         /* Temporal marker: a tiny "t" at the box's top-right corner (in the CLASS colour, so it
          * flags provenance without recolouring the box). Small on purpose — a quiet hint that this
@@ -1192,15 +1192,17 @@
         var eng = (t.key === engagedKey);
         if (engagedKey && lockLive && !eng) return;      /* locked AND drawable → show only it */
         var col = (staring && fmap.eo[t.tid]) ? css("--on") : classColor(t.cls);
-        var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
-        var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
-                       : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
-        /* FUSED: the radar half of this object brings a RANGE the camera can never measure —
-         * put it on the box. That number appearing next to a classified target is the whole
-         * payoff of fusion, so it goes where the operator is already looking. */
+        /* NO CLASS TEXT ON THE VIDEO. The colour already says what it is, and the word sat on
+         * top of the thing the operator is trying to look at — over a small far target the label
+         * is bigger than the target. The class is still spelled out in the target list, which is
+         * where you read rather than watch. The seeker cross loses its "V62" entirely for the
+         * same reason: on a centroid mark that string was the whole mark's worth of clutter.
+         * What survives is what the picture cannot tell you by itself: how sure we are, and the
+         * range fusion brought in (a camera has none — that number is the payoff of fusion). */
+        var lab = seek ? "" : Math.round((t.conf || 0) * 100) + "%";
         var fu = fmap.eo[t.tid];
-        if (fu && typeof fu.r_m === "number" && fu.r_m >= 0) lab += " " + fu.r_m.toFixed(0) + "m";
-        if (eng) lab = "LOCK " + lab;
+        if (fu && typeof fu.r_m === "number" && fu.r_m >= 0) lab = (lab ? lab + " " : "") + fu.r_m.toFixed(0) + "m";
+        if (eng) lab = lab ? "LOCK " + lab : "LOCK";
         var drawn = drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
                 eng,                                     /* corner brackets = LOCKED, nothing else */
                 t.raw && (t.raw.tbd === 1 || t.raw.tbd === true),
