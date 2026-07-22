@@ -122,14 +122,23 @@ class RadarView {
       const p = this.toCanvas(r * Math.sin(az), r * Math.cos(az));
       if (p.px < -50 || p.px > w + 50 || p.py < -50 || p.py > h + 50) continue;
       c.fillStyle = this.sceneColour(cells[i + 3], Math.max(0.06, occ / 255));
-      const sz = Math.max(1.5 * dpr, s.r_step * p.pxPerM);
+      /* oversize slightly so adjacent cells overlap and blend; the blur on
+         composite then removes the tiling without inventing resolution */
+      const sz = Math.max(2 * dpr, s.r_step * p.pxPerM * 1.6);
       c.fillRect(p.px - sz / 2, p.py - sz / 2, sz, sz);
     }
     this._sceneCanvas = off;
   }
   drawScene() {
     if (!this.showScene || !this._sceneCanvas) return;
-    this.ctx.drawImage(this._sceneCanvas, 0, 0);
+    const ctx = this.ctx, dpr = window.devicePixelRatio || 1;
+    /* Soften the polar lattice. The bearing estimate wanders further than one
+       azimuth cell, so hard cell edges imply precision the sensor does not
+       have; this is honest smoothing, not upsampling. */
+    const prev = ctx.filter;
+    ctx.filter = `blur(${(1.6 * dpr).toFixed(1)}px)`;
+    ctx.drawImage(this._sceneCanvas, 0, 0);
+    ctx.filter = prev || "none";
   }
   setScene(s) { this.scene = s; this.buildSceneLayer(); this.redraw(); }
   drawPoints(points) {
