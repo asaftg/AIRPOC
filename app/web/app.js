@@ -178,8 +178,8 @@
     b.classList.toggle("auto", m === "auto"); b.classList.toggle("man", m === "man");
     document.body.classList.toggle("manual", m === "man");
     $("stage").classList.toggle("manual", m === "man");
-    if (m === "auto") { engage(null); $("track-hint").hidden = true; }
-    else { $("track-hint").hidden = (engagedKey !== null); }
+    if (m === "auto") { engage(null); }
+    updateTrackBanner();
     ctl("track=" + m);
   }
   $("track").onclick = function () { setTrack(trackMode === "auto" ? "man" : "auto"); };
@@ -440,9 +440,16 @@
    *   engage=<tid>      — the console's own declared engagement, for any source, so a
    *                       radar-only pick is still published state rather than a dead click.
    * The tracker's wire (mode/engaged) is what we REFLECT — see onTrkFrame. */
+  /* One place decides what the banner says, so the LOCKED state can never disagree with the
+   * marks on the video: green LOCKED while holding a target, the manual prompt otherwise. */
+  function updateTrackBanner() {
+    var el = $("track-hint");
+    if (engagedKey) { el.hidden = false; el.textContent = "LOCKED · tap elsewhere to release"; el.classList.add("locked"); }
+    else { el.hidden = (trackMode !== "man"); el.textContent = "MANUAL · tap a target"; el.classList.remove("locked"); }
+  }
   function engage(key) {
     engagedKey = key;
-    $("track-hint").hidden = (trackMode !== "man") || (key !== null);
+    updateTrackBanner();
     var eoTid = (key && key.indexOf("eo:") === 0) ? parseInt(key.slice(3), 10) : -1;
     if (eoTid !== sentTrkEngage) { sentTrkEngage = eoTid; trkEngageSentAt = Date.now(); ctl("trk_engage=" + eoTid); }
     var tid = key ? parseInt(key.split(":")[1], 10) : -1;
@@ -523,6 +530,8 @@
   var lockLive = false;   /* is the locked target actually on THIS frame? gates hide-the-rest */
   var showRawDet = false;          /* raw detector boxes: DEV overlay, off by default */
   var detTemporalOn = false;       /* is the detector actually running temporal integration? */
+  /* how much of a box must be inside the zoom/ROI crop before we draw it as a target here */
+  var BOX_MIN_VISIBLE = 0.5;
   function eoBoxHit(xf, yf) {
     var best = null, bestA = 1e9;
     eoBoxes.forEach(function (b) {
@@ -658,10 +667,21 @@
       ctx.save(); ctx.beginPath(); ctx.rect(vx, vy, vw, vh); ctx.clip();
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
       var drawDet = function (b, dashed, col, label, forceBox, tracked, tbd) {
-        if (!b.px || b.px.length < 4) return;
+        if (!b.px || b.px.length < 4) return false;
         var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
         var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
-        if (bx + bw2 / 2 < vx || bx - bw2 / 2 > vx + vw || by + bh2 / 2 < vy || by - bh2 / 2 > vy + vh) return;
+        /* VISIBILITY RULE. Drawing a box the moment ANY sliver of it falls inside the crop put
+         * huge rectangles on screen whose target was almost entirely outside the zoomed view —
+         * at 4x you'd see a corner bracket and a label for something you cannot actually see.
+         * Require a real share of the box to be in view before claiming it as a target here.
+         * The LOCKED target is exempt: if the operator is holding it, it stays marked even while
+         * it leaves the crop — losing the mark on the one target you chose is worse. */
+        var ix0 = Math.max(bx - bw2 / 2, vx), ix1 = Math.min(bx + bw2 / 2, vx + vw);
+        var iy0 = Math.max(by - bh2 / 2, vy), iy1 = Math.min(by + bh2 / 2, vy + vh);
+        var visible = Math.max(0, ix1 - ix0) * Math.max(0, iy1 - iy0);
+        var area = Math.max(1, bw2 * bh2);
+        if (!tracked && visible / area < BOX_MIN_VISIBLE) return false;
+        if (visible <= 0) return false;
         if (tracked) {
           /* TRACKED — CORNER BRACKETS: the four corners of the box only, no connecting edges.
            * Shape (not colour) carries the tracking state, so class colour still answers "what
@@ -705,6 +725,7 @@
           haloText(ctx, "t", tx, ty, col, dpr);
           ctx.restore();
         }
+        return true;   /* drawn -> caller may register it as tappable */
       };
       var seek = (detStyle === "seeker");
       /* RAW DETECTOR boxes — dev overlay only, OFF by default. These are the tracker's INPUT;
@@ -735,12 +756,14 @@
         var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
                        : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
         if (eng) lab = "LOCK " + lab;
-        drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
+        var drawn = drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
                 eng,                                     /* corner brackets = LOCKED, nothing else */
                 t.raw && (t.raw.tbd === 1 || t.raw.tbd === true));
         /* remember where it landed, in 0..1 panel coords, so a tap can hit-test the drawn
-         * box instead of re-deriving the projection (which would drift out of sync). */
-        if (t.px && t.px.length >= 4) {
+         * box instead of re-deriving the projection (which would drift out of sync).
+         * Only boxes we actually DREW are tappable — a target culled for being mostly outside
+         * the crop must not still swallow taps from an invisible rectangle. */
+        if (drawn && t.px && t.px.length >= 4) {
           var ex = vx + (t.px[0] - ox) / cw * vw, ey = vy + (t.px[1] - oy) / ch * vh;
           var ew = t.px[2] / cw * vw, eh = t.px[3] / ch * vh;
           eoBoxes.push({ key: t.key, x0: (ex - ew / 2) / w, x1: (ex + ew / 2) / w,
@@ -959,6 +982,11 @@
     var cxp = (e.clientX - r.left) / r.width, cyp = (e.clientY - r.top) / r.height;   /* 0..1 in the panel */
     var hit = eoBoxHit(cxp, cyp);
     if (hit) { pick(hit); return; }
+    /* While LOCKED, a tap anywhere off the held target RELEASES it — and does so immediately,
+     * locally, rather than waiting for the tracker to acknowledge. It must not fall through to
+     * "select the nearest radar target", which would swap one lock for another instead of
+     * returning to stare. */
+    if (engagedKey) { engage(null); draw(true, true); return; }
     var eoHfov = (lastStats.eo && lastStats.eo.hfov) || 0;
     var ts = radarTargets(); if (!ts.length || !eoHfov) return;
     var azClick = (cxp - 0.5) * eoHfov;
@@ -1169,15 +1197,16 @@
   /* mode/engaged are reflected FROM THE WIRE, never from the button press — the tracker owns
    * the lock, so if it rejects or drops an engage the console must show that truth. */
   function onTrkFrame() {
+    /* The operator's last action wins for a moment. The tracker takes a frame or two to adopt
+     * an engage/release, and until it does its wire still reports the OLD value — mirroring that
+     * blindly undid the press and made a release take a second or two to "stick". */
+    var freshEngage = Date.now() - trkEngageSentAt < 1000;
     if (lastTrk && typeof lastTrk.engaged === "number") {
       var wire = lastTrk.engaged >= 0 ? ("eo:" + lastTrk.engaged) : null;
-      if (wire && wire !== engagedKey) { engagedKey = wire; $("track-hint").hidden = true; }
-      /* Don't let a not-yet-acknowledged frame clear a lock we just asked for. The tracker
-       * needs a frame to adopt the engage, and in that window the wire still reads -1 — acting
-       * on it made a fresh lock appear for one frame and vanish. Only honour a wire CLEAR once
-       * the request has had time to land. */
-      else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0 &&
-               Date.now() - trkEngageSentAt > 1000) engagedKey = null;
+      if (wire && wire !== engagedKey && !freshEngage) { engagedKey = wire; updateTrackBanner(); }
+      else if (!wire && engagedKey && engagedKey.indexOf("eo:") === 0 && !freshEngage) {
+        engagedKey = null; updateTrackBanner();
+      }
     }
     /* A LOCK IS THE OPERATOR'S, and only the operator (or the tracker itself) ends it. The
      * console does NOT drop it just because the track is missing from this frame: the tracker

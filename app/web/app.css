@@ -170,6 +170,9 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 .track-hint{position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:4;
   background:rgba(0,0,0,.6);border:1px solid var(--amber);color:var(--amber);
   padding:4px 12px;border-radius:3px;font-size:12px;letter-spacing:1px}
+/* Holding a target is a MODE, not just a mark on one box — it has to be readable without
+ * hunting for the bracketed box, so the same banner slot turns green and says so. */
+.track-hint.locked{border-color:var(--on);color:var(--on);font-weight:700}
 #stage.manual #eo{cursor:crosshair}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
 
