@@ -37,4 +37,11 @@ void http_set_ctl_cb(void (*cb)(double eps_m, int min_pts, double speed_min,
                                 double doppler, int confirm, double coast_s,
                                 double park_s, void *user), void *user);
 
+/* Publish the latest scene-layer JSON (copied) for GET /scene. */
+void http_set_scene(const char *json, size_t len);
+
+/* Register the handler for GET /scene?on=0|1&reset=1. Called with the parsed
+ * flags (on = -1 when absent); `user` passed back verbatim. */
+void http_set_scene_cb(void (*cb)(int on, int reset, void *user), void *user);
+
 #endif /* AIRPOC_HTTP_H */

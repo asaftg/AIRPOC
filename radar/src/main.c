@@ -18,6 +18,10 @@
 #include "cluster.h"
 #include "slowdet.h"
 #include "fuse.h"
+#include "scene.h"
+
+/* worst case every cell lit; sized once at startup, never on the hot path */
+#define SCENE_JSON_CAP (768 * 1024)
 #include "wire.h"
 #include "http.h"
 #include "sim.h"
@@ -44,6 +48,13 @@
 static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
+/* /scene handler — enable/disable or clear the static occupancy layer. */
+static void on_scene(int on, int reset, void *user) {
+    SceneMap *s = (SceneMap *)user;
+    if (on >= 0) scene_set_enabled(s, on);
+    if (reset)   scene_reset(s);
+}
+
 /* /ctl handler — pushes live tracker changes to the clusterer. */
 static void on_ctl(double eps_m, int min_pts, double speed_min, double snr_min,
                    double fov_half, double el_max, double doppler, int confirm,
@@ -63,6 +74,9 @@ typedef struct {
     RadarClusterer *clust;
     SlowDet        *slow;        /* far/faint chaining detector (slowdet.c) */
     Fuse           *fuse;        /* F+S merge + elevation conditioning */
+    SceneMap       *scene;       /* static occupancy display layer */
+    char           *scene_json;  /* serialised snapshot for GET /scene */
+    double          scene_pub_t; /* last publish time (we publish ~1 Hz) */
     RadarTarget     ftgt[RADAR_MAX_TARGETS];   /* cluster's targets, pre-merge */
     RadarTarget     stgt[RADAR_MAX_TARGETS];   /* slowdet's targets, pre-merge */
     RadarFrame      frame;
@@ -113,6 +127,14 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
                           c->stgt, RADAR_MAX_TARGETS);
     c->frame.n_targets = fuse_step(c->fuse, c->ftgt, nf, c->stgt, ns, t,
                                    c->frame.targets, RADAR_MAX_TARGETS);
+
+    /* Static occupancy display layer: fold this frame in, publish ~1 Hz. */
+    scene_step(c->scene, c->frame.points, n);
+    if (c->scene_json && t - c->scene_pub_t >= 1.0) {
+        int sl = scene_json(c->scene, c->scene_json, SCENE_JSON_CAP);
+        if (sl > 0) http_set_scene(c->scene_json, (size_t)sl);
+        c->scene_pub_t = t;
+    }
 
     if (dt > 0) {
         double inst = 1.0 / dt;
@@ -274,12 +296,15 @@ int main(int argc, char **argv) {
     ctx.clust = cluster_new();
     ctx.slow  = slowdet_new();
     ctx.fuse  = fuse_new();
+    ctx.scene = scene_new();
+    ctx.scene_json = malloc(SCENE_JSON_CAP);
     ctx.json  = malloc(JSON_CAP);
     ctx.profile = profile;
     if (!ctx.clust || !ctx.slow || !ctx.fuse || !ctx.json) { perror("malloc"); return 1; }
 
     http_start(http_port, webroot);
     http_set_ctl_cb(on_ctl, ctx.clust);      /* GET /ctl?eps=&minpts= -> DBSCAN */
+    http_set_scene_cb(on_scene, ctx.scene);  /* GET /scene?on=&reset= */
     fprintf(stderr, "radar_preview: previewer http://0.0.0.0:%d/  profile=%s\n",
             http_port, profile);
 
@@ -300,6 +325,7 @@ int main(int argc, char **argv) {
         }
         tlv_stream_free(st);
         cluster_free(ctx.clust); slowdet_free(ctx.slow); fuse_free(ctx.fuse);
+        scene_free(ctx.scene); free(ctx.scene_json);
         free(ctx.json);
         free(cfg_owned); free(web_owned);
         return 0;
@@ -429,6 +455,8 @@ int main(int argc, char **argv) {
     cluster_free(ctx.clust);
     slowdet_free(ctx.slow);
     fuse_free(ctx.fuse);
+    scene_free(ctx.scene);
+    free(ctx.scene_json);
     free(ctx.json);
     free(cfg_owned); free(web_owned);
     return 0;

@@ -36,6 +36,28 @@ void http_set_ctl_cb(void (*cb)(double, int, double, double, double, double, dou
     g_ctl_cb = cb; g_ctl_user = user;
 }
 
+/* ---- scene layer (static occupancy) ---- */
+static char   *g_scene = NULL;
+static size_t  g_scene_len = 0, g_scene_cap = 0;
+static void  (*g_scene_cb)(int, int, void *) = NULL;
+static void   *g_scene_user = NULL;
+
+void http_set_scene_cb(void (*cb)(int on, int reset, void *user), void *user) {
+    g_scene_cb = cb; g_scene_user = user;
+}
+
+void http_set_scene(const char *json, size_t len) {
+    pthread_mutex_lock(&g_lock);
+    if (len + 1 > g_scene_cap) {
+        char *nb = realloc(g_scene, len + 1);
+        if (nb) { g_scene = nb; g_scene_cap = len + 1; }
+    }
+    if (g_scene && g_scene_cap >= len + 1) {
+        memcpy(g_scene, json, len); g_scene[len] = 0; g_scene_len = len;
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
 static struct {
     double fps, max_range_m, fov_half_deg;
     unsigned long drops;
@@ -212,6 +234,33 @@ static void *client(void *arg) {
             if (!copy) break;
             if (dprintf(fd, "data: %s\n\n", copy) < 0) { free(copy); break; }
             free(copy);
+        }
+        close(fd); return NULL;
+    }
+
+    /* GET /scene[?on=0|1][&reset=1] — static occupancy layer for the operator
+     * picture. Display only; never feeds tracking. */
+    if (!strncmp(req, "GET /scene", 10)) {
+        int on = -1, reset = 0;
+        if (strstr(req, "on=1")) on = 1;
+        else if (strstr(req, "on=0")) on = 0;
+        if (strstr(req, "reset=1")) reset = 1;
+        if ((on >= 0 || reset) && g_scene_cb) g_scene_cb(on, reset, g_scene_user);
+        pthread_mutex_lock(&g_lock);
+        size_t len = g_scene_len;
+        char *copy = NULL;
+        if (g_scene && len) { copy = malloc(len + 1); if (copy) { memcpy(copy, g_scene, len); copy[len] = 0; } }
+        pthread_mutex_unlock(&g_lock);
+        if (copy) {
+            dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                        "Access-Control-Allow-Origin: *\r\nContent-Length: %zu\r\n"
+                        "Connection: close\r\n\r\n", len);
+            ssize_t w = write(fd, copy, len); (void)w;
+            free(copy);
+        } else {
+            const char *e = "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                            "Connection: close\r\n\r\n{\"scene\":0,\"frames\":0,\"cells\":[]}";
+            ssize_t w = write(fd, e, strlen(e)); (void)w;
         }
         close(fd); return NULL;
     }

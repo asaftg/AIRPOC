@@ -5,8 +5,8 @@ CFLAGS ?= -O2 -Wall -Wextra -pthread
 CFLAGS += -I../tap                 # vendored airpoc_tap.h (recorder tap protocol)
 LDLIBS  = -lpthread -lm -lrt       # -lrt: POSIX shm for the recorder taps
 
-SRC = main.c serial.c cfg_push.c tlv.c cluster.c slowdet.c fuse.c wire.c http.c sim.c
-HDR = radar.h serial.h cfg_push.h tlv.h cluster.h slowdet.h fuse.h wire.h http.h sim.h ../tap/airpoc_tap.h
+SRC = main.c serial.c cfg_push.c tlv.c cluster.c slowdet.c fuse.c scene.c wire.c http.c sim.c
+HDR = radar.h serial.h cfg_push.h tlv.h cluster.h slowdet.h fuse.h scene.h wire.h http.h sim.h ../tap/airpoc_tap.h
 OBJ = $(SRC:.c=.o)
 BIN = radar_preview
 
