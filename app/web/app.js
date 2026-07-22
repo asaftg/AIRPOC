@@ -513,10 +513,16 @@
     return classColor(t.cls);
   }
   /* The target's PUBLISHED id — say which one you are switching to instead of "the pink one".
-   * G = fusion's global id (stable across per-sensor id churn), E = EO track, R = radar track. */
+   * The letter names the id SPACE the row lives in, which is the row's own source:
+   *   G = a fused target, fusion's global id (stable across both sensors' id churn)
+   *   E = an EO track      R = a radar track
+   * A single-sensor row carries a gid too when fusion is up (it passes them through), but
+   * labelling those "G" made every row look fused. Show the constituent id instead: it is the
+   * id the operator sees on the video and the scope, and the one an engage is sent against. */
   function rowId(t) {
-    if (t.gid != null) return "G" + t.gid;
-    return (t.src === "rad" ? "R" : "E") + t.tid;
+    if (t.src === "fus") return "G" + t.gid;
+    if (t.src === "rad") return "R" + (t.rad_tid != null && t.rad_tid >= 0 ? t.rad_tid : t.tid);
+    return "E" + (t.eo_tid != null && t.eo_tid >= 0 ? t.eo_tid : t.tid);
   }
   /* What a row SAYS is what that row's sensors actually know: a fused row is the only one that
    * can put class and range on the same line — that is the whole point of fusion. */
@@ -617,10 +623,27 @@
     var box = $("locktgt");
     if (!box) return;
     var e = engagedKey ? tgtSeen[engagedKey] : null;
-    if (!engagedKey || !e) { box.hidden = true; return; }
-    var t = e.t, col = rowColor(t), tx = rowText(t);
+    /* The strip is ALWAYS there, empty when nothing is held. Showing and hiding it changed the
+     * panel's height, so every lock and release shoved the whole target list up or down — the
+     * exact jump this strip exists to remove. An empty placeholder costs one row of space and
+     * keeps every other row where the operator last saw it. */
     box.hidden = false;
+    if (!engagedKey || !e) {
+      box.classList.add("empty");
+      box.classList.remove("stale");
+      $("lk-title").textContent = "NO LOCK";
+      $("lk-sw").style.visibility = "hidden";
+      $("lk-id").textContent = "—";
+      $("lk-src").className = "tsrc"; $("lk-src").textContent = "";
+      $("lk-mid").textContent = "tap a target to hold it";
+      $("lk-rng").textContent = "";
+      return;
+    }
+    var t = e.t, col = rowColor(t), tx = rowText(t);
+    box.classList.remove("empty");
     box.classList.toggle("stale", !e.live);
+    $("lk-title").textContent = "LOCKED";
+    $("lk-sw").style.visibility = "";
     $("lk-sw").style.background = col;
     $("lk-id").textContent = rowId(t);
     $("lk-src").className = "tsrc " + t.src;
@@ -629,7 +652,10 @@
     $("lk-rng").textContent = tx.rgt;
   }
   /* Tap the strip to let the target go — the same act as tapping the held target again. */
-  $("locktgt").addEventListener("pointerdown", function (e) { e.preventDefault(); engage(null); });
+  $("locktgt").addEventListener("pointerdown", function (e) {
+    if (!engagedKey) return;                      /* empty placeholder — nothing to release */
+    e.preventDefault(); engage(null);
+  });
 
   function renderTargetList() {
     if (!tgtSlots) buildTgtSlots();
@@ -1246,7 +1272,7 @@
    * picked up on the next poll). Accumulation is always at the full frame rate regardless — the
    * knob only trades link bandwidth for how fresh the picture is. ── */
   var scene = { on: 0, data: null, frames: 0, poll: null, hz: 5, hzTouch: 0 };
-  var sceneCv = null, sceneKey = "";
+  var sceneCv = null, sceneRaw = null, sceneKey = "", SCENE_BLUR_PX = 1.0;
   try { scene.on = localStorage.getItem("sceneOn") === "1" ? 1 : 0; } catch (x) {}
 
   /* 16 dB (noise floor) -> 62 dB (hard structure), cold to hot. Bearing you can trust reads warm. */
@@ -1266,37 +1292,56 @@
             + ":" + fovDeg.toFixed(1) + ":" + scene.frames;
     if (sceneCv && sceneKey === key) return sceneCv;
     if (!sceneCv) sceneCv = document.createElement("canvas");
+    if (!sceneRaw) sceneRaw = document.createElement("canvas");
     if (sceneCv.width !== w || sceneCv.height !== h) { sceneCv.width = w; sceneCv.height = h; }
-    var c = sceneCv.getContext("2d");
+    if (sceneRaw.width !== w || sceneRaw.height !== h) { sceneRaw.width = w; sceneRaw.height = h; }
+    var c = sceneCv.getContext("2d"), g = sceneRaw.getContext("2d");
     c.clearRect(0, 0, w, h);
+    g.clearRect(0, 0, w, h);
     sceneKey = key;
     if (!d || !d.cells || !d.cells.length) return sceneCv;
     var cells = d.cells, rs = d.r_step || 2.61, a0 = d.az0 || -60, as = d.az_step || 1;
     var D = Math.PI / 180, diag = Math.hypot(w, h);
+    /* A CELL IS A WEDGE, NOT A SQUARE (radar/docs/SCENE_LAYER.md): r_step deep in range,
+     * r * az_step wide in azimuth — 0.87 m across at 50 m, 2.6 m at 150 m. Drawing squares
+     * paints close-in cells about 3x too wide and under-covers range, which then makes any blur
+     * smooth azimuth far more than range and leaves range banding that reads as an artifact.
+     * So each cell is filled as its true annular sector.
+     * OVERSIZE ~1.25x so neighbours overlap, then blur the composite once (below): that removes
+     * the polar lattice without implying resolution the sensor does not have. Finer bins are NOT
+     * the answer and would make it worse — the bearing wanders further than a cell is wide, so
+     * smaller cells only scatter the same evidence. */
+    var padA = as * 0.125, padR = rs * 0.125;
     for (var i = 0; i + 3 < cells.length; i += 4) {
       var ri = cells[i], ai = cells[i + 1], occ = cells[i + 2], snr = cells[i + 3];
-      var r0 = ri * rs * scale, r1 = (ri + 1) * rs * scale;
+      var r0 = Math.max(0, (ri - 0.125) * rs) * scale, r1 = (ri + 1 + 0.125) * rs * scale;
       if (r0 > diag) continue;                                  /* wholly off-canvas */
       /* THE FOV KNOB GOVERNS THE BACKDROP TOO. The daemon keeps accumulating its full +-60 deg
        * grid whatever the operator sets, so narrowing the FOV must not throw the map away — it
        * just stops drawing what the operator has said they are not looking at, and widening it
        * again brings the already-accumulated map straight back with nothing to rebuild.
        * The edge cell is CLIPPED to the FOV rather than dropped, so the map ends exactly on the
-       * wedge boundary instead of in a 1-degree staircase. */
-      var d0 = a0 + ai * as, d1 = a0 + (ai + 1) * as;           /* cell azimuth span, degrees */
+       * wedge boundary instead of in a 1-degree staircase. Clipped AFTER the overlap padding,
+       * so the padding cannot spill past the wedge either. */
+      var d0 = a0 + ai * as - padA, d1 = a0 + (ai + 1) * as + padA;   /* cell azimuth span, deg */
       if (d0 < -fovDeg) d0 = -fovDeg;
       if (d1 > fovDeg) d1 = fovDeg;
       if (d1 <= d0) continue;                                   /* wholly outside the FOV */
       var p0 = -Math.PI / 2 + d0 * D, p1 = -Math.PI / 2 + d1 * D;  /* world azimuth -> canvas angle */
-      c.globalAlpha = Math.max(0.10, Math.min(0.92, occ / 255)); /* floor: faint cells stay visible */
-      c.fillStyle = snrColor(snr);
-      c.beginPath();
-      c.arc(cx, cy, r1, p0, p1);
-      c.arc(cx, cy, r0, p1, p0, true);
-      c.closePath();
-      c.fill();
+      g.globalAlpha = Math.max(0.10, Math.min(0.92, occ / 255)); /* floor: faint cells stay visible */
+      g.fillStyle = snrColor(snr);
+      g.beginPath();
+      g.arc(cx, cy, r1, p0, p1);
+      g.arc(cx, cy, r0, p1, p0, true);
+      g.closePath();
+      g.fill();
     }
-    c.globalAlpha = 1;
+    g.globalAlpha = 1;
+    /* One blurred composite, not a blur per cell: this runs once per snapshot (a few times a
+     * second) while the scope redraws at ~27 Hz off the finished canvas. */
+    c.filter = "blur(" + (SCENE_BLUR_PX * (window.devicePixelRatio || 1)).toFixed(2) + "px)";
+    c.drawImage(sceneRaw, 0, 0);
+    c.filter = "none";
     return sceneCv;
   }
 

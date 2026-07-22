@@ -131,6 +131,15 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 #locktgt{border:1px solid var(--on);border-left:3px solid var(--on);border-radius:3px;
   background:#13251a;padding:5px 8px 6px;margin:2px 0 8px;cursor:pointer}
 #locktgt:hover{background:#173020}
+/* Nothing held: same box, same height, no green — the panel must not resize when a lock comes
+ * and goes, or the whole list jumps under the operator. */
+#locktgt.empty{border-color:var(--bd);border-left-color:var(--bd2);border-style:dashed;
+  background:transparent;cursor:default}
+#locktgt.empty:hover{background:transparent}
+#locktgt.empty .lk-title{color:var(--dim)}
+#locktgt.empty .lk-rel{visibility:hidden}
+#locktgt.empty .lk-row .meta{color:var(--dim)}
+#locktgt.stale{opacity:.55}
 .lk-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px}
 .lk-title{font-size:10px;letter-spacing:1.5px;color:var(--on);font-weight:700}
 .lk-rel{font-size:9px;letter-spacing:.5px;color:var(--muted)}
