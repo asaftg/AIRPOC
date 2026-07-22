@@ -62,10 +62,12 @@
 /* Association gate: a detection matches a track if within (base + 0.5*boxdim) px,
  * scaled by (ref_fps / measured_fps) so the same real speed tracks at any rate.
  * MEASURED tick rate, not configured (audit lesson). */
-#define TRK_GATE_BASE_DEFAULT   28.0
+#define TRK_GATE_BASE_DEFAULT   20.0
 #define TRK_GATE_BASE_MIN       4.0
 #define TRK_GATE_BASE_MAX       200.0
 #define TRK_GATE_REF_FPS        15.0
+#define TRK_GATE_SIGMA_K        3.0     /* gate grows with the track's own uncertainty */
+#define TRK_GATE_MAX_PX         120.0   /* cap so a huge box can't gate the whole scene */
 
 /* Confirmation: a track emits once its evidence score crosses `confirm`. Model
  * detections add ~1.0 (a strong direct det) down to a floor for weak/tbd boxes;
@@ -84,6 +86,16 @@
 #define TRK_COAST_S_DEFAULT     1.0
 #define TRK_COAST_S_MIN         0.2
 #define TRK_COAST_S_MAX         5.0
+
+/* Park-hold: a confirmed track that is essentially STATIONARY (a parked car, a
+ * standing person) keeps its id far longer through a detection blink, instead of
+ * dying on the 1 s coast and being re-numbered when the weakly-detected object
+ * reappears (the "same car, new id every second" churn). Its box does not drift
+ * because it is not moving, so a longer hold costs nothing while it is there;
+ * a target that actually leaves holds stale for at most park_s then dies. A MOVING
+ * lost target still uses the short coast (it is genuinely gone, don't chase it). */
+#define TRK_PARK_S              4.0     /* stationary-confirmed coast budget (s) */
+#define TRK_STATIONARY_VEL     10.0     /* |output velocity| below this = parked (px/s) */
 
 /* Clutter (translate-vs-oscillate) horizon: over this many seconds a track's net
  * displacement is compared to its path length. An oscillator (foliage) has a long

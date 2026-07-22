@@ -194,7 +194,16 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
         for (int i = 0; i < TRK_MAX_TRACKS; i++) {
             Track *t = &c->tr[i];
             if (!t->used) continue;
-            double gate = (c->k.gate_base + 0.5 * dim) * gate_scale;
+            /* Gate = base + a term that grows with the track's own UNCERTAINTY (sigma =
+             * EMA of recent innovation). A well-tracked, near-stationary target has a
+             * small sigma -> a tight gate, so it cannot grab a different object that
+             * happens to pass within half its box (the bug that made a parked car snap
+             * onto a passing car, spike its velocity, coast away, and get re-numbered).
+             * A fast or freshly-uncertain track has a large sigma -> a wide gate, so it
+             * still follows. A small box-size term keeps big objects from being gated
+             * tighter than their own centre noise. */
+            double gate = (c->k.gate_base + TRK_GATE_SIGMA_K * t->sigma + 0.15 * dim) * gate_scale;
+            if (gate > TRK_GATE_MAX_PX * gate_scale) gate = TRK_GATE_MAX_PX * gate_scale;
             /* soft class penalty: shrink the gate on a class mismatch (movers cls=0
              * are class-less and never penalised) */
             if (d->cls >= 1 && t->cls >= 1 && d->cls != t->cls)
@@ -300,10 +309,15 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             /* An operator-engaged track is STICKY: the global coast budget never kills
              * it. It coasts (held velocity, growing coast_s) until the operator releases
              * the lock or the lock loop re-anchors it, so a locked target is always
-             * drawable and its id never dangles. Everything else dies normally. */
+             * drawable and its id never dangles. Everything else dies normally, EXCEPT a
+             * stationary confirmed track gets park-hold (keeps its id through a blink). */
             if (t->tid != engaged_tid) {
                 if (!t->confirmed && t->score <= TRK_SCORE_FLOOR) { t->used = 0; continue; }
-                if (t->confirmed && t->misses > coast_frames)     { t->used = 0; continue; }
+                if (t->confirmed) {
+                    int stationary = hypot(t->ovx, t->ovy) < TRK_STATIONARY_VEL;
+                    int budget = stationary ? (int)(TRK_PARK_S * fps + 0.5) : coast_frames;
+                    if (t->misses > budget) { t->used = 0; continue; }
+                }
             }
         }
         if (!t->confirmed && t->score >= c->k.confirm) t->confirmed = 1;
