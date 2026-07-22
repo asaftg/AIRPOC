@@ -1260,9 +1260,10 @@
 
   /* Draw every lit cell as its true annular sector, in the CURRENT view geometry. Exact rather
    * than an axis-aligned approximation — at ±60° a rectangle per cell visibly shears the map. */
-  function renderScene(w, h, cx, cy, scale) {
+  function renderScene(w, h, cx, cy, scale, fovDeg) {
     var d = scene.data;
-    var key = w + "x" + h + ":" + cx.toFixed(1) + "," + cy.toFixed(1) + "," + scale.toFixed(4) + ":" + scene.frames;
+    var key = w + "x" + h + ":" + cx.toFixed(1) + "," + cy.toFixed(1) + "," + scale.toFixed(4)
+            + ":" + fovDeg.toFixed(1) + ":" + scene.frames;
     if (sceneCv && sceneKey === key) return sceneCv;
     if (!sceneCv) sceneCv = document.createElement("canvas");
     if (sceneCv.width !== w || sceneCv.height !== h) { sceneCv.width = w; sceneCv.height = h; }
@@ -1276,8 +1277,17 @@
       var ri = cells[i], ai = cells[i + 1], occ = cells[i + 2], snr = cells[i + 3];
       var r0 = ri * rs * scale, r1 = (ri + 1) * rs * scale;
       if (r0 > diag) continue;                                  /* wholly off-canvas */
-      var t0 = (a0 + ai * as) * D, t1 = (a0 + (ai + 1) * as) * D;
-      var p0 = -Math.PI / 2 + t0, p1 = -Math.PI / 2 + t1;       /* world azimuth -> canvas angle */
+      /* THE FOV KNOB GOVERNS THE BACKDROP TOO. The daemon keeps accumulating its full +-60 deg
+       * grid whatever the operator sets, so narrowing the FOV must not throw the map away — it
+       * just stops drawing what the operator has said they are not looking at, and widening it
+       * again brings the already-accumulated map straight back with nothing to rebuild.
+       * The edge cell is CLIPPED to the FOV rather than dropped, so the map ends exactly on the
+       * wedge boundary instead of in a 1-degree staircase. */
+      var d0 = a0 + ai * as, d1 = a0 + (ai + 1) * as;           /* cell azimuth span, degrees */
+      if (d0 < -fovDeg) d0 = -fovDeg;
+      if (d1 > fovDeg) d1 = fovDeg;
+      if (d1 <= d0) continue;                                   /* wholly outside the FOV */
+      var p0 = -Math.PI / 2 + d0 * D, p1 = -Math.PI / 2 + d1 * D;  /* world azimuth -> canvas angle */
       c.globalAlpha = Math.max(0.10, Math.min(0.92, occ / 255)); /* floor: faint cells stay visible */
       c.fillStyle = snrColor(snr);
       c.beginPath();
@@ -1426,7 +1436,7 @@
 
     /* SCENE LAYER, under everything live — the world the targets move across. Blitted from its
      * own canvas (re-rendered only when the layer or the view actually changes). */
-    if (scene.on && scene.data && !replaying) ctx.drawImage(renderScene(w, h, cx, cy, scale), 0, 0);
+    if (scene.on && scene.data && !replaying) ctx.drawImage(renderScene(w, h, cx, cy, scale, fovDeg), 0, 0);
 
     /* raw returns — already gated server-side by the daemon (snr/speed/fov). v = +approaching */
     (radar.points || []).forEach(function (p) {
