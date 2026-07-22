@@ -111,7 +111,8 @@ void library_json(const char *qs, char *buf, size_t len)
         uint64_t b_disp = dir_bytes(dir, "eo_jpeg");
         uint64_t b_radar = dir_bytes(dir, "radar_raw") + dir_bytes(dir, "radar_wire")
                          + dir_bytes(dir, "radar_cli");
-        uint64_t b_meta = dir_bytes(dir, "events") + dir_bytes(dir, "det_wire");
+        uint64_t b_meta = dir_bytes(dir, "events") + dir_bytes(dir, "det_wire")
+                        + dir_bytes(dir, "trk_wire") + dir_bytes(dir, "fus_wire");
         char tpath[700];
         snprintf(tpath, sizeof tpath, "%s/thumbs/0.jpg", dir);
         int has_thumbs = access(tpath, F_OK) == 0;

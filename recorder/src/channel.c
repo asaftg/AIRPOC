@@ -34,6 +34,12 @@ const ChanCfg g_chan_cfg[CH_N] = {
      * histogram, sensor state, UART deferred-frame count, RF cal status and
      * chip temperature. Rows must stay in ChanId order. */
     { "radar_cli",  "airpoc.radar_cli",  "text", "0,0,0,0,0,0",                                             0,   64 * 1024 },
+    /* EO tracker (trackerd :8095) and fusion (fusiond :8096) wires, byte-verbatim
+     * SSE JSON. Recording these is what makes a fused mission replayable and
+     * auditable -- and what lets fusion's tuning corpus accumulate, since that
+     * needs radar + trk + fus wires captured on ONE synchronized timeline. */
+    { "trk_wire",   "airpoc.trk_wire",   "json", "frame_id,n_tracks,0,0,0,0",                               0,  128 * 1024 },
+    { "fus_wire",   "airpoc.fus_wire",   "json", "frame_id,n_fused,n_eo_only,n_rad_only,0,0",               0,  128 * 1024 },
 };
 
 Chan g_chan[CH_N];

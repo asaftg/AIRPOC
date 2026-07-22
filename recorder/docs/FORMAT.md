@@ -19,7 +19,7 @@ crash-safe by construction, ~300 lines of dependency-free C. An offline
   native.mp4.ver                   encoder version stamp (bump => rebuild)
 ```
 
-Channels today: `eo_y10` `eo_jpeg` `radar_raw` `radar_wire` `det_wire` `events` `radar_cli`.
+Channels today: `eo_y10` `eo_jpeg` `radar_raw` `radar_wire` `det_wire` `events` `radar_cli` `trk_wire` `fus_wire`.
 (ChanId is append-only: the numeric id is stamped into every segment header on
 disk, so a new channel goes at the END of the enum, never in the middle.)
 New channels = new directory, same three files; no format change. `eo_y10`'s
@@ -65,6 +65,8 @@ rebuildable by scanning segments.
 | radar_raw | UART bytes exactly as `read()` returned (re-feedable to the TLV parser) | read_len |
 | radar_wire | the exact SSE frame JSON | frame_number, n_points, n_targets |
 | det_wire | the EO-detector frame JSON (verbatim) | frame_id, n_dets, n_movers |
+| trk_wire | EO tracker wire (trackerd :8095), verbatim SSE JSON | frame_id, n_tracks |
+| fus_wire | radar+EO fusion wire (fusiond :8096), verbatim SSE JSON | frame_id, n_fused, n_eo_only, n_rad_only |
 | radar_cli | radar chip CLI telemetry: `queryDemoStatus` replies, raw ASCII, ~1 Hz. Comb-gate margin histogram, sensor state, UART deferred-frame count, RF cal status, chip temp. Exists only on the CLI UART — unrecorded means lost | (none) |
 | events | JSON `{"type":"eo_stats\|radar_stats\|app_stats\|clock_anchor\|marker\|channel_lost\|channel_resumed","t_mono_ns":…,"body":{…}}` | — |
 
