@@ -69,6 +69,19 @@
 #define TRK_GATE_SIGMA_K        3.0     /* gate grows with the track's own uncertainty */
 #define TRK_GATE_MAX_PX         120.0   /* cap so a huge box can't gate the whole scene */
 
+/* Velocity-gated (motion-consistent) association - the crossing ID-swap fix. The GATE stays
+ * position-only (nothing is excluded), but among candidates a moving track PREFERS the
+ * detection consistent with its established direction: a detection that lands BEHIND the
+ * track's motion (the signature of an oncoming target crossing its path) is charged an
+ * extra cost, so the track keeps its own continuation instead of grabbing the crosser. This
+ * is a soft tie-breaker, not a kill gate: a track slower than VMIN (stationary/new/far) gets
+ * NO penalty and associates by pure nearest-neighbour exactly as before, so far/slow/small
+ * targets are untouched. The engaged (locked) track additionally claims its detection FIRST,
+ * so a crosser can never steal the lock. */
+#define TRK_ASSOC_VMIN          15.0    /* px/s; below this a track has no "direction" yet */
+#define TRK_ASSOC_REV_K         1.5     /* cost per (backward px)^2 for a detection opposite
+                                           the track's motion (comparable to distance^2) */
+
 /* Confirmation: a track emits once its evidence score crosses `confirm`. Model
  * detections add ~1.0 (a strong direct det) down to a floor for weak/tbd boxes;
  * a tbd-promoted box arrives already integrated upstream and counts fully. This
@@ -188,6 +201,19 @@
                                            coarse-to-fine + ego initial guess) */
 #define TRK_LK_FB_MAX           2.0     /* forward-backward consistency threshold (px) */
 #define TRK_LK_EIG_FLOOR        1.0     /* absolute Shi-Tomasi min-eigenvalue floor */
+/* Detector bound on the lock - the crossing/neighbour skip fix. Optical flow has no notion
+ * of WHICH object is the target: when a second similar vehicle enters the box during motion,
+ * the corner points migrate onto it and the median slides the box over (score stays high
+ * because all points slid together). The DETECTOR does know the target - it stays on it. So
+ * the detector is the identity anchor and the lock may only interpolate WITHIN a bound around
+ * it: if the LK position strays more than (frac*box + base) px from the detector's last fix,
+ * it has slipped onto a neighbour - snap back to the detector and re-seed the flow. The
+ * bounded position is also what feeds the association, so this cuts the drift->association->
+ * re-anchor feedback that completes the transfer. Bound scales with box size (a close, big
+ * target legitimately moves more between ticks) with a floor for small/distant targets. */
+#define TRK_LOCK_STRAY_BOXFRAC  0.5
+#define TRK_LOCK_STRAY_BASE     60.0    /* px */
+
 #define TRK_LK_INLIER           1.5     /* a survivor within this of the median flow = inlier;
                                            the score is the inlier CONSENSUS (agreement),
                                            not the survivor fraction - position can be exact

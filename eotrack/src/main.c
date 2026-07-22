@@ -27,6 +27,7 @@
 #include <getopt.h>
 #include <time.h>
 #include <signal.h>
+#include <math.h>
 
 static struct {
     pthread_mutex_t lk;
@@ -223,6 +224,19 @@ static void *lock_thread(void *arg)
             ox = mcx; oy = mcy; score = 1.0;
         } else {
             lock_track(lk, frame, w, h, fdx, fdy, &ox, &oy, &score);
+            /* Bound the lock to the detector's target. If optical flow has slid more than
+             * ~half a box + margin from the detector's last fix, it has slipped onto a
+             * neighbouring similar object (the shake/crossing skip) - the detector is ground
+             * truth for identity, so snap back to it and re-seed the corner points. The
+             * bounded (ox,oy) is what feeds trk_core_lock_update below, so this also stops the
+             * drift from poisoning the association anchor and completing the transfer. */
+            double bound = TRK_LOCK_STRAY_BOXFRAC * fmax(bw, bh) + TRK_LOCK_STRAY_BASE;
+            if (hypot(ox - mcx, oy - mcy) > bound) {
+                lock_anchor(lk, frame, w, h, mcx, mcy, bw, bh);
+                last_dseq = dseq;
+                ox = mcx; oy = mcy;
+                if (score < TRK_LOCK_SCORE_MIN) score = TRK_LOCK_SCORE_MIN;  /* corrected onto the target */
+            }
         }
 
         if (score >= TRK_LOCK_SCORE_MIN) {
