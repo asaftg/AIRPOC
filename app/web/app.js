@@ -923,13 +923,20 @@
       nx = t.px[0]; ny = t.px[1]; nw = t.px[2]; nh = t.px[3];
       lab = String(t.cls || "?").toUpperCase();
     } else {
-      /* radar lock: no box, so project its bearing into the frame and use a nominal window */
+      /* radar lock: no box, so project its bearing into the frame and use a nominal window.
+       * This MUST match the radar-on-EO overlay's projection exactly, or the close-up frames a
+       * different spot than the mark the operator locked on. Two things the overlay does that the
+       * PIP was skipping: the AZ/EL mount TRIM (radarOv — the radar↔camera alignment, and it is
+       * almost never zero), and the native-replay FOV scale (a native replay shows the full
+       * uncropped frame, so its angular span is hfov×zoom). Same terms, same order. */
       var r = null;
       radarTargets().forEach(function (x) { if (x.key === engagedKey) r = x; });
-      var hf = es.hfov || 0, vf = es.vfov || (hf * 0.75);
+      var fovZ = (replaying && replayVideoSrc === "native") ? (es.zoom || 1) : 1;
+      var hf = (es.hfov || 0) * fovZ, vf = (es.vfov ? es.vfov : (es.hfov || 0) * 0.75) * fovZ;
       if (!r || !hf) { cv.hidden = true; return; }
-      nx = im.w / 2 + (r.az / (hf / 2)) * (cw / 2);
-      ny = im.h / 2 - (r.el / (vf / 2)) * (ch / 2);
+      var az = r.az + radarOv.az, el = r.el + radarOv.el;
+      nx = im.w / 2 + (az / (hf / 2)) * (cw / 2);
+      ny = im.h / 2 - (el / (vf / 2)) * (ch / 2);
       nw = nh = Math.max(im.w, im.h) * 0.06;
       lab = "RDR " + r.rng.toFixed(0) + " m";
     }
