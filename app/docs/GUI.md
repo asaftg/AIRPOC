@@ -203,6 +203,16 @@ two things on the video:
 - The **radar-on-EO circle is suppressed** for any `rad_tid` that is a fused constituent. Two
   marks for one object is the double display fusion exists to end.
 
+> **Known geometry caveat — the scene layer sits slightly too far out.** `/scene` cells carry no
+> elevation, only a range-bin index, and that index counts SLANT range. The PPI is a ground-plane
+> view: the live points and target marks on it are at ground range (`x`,`y`). So the backdrop is
+> systematically further from the origin than the live returns off the same object, by
+> `1/cos(el)` — 0.06% at 2 degrees, 2% at 12, 24% at 36. In practice a wall can draw behind the
+> cars parked against it. The console cannot correct it, because the elevation is not on the wire
+> by the time the cells arrive. The fix is a line in the radar module: bin by ground range
+> (`r*cos(el)`) instead of slant when accumulating. That costs no extra bytes and matches how the
+> layer is actually used. Raised with the radar module 2026-07-22.
+
 **Fusion angles are rig-frame already** — fusion owns the radar↔EO mount trim now — so the
 console's own display trim (above) is applied only to the raw radar wire, never on top of
 fusion's angles.
