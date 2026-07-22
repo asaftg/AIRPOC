@@ -79,15 +79,29 @@ int lock_track(Lock *l, const uint16_t *frame, int w, int h,
 {
     if (!l || !l->has) return 0;
     static const double scales[3] = { 0.9, 1.0, 1.1 };
-    double best = -2, bx = px, by = py;
+    double best = -2, bx = px, by = py, bs = 1.0;
     for (int si = 0; si < 3; si++) {
         for (int dy = -TRK_LOCK_SEARCH; dy <= TRK_LOCK_SEARCH; dy += 2) {
             for (int dx = -TRK_LOCK_SEARCH; dx <= TRK_LOCK_SEARCH; dx += 2) {
                 double cx = px + dx, cy = py + dy;
                 double n = ncc_at(l, frame, w, h, cx, cy, scales[si]);
-                if (n > best) { best = n; bx = cx; by = cy; }
+                if (n > best) { best = n; bx = cx; by = cy; bs = scales[si]; }
             }
         }
+    }
+    /* Sub-pixel refinement by parabolic interpolation of the NCC peak in x and y.
+     * Without this the position quantizes to the 2 px search step and the box wobbles
+     * by a couple of pixels even on a still target. Fit a parabola to the score at the
+     * best and its +/-1 px neighbours; the vertex is the sub-pixel peak (clamped). */
+    if (best > -1) {
+        double c  = ncc_at(l, frame, w, h, bx, by, bs);
+        double xm = ncc_at(l, frame, w, h, bx - 1, by, bs);
+        double xp = ncc_at(l, frame, w, h, bx + 1, by, bs);
+        double ym = ncc_at(l, frame, w, h, bx, by - 1, bs);
+        double yp = ncc_at(l, frame, w, h, bx, by + 1, bs);
+        double denx = xm - 2 * c + xp, deny = ym - 2 * c + yp;
+        if (denx < -1e-6) { double s = 0.5 * (xm - xp) / denx; if (s > -1 && s < 1) bx += s; }
+        if (deny < -1e-6) { double s = 0.5 * (ym - yp) / deny; if (s > -1 && s < 1) by += s; }
     }
     if (ox) *ox = bx;
     if (oy) *oy = by;

@@ -28,8 +28,10 @@ typedef struct {
     /* filtered association state (px) */
     double   cx, cy, w, h;
     double   vx, vy;             /* px/s */
-    /* smoothed output state (never feeds back into association) */
+    /* smoothed output state (firm position EMA; velocity is coast/wire only) */
     double   ocx, ocy, ovx, ovy;
+    double   meas_cx, meas_cy;   /* last matched detection centre (output EMA target) */
+    int      lock_hold;          /* >0: the 60 fps lock owns the output this many det ticks */
     /* evidence / lifecycle */
     double   score;
     int      confirmed;          /* 0 tentative, 1 confirmed (claims points first) */
@@ -255,6 +257,7 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             t->hits_total++;
             t->misses = 0;
             t->t_meas_ns = t_src_ns;
+            t->meas_cx = d->cx; t->meas_cy = d->cy;   /* firm output EMA targets this */
             hist_push(t, clk, t->cx, t->cy);
             det_taken[di] = 1; trk_taken[i] = 1;
         }
@@ -269,6 +272,7 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
         t->used = 1;
         t->tid = c->next_tid++;
         t->cx = d->cx; t->cy = d->cy; t->w = d->w; t->h = d->h;
+        t->meas_cx = d->cx; t->meas_cy = d->cy;
         t->vx = t->vy = 0;
         t->conf = d->conf;
         t->score = d->tbd ? 1.0 : clampd(d->conf, 0.1, 1.0);
@@ -309,14 +313,32 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
         t->cls = bi;
         t->coast_s = (double)t->misses / fps;
         clutter_eval(t, clk, c->k.clutter_s);
-        /* smoothed output state (alpha-beta), seeded on first pass */
+
+        /* Firm output position. Seed on first pass. */
         if (t->ocx == 0 && t->ocy == 0) { t->ocx = t->cx; t->ocy = t->cy; }
-        double rx = t->cx - (t->ocx + t->ovx * dt_s);
-        double ry = t->cy - (t->ocy + t->ovy * dt_s);
-        t->ocx += t->ovx * dt_s + TRK_OUT_ALPHA * rx;
-        t->ocy += t->ovy * dt_s + TRK_OUT_ALPHA * ry;
-        t->ovx += (TRK_OUT_BETA / dt_s) * rx;
-        t->ovy += (TRK_OUT_BETA / dt_s) * ry;
+        if (t->lock_hold > 0) {
+            /* the 60 fps lock owns this engaged track's output (updated in
+             * trk_core_lock_update); the det tick must not fight it. */
+            t->lock_hold--;
+        } else if (trk_taken[i]) {
+            /* measured this tick: firm ADAPTIVE EMA toward the raw detection centre - NO
+             * velocity momentum, so it never overshoots on a jerky pan; the gain rises
+             * with the move so it stays smooth when still and responsive when moving.
+             * Velocity is derived here only for coasting + the fusion wire. */
+            double px = t->ocx, py = t->ocy;
+            double innov = hypot(t->meas_cx - t->ocx, t->meas_cy - t->ocy);
+            double g = TRK_OUT_G_MIN + TRK_OUT_G_SLOPE * innov;
+            if (g > TRK_OUT_G_MAX) g = TRK_OUT_G_MAX;
+            t->ocx += g * (t->meas_cx - t->ocx);
+            t->ocy += g * (t->meas_cy - t->ocy);
+            t->ovx += TRK_OUT_VEL_G * ((t->ocx - px) / dt_s - t->ovx);
+            t->ovy += TRK_OUT_VEL_G * ((t->ocy - py) / dt_s - t->ovy);
+        } else {
+            /* coasting: predict on the held velocity (this is the ONLY place velocity
+             * moves the displayed box). */
+            t->ocx += t->ovx * dt_s;
+            t->ocy += t->ovy * dt_s;
+        }
     }
 
     /* 4. emit confirmed + latch-passing tracks */
@@ -399,13 +421,21 @@ void trk_core_lock_update(TrkCore *c, int engaged_tid,
     for (int i = 0; i < TRK_MAX_TRACKS; i++) {
         Track *t = &c->tr[i];
         if (!t->used || t->tid != engaged_tid) continue;
-        t->cx = cx; t->cy = cy;
+        t->cx = cx; t->cy = cy;                 /* association anchor for the next tick */
+        /* Drive the OUTPUT at 60 fps with a firm EMA - this is what makes an engaged
+         * lock feel firm: small per-frame moves, no velocity momentum, so the box sits
+         * on the target under camera motion instead of the 15 fps stutter + overshoot. */
+        if (t->ocx == 0 && t->ocy == 0) { t->ocx = cx; t->ocy = cy; }
+        double innov = hypot(cx - t->ocx, cy - t->ocy);
+        double g = TRK_OUT_GL_MIN + TRK_OUT_GL_SLOPE * innov;
+        if (g > TRK_OUT_GL_MAX) g = TRK_OUT_GL_MAX;
+        t->ocx += g * (cx - t->ocx);
+        t->ocy += g * (cy - t->ocy);
+        t->lock_hold = TRK_LOCK_HOLD_TICKS;     /* det tick yields output to the lock */
         t->t_meas_ns = t_src_ns;
         t->lock_on = 1;
         t->lock_score = score;
-        /* a lock update counts as a light observation so the engaged track never
-         * coasts to death while the correlator holds it */
-        if (t->misses > 0) t->misses = 0;
+        if (t->misses > 0) t->misses = 0;       /* the lock is holding it */
         return;
     }
 }

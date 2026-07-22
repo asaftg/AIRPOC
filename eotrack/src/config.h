@@ -96,10 +96,29 @@
 #define TRK_TRANS_RATIO         0.30    /* net/path below this = oscillator (latch off) */
 #define TRK_LOOM_RATE           0.15    /* rel size growth (1/s) that rescues a radial mover */
 
-/* Filter smoothing (alpha-beta constants for the OUTPUT wire state; the internal
- * association state uses a tighter EMA). Output state never feeds back into assoc. */
-#define TRK_OUT_ALPHA           0.5     /* position blend */
-#define TRK_OUT_BETA            0.2     /* velocity blend */
+/* Output smoothing = a FIRM position low-pass (EMA), NOT a predictive alpha-beta.
+ * A velocity/momentum term overshoots on jerky hand-held motion (it predicts the
+ * target keeps moving, then it reverses), which reads as "wobble". Measured: an
+ * alpha-beta lags 2 px and overshoots 10 px on a jerky pan; the raw detector is
+ * firmer (3 px). So the displayed box just EMAs toward the measurement with no
+ * momentum; velocity is derived only for coasting + the fusion wire, never fed
+ * back into the displayed position while a measurement is present.
+ *   - at 15 fps (detector tick) you cannot beat the raw detector, so smooth lightly;
+ *   - at 60 fps (the engaged lock) small per-frame moves let a firmer gain kill the
+ *     jitter with almost no lag - this is why the lock must drive the output. */
+/* ADAPTIVE gain: g = clamp(gmin + slope*innovation, gmin, gmax). Small innovation
+ * (a still target with only detector jitter) -> low gain -> smooth, firm box. Large
+ * innovation (the target moving under a camera pan) -> high gain -> follows with low
+ * lag. No velocity term anywhere, so it never overshoots on a reversal. Measured:
+ * this is firmer than a fixed gain when static AND lower-lag when moving. */
+#define TRK_OUT_G_MIN           0.35    /* det-tick (15 fps) smooth-when-still floor */
+#define TRK_OUT_G_SLOPE         0.05    /* per-px responsiveness */
+#define TRK_OUT_G_MAX           0.85
+#define TRK_OUT_GL_MIN          0.30    /* 60 fps lock: small per-frame moves -> smoother */
+#define TRK_OUT_GL_SLOPE        0.06
+#define TRK_OUT_GL_MAX          0.80
+#define TRK_OUT_VEL_G           0.30    /* velocity-estimate EMA (coast + wire only) */
+#define TRK_LOCK_HOLD_TICKS     2       /* det ticks the lock keeps output ownership */
 
 /* Class is a SOFT association penalty, not a hard gate (a COCO placeholder flickers
  * human<->vehicle at range; a hard gate fragments tracks). Hard class stickiness
