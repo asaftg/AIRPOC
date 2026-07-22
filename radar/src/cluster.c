@@ -1118,10 +1118,10 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
      * the kill threshold so one clean re-offense re-latches immediately. */
     for(int oi=0;oi<R->nord;oi++){
         Track *t=&R->tracks[R->ord[oi]];
-        if(t->walk_latch && now_t - t->walk_latch_t > 3.0){
+        if(t->walk_latch && t->mv_ever && now_t - t->walk_latch_t > 3.0){   /* V5.2 */
             t->walk_latch=0; t->walk_bad = WALK_KILL>0 ? WALK_KILL-1 : 0;
         }
-        if(t->liar && now_t - t->liar_t > 3.0){
+        if(t->liar && t->mv_ever && now_t - t->liar_t > 3.0){   /* V5.2 */
             t->liar=0; t->liar_bad = LIAR_KILL>0 ? LIAR_KILL-1 : 0;
         }
     }

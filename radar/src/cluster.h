@@ -86,7 +86,7 @@ typedef struct RadarClusterer RadarClusterer;
 /* Temporal-track knobs. */
 #define CLUSTER_DEFAULT_CONFIRM  3      /*     — M-of-N fast-confirm hits (window = M+1) */
 #define CLUSTER_DEFAULT_COAST_S  0.4    /* s   — a confirmed track survives a dropout this long */
-#define CLUSTER_DEFAULT_PARK_S   15.0   /* s   — a moved-then-stopped (parked) track is held this long */
+#define CLUSTER_DEFAULT_PARK_S   0.0    /* s   — a moved-then-stopped (parked) track is held this long */
 #define CLUSTER_CONFIRM_MIN      1
 #define CLUSTER_CONFIRM_MAX      6
 #define CLUSTER_COAST_MIN        0.0
