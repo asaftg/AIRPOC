@@ -451,13 +451,41 @@
   function fmtAz(a) { var v = Math.round(Math.abs(a || 0)); return v + (a < 0 ? "L" : "R"); }
   function fmtEl(e) { var v = Math.round(Math.abs(e || 0)); return (e < 0 ? "-" : "+") + v + "°"; }
 
-  /* Rank: engaged always first (never let the held target scroll off), then fused, then EO
-   * confirmed tracks, then everything else by confidence / nearness. */
-  function importance(t) {
-    if (t.key === engagedKey) return 9e9;
-    var s = (t.src === "fus" ? 4e6 : t.src === "eo" ? 2e6 : 0);
-    if (t.src === "eo" && t.state === "conf") s += 1e6;
-    return s + (t.conf || 0) * 1e3 - (t.rng || 0);
+  /* ── RANKING ────────────────────────────────────────────────────────────────────────────────
+   * One number per target, built from tiers that are far enough apart that a lower tier can
+   * never outvote a higher one. Order of the tiers, most significant first:
+   *
+   *   1. SOURCE     fused > EO > radar. A fused row is two sensors agreeing; a radar row is an
+   *                 unclassified blob. That is a real difference in how much the row is worth.
+   *   2. MOVING     an EO/fused target whose bearing is actually changing outranks a static one,
+   *                 whatever it is. A moving thing is the thing you care about.
+   *   3. CLASS      human > vehicle > drone > unclassified.
+   *   4. CONFIDENCE within a class, the better-supported target first.
+   *   5. NEARNESS   pure tiebreak.
+   *
+   * The engaged target is not scored — it is pinned to the top separately, so the held target
+   * can never scroll off no matter what else appears.
+   *
+   * Note this makes a moving VEHICLE outrank a stationary HUMAN. That follows "EO moving targets
+   * are always stronger than static"; swap tiers 2 and 3 if class should win instead. */
+  var CLS_RANK = { human: 300, vehicle: 200, drone: 100 };
+  /* Bearing rate that counts as MOVING, in rad/s, with a Schmitt gap so a target sitting on the
+   * threshold does not flip tiers every frame. 0.003 rad/s ~= 0.17 deg/s — above the tracker's
+   * position jitter, below a walker at any range we care about. */
+  var MOVE_ON = 0.003, MOVE_OFF = 0.0015;
+  function isMoving(t, was) {
+    var r = t.raw && t.raw.rate;
+    if (!r || r.length < 2) return false;         /* radar rows carry no bearing rate */
+    var m = Math.hypot(r[0] || 0, r[1] || 0);
+    return was ? (m > MOVE_OFF) : (m > MOVE_ON);
+  }
+  function rankScore(t, moving) {
+    var s = (t.src === "fus" ? 30000 : t.src === "eo" ? 20000 : 10000);
+    if (moving) s += 3000;
+    s += CLS_RANK[t.cls] || 0;
+    s += (t.conf || 0) * 30;                      /* 0..30: a 0.1 confidence gap is worth 3 */
+    s -= Math.min(t.rng || 0, 5000) / 2000;       /* 0..-2.5: nearer wins ties only */
+    return s;
   }
   /* What a row SAYS is what that row's sensors actually know: a fused row is the only one that
    * can put class and range on the same line — that is the whole point of fusion. */
@@ -474,30 +502,138 @@
     return { mid: spd.toFixed(1) + " m/s · " + fmtAz(t.az),
              rgt: (t.rng != null ? t.rng.toFixed(0) + " m" : "—") };
   }
-  var lastTgtHtml = "", TGT_SLOTS = 6;
+  /* ── THE LIST: STABLE ROWS, CALM ORDER ──────────────────────────────────────────────────────
+   * Three separate things were making this unusable, and each needs its own fix.
+   *
+   * 1. The rows were rebuilt with innerHTML on every wire frame (up to 27/s). That destroys and
+   *    recreates the <li> the operator is pressing, so the element under the finger at mousedown
+   *    no longer exists at mouseup and NO CLICK EVENT IS EVER PRODUCED — the row taps that felt
+   *    dead were dead. Now six <li> are built once and only their text/classes are updated.
+   * 2. The order was a straight re-sort every frame, so two targets with nearly equal scores
+   *    swapped places continuously. Now the order is a kept list that CONVERGES toward the ideal
+   *    ranking: re-ranked twice a second, at most two adjacent swaps per tick, and a swap only
+   *    happens when the challenger beats the incumbent by a real margin. Scores are smoothed
+   *    first, so confidence jitter alone can never move a row.
+   * 3. A target missing from a single frame collapsed its row and shifted everything below it.
+   *    Now a row is HELD for a second after its target leaves the wire, dimmed. This is display
+   *    smoothing only — it invents no target and no position, it just stops the list jumping
+   *    when a tracker skips a beat.
+   *
+   * The engaged target is pinned to the top, outside all of the above. */
+  var TGT_SLOTS = 6, TGT_HOLD_MS = 1000, RERANK_MS = 500, SWAP_MARGIN = 3, MAX_SWAPS = 2;
+  var tgtSeen = {};      /* key -> { t, at, score, moving, live } — survives across frames */
+  var tgtOrder = [];     /* keys in DISPLAY order; edited in place, never rebuilt */
+  var lastRerank = 0, tgtSlots = null;
+
+  function buildTgtSlots() {
+    var ul = $("tgt-list");
+    ul.innerHTML = "";
+    tgtSlots = [];
+    for (var i = 0; i < TGT_SLOTS; i++) {
+      var li = document.createElement("li"); li.className = "tgt-row empty";
+      var tid = document.createElement("span"); tid.className = "tid";
+      var dash = document.createTextNode("—");
+      var sw = document.createElement("span"); sw.className = "swatch"; sw.style.display = "none";
+      tid.appendChild(dash); tid.appendChild(sw);
+      var meta = document.createElement("span"); meta.className = "meta";
+      var badge = document.createElement("b"); badge.className = "tsrc";
+      var txt = document.createTextNode("");
+      meta.appendChild(badge); meta.appendChild(txt);
+      var rng = document.createElement("span"); rng.className = "rng";
+      li.appendChild(tid); li.appendChild(meta); li.appendChild(rng);
+      ul.appendChild(li);
+      tgtSlots.push({ li: li, dash: dash, sw: sw, badge: badge, txt: txt, rng: rng, key: null, sig: "" });
+    }
+  }
+
+  /* Re-score everything, then nudge the order a little way toward ideal. Called at 2 Hz. */
+  function rerankTargets() {
+    Object.keys(tgtSeen).forEach(function (k) {
+      var e = tgtSeen[k];
+      e.moving = isMoving(e.t, e.moving);
+      var raw = rankScore(e.t, e.moving);
+      e.score = (e.score == null) ? raw : e.score + (raw - e.score) * 0.4;   /* smooth the jitter */
+    });
+    for (var i = 0, swaps = 0; i < tgtOrder.length - 1 && swaps < MAX_SWAPS; i++) {
+      var a = tgtSeen[tgtOrder[i]], b = tgtSeen[tgtOrder[i + 1]];
+      if (a && b && b.score > a.score + SWAP_MARGIN) {
+        var tmp = tgtOrder[i]; tgtOrder[i] = tgtOrder[i + 1]; tgtOrder[i + 1] = tmp;
+        swaps++;
+      }
+    }
+  }
+
+  /* What AUTO should be holding: the best LIVE score, but it keeps what it already holds unless
+   * something beats it by the same margin a list row needs to overtake another. Without that
+   * margin AUTO flips between two near-equal targets several times a second. */
+  function autoBest() {
+    var best = null, bs = -1e9;
+    Object.keys(tgtSeen).forEach(function (k) {
+      var e = tgtSeen[k];
+      if (!e.live || e.score == null) return;
+      if (e.score > bs) { bs = e.score; best = k; }
+    });
+    if (!best) return null;
+    var cur = engagedKey ? tgtSeen[engagedKey] : null;
+    if (cur && cur.live && cur.score != null && bs <= cur.score + SWAP_MARGIN) return engagedKey;
+    return best;
+  }
+
   function renderTargetList() {
-    var rows = allTargets().sort(function (a, b) { return importance(b) - importance(a); }).slice(0, TGT_SLOTS);
-    $("v-tgtcount").textContent = rows.length;
+    if (!tgtSlots) buildTgtSlots();
+    var now = Date.now(), live = allTargets(), seenNow = {};
+    live.forEach(function (t) {
+      seenNow[t.key] = 1;
+      var e = tgtSeen[t.key] || (tgtSeen[t.key] = { score: null, moving: false });
+      e.t = t; e.at = now; e.live = true;
+    });
+    Object.keys(tgtSeen).forEach(function (k) {
+      if (!seenNow[k]) {
+        tgtSeen[k].live = false;
+        if (now - tgtSeen[k].at > TGT_HOLD_MS) delete tgtSeen[k];   /* held one second, then gone */
+      }
+    });
+    tgtOrder = tgtOrder.filter(function (k) { return tgtSeen[k]; });
+    /* new targets join at the end and climb — appearing straight at the top would shove the row
+     * the operator is reading out from under them */
+    Object.keys(tgtSeen).forEach(function (k) { if (tgtOrder.indexOf(k) < 0) tgtOrder.push(k); });
+    if (now - lastRerank >= RERANK_MS) { lastRerank = now; rerankTargets(); }
+    /* the held target is always row 1 — it must never scroll off or move */
+    var ei = engagedKey ? tgtOrder.indexOf(engagedKey) : -1;
+    if (ei > 0) { tgtOrder.splice(ei, 1); tgtOrder.unshift(engagedKey); }
+
+    $("v-tgtcount").textContent = live.length;
     /* say WHERE the list came from — one fused picture, or the two per-sensor lists. The
      * operator reads range-next-to-class very differently depending on the answer. */
     $("v-fusbadge").hidden = !fusUp();
-    /* Fixed slots so the panel never resizes as targets come and go. */
-    var out = [];
+
     for (var i = 0; i < TGT_SLOTS; i++) {
-      if (i < rows.length) {
-        /* colour follows the fusion gid when there is one — it survives the per-sensor id churn
-         * underneath, so a target keeps its colour through a tid change */
-        var t = rows[i], col = tcolor(t.gid != null ? "g" + t.gid : t.key), tx = rowText(t), mid = tx.mid, rgt = tx.rgt;
-        out.push('<li class="tgt-row' + (t.key === engagedKey ? ' eng' : '') + '" data-key="' + t.key + '" style="border-left-color:' + col + '">'
-          + '<span class="tid"><span class="swatch" style="background:' + col + '"></span></span>'
-          + '<span class="meta"><b class="tsrc ' + t.src + '">' + (t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR") + '</b> ' + mid + '</span>'
-          + '<span class="rng">' + rgt + '</span></li>');
-      } else {
-        out.push('<li class="tgt-row empty"><span class="tid">—</span><span class="meta"></span><span class="rng"></span></li>');
+      var s = tgtSlots[i], k = tgtOrder[i], e = k ? tgtSeen[k] : null;
+      if (!e) {
+        if (s.key !== null) {
+          s.key = null; s.sig = "";
+          s.li.className = "tgt-row empty"; s.li.removeAttribute("data-key");
+          s.li.style.borderLeftColor = ""; s.dash.nodeValue = "—"; s.sw.style.display = "none";
+          s.badge.textContent = ""; s.badge.className = "tsrc"; s.txt.nodeValue = ""; s.rng.textContent = "";
+        }
+        continue;
       }
+      /* colour follows the fusion gid when there is one — it survives the per-sensor id churn
+       * underneath, so a target keeps its colour through a tid change */
+      var t = e.t, col = tcolor(t.gid != null ? "g" + t.gid : t.key), tx = rowText(t);
+      var cls = "tgt-row" + (t.key === engagedKey ? " eng" : "") + (e.live ? "" : " stale");
+      var sig = cls + "|" + col + "|" + t.src + "|" + tx.mid + "|" + tx.rgt;
+      if (s.key === k && s.sig === sig) continue;             /* nothing about this row changed */
+      s.key = k; s.sig = sig;
+      s.li.className = cls;
+      s.li.dataset.key = t.key;
+      s.li.style.borderLeftColor = col;
+      s.dash.nodeValue = ""; s.sw.style.display = ""; s.sw.style.background = col;
+      s.badge.className = "tsrc " + t.src;
+      s.badge.textContent = t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR";
+      s.txt.nodeValue = " " + tx.mid;
+      s.rng.textContent = tx.rgt;
     }
-    var html = out.join("");
-    if (html !== lastTgtHtml) { $("tgt-list").innerHTML = html; lastTgtHtml = html; }   /* skip the HTML re-parse when nothing changed (was rebuilding ~27x/s) */
   }
   /* No GUI-side persistence: the radar daemon is a temporal tracker now (stable tids,
    * M-of-N confirm, coasting through dropouts, park-hold). "In the frame" already means
@@ -1288,9 +1424,12 @@
     targets(lastRadar).forEach(function (t) { var dx = g.cx + t.x * g.scale - px, dy = g.cy - t.y * g.scale - py, d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = t; } });
     if (best && bd < 40 * g.dpr) pick("rad:" + best.tid);
   });
-  /* tap a target-list row → select it */
-  $("tgt-list").addEventListener("click", function (e) {
+  /* Tap a target-list row → declare it the tracked target, exactly like tapping its box on the
+   * video or its circle on the scope. On POINTERDOWN, not click: a click only fires if the same
+   * element is still there at release, and a touch adds its own delay on top. */
+  $("tgt-list").addEventListener("pointerdown", function (e) {
     var li = e.target.closest("[data-key]"); if (!li) return;
+    e.preventDefault();
     pick(li.dataset.key);
   });
 
@@ -1410,8 +1549,12 @@
       targets(d).forEach(function (t) { present["rad:" + t.tid] = 1; });
       if (!present[engagedKey]) engage(null);
     }
-    if (trackMode === "auto") { var top = allTargets().sort(function (a, b) { return importance(b) - importance(a); })[0]; engage(top ? top.key : null); }
-    renderTargetList(); draw(true, true);
+    renderTargetList();
+    /* AUTO runs off the SAME smoothed scores as the list, so what it holds is what the operator
+     * would have picked. It reads the scores rather than row 1, because row 1 is pinned to the
+     * engaged target — reading the display would make AUTO hold its own choice forever. */
+    if (trackMode === "auto") engage(autoBest());
+    draw(true, true);
   }
   /* NaN-safe JSON. The feeds/recorder occasionally emit bare NaN/Infinity (invalid JSON), which
    * makes JSON.parse throw and silently freezes an overlay on its last frame — the scope then

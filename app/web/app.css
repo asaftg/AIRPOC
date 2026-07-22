@@ -124,6 +124,10 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 .tgt-row:hover{border-color:var(--amber)}
 .tgt-row.eng{border-color:var(--on);border-left-color:var(--on);background:#13251a}
 
+/* Held: the target is not on the current frame but left less than a second ago. The row keeps
+ * its place, dimmed, so one skipped frame does not collapse it and shift everything below. It
+ * is showing the last real values — nothing here is extrapolated. */
+.tgt-row.stale{opacity:.45}
 .tgt-row.empty{background:transparent;border-style:dashed;border-left-color:var(--bd2);cursor:default}
 .tgt-row.empty .tid{color:var(--dim)}
 .tgt-row .tid{font-weight:600;font-size:12px}
