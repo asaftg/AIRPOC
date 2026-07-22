@@ -74,6 +74,9 @@ struct FusCore {
     /* trim residual estimator (observe-only) */
     double est_az[FUS_TRIM_EST_RING], est_el[FUS_TRIM_EST_RING];
     int est_n, est_head;
+    /* per-EO-tid motion memory: has this camera track EVER moved? */
+    struct { int tid; double az0, aw0; uint64_t t0, seen_ns; int moved; }
+        emot[FUS_MAX_EO]; int nemot;
     /* counters for /stats */
     int n_fused, n_eo_only, n_rad_only;
 };
@@ -82,6 +85,7 @@ struct FusCore {
 
 static double clampd(double v, double lo, double hi){ return v<lo?lo:v>hi?hi:v; }
 static double sq(double v){ return v*v; }
+static int eo_parked(const FusCore *c, int tid, uint64_t t);
 
 /* Signed seconds since `a`. The two sensor wires are stamped by different
  * pipelines with different latencies, so the tick time is NOT monotonic
@@ -266,7 +270,8 @@ static double pair_d2(const FusCore *c, const RSlot *r, const FusEoTrk *e,
     double w_eo = e->aw * r->r;
     double w_rad = 2.0 * fmax(fmax(r->t.sx, r->t.sy), FUS_SIZE_MIN_M / 2);
     if (w_eo > FUS_SIZE_MIN_M) {
-        d2 += sq(log(w_eo / w_rad) / FUS_SIG_LNSIZE); terms++;
+        double lnr = log(w_eo / w_rad);
+        if (lnr > 0) { d2 += sq(lnr / FUS_SIG_LNSIZE); terms++; }
     }
 
     double gate = terms >= 5 ? FUS_CHI2_5 : terms == 4 ? FUS_CHI2_4
@@ -427,7 +432,7 @@ static void sustain_fused(FusCore *c, uint64_t t)
         FusEoTrk *e = (f->e_lost_ns == 0) ? eo_by_tid(c, f->e_tid) : NULL;
         if (!r || !e) continue;                          /* one-sided: degrade, no divorce */
         if (c->rad_seq <= f->rs_seen || c->eo_seq <= f->es_seen) continue;
-        if (e->coast_s > FUS_EO_COFRESH_S) continue;     /* EO coasting: not evidence */
+        if (e->coast_s > FUS_EO_COURT_COAST_S) continue; /* deep EO coast: not evidence */
         if (!in_eo_fov(c, r_az(c, r), r_el(c, r))) {     /* FOV edge: freeze, not evidence */
             f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t; continue;
         }
@@ -465,7 +470,7 @@ static void sustain_fused(FusCore *c, uint64_t t)
             f->miss_s = c->k.divorce_s + 1;
             rbar_add(c, f->r_tid, t);
         }
-        if (d2 < gate * FUS_GATE_INCUMBENT && !drifting && !departed) {
+        if (d2 < gate * FUS_GATE_MARRIED && !drifting && !departed) {
             f->miss_s = 0;
             f->hold_r = f->r_f;   /* last HEALTHY range - the id-steal frames
                                    * that precede a divorce corrupt r_f */
@@ -568,8 +573,16 @@ static void candidates(FusCore *c, uint64_t t)
             FusEoTrk *e = &c->eo[ei];
             FTrk *fe = trk_by_etid(c, e->tid);
             if (fe && fe->fused) continue;
-            if (e->state != 1 || e->coast_s > FUS_EO_COFRESH_S) continue;
+            if (e->state != 1 || e->coast_s > FUS_EO_COURT_COAST_S) continue;
             if (barred(c, r->t.tid, e->tid, t)) continue;
+            /* parked veto: a MOVING radar target at close/mid range may not
+             * marry a camera track that has provably never moved (a row of
+             * parked cars stops being marriage material entirely). Far
+             * ranges exempt - a far radial walker looks static to the
+             * camera and radar owns radial out there. */
+            if (r->t.mv == 1 && r->r < FUS_PARKED_VETO_RMAX &&
+                hypot(r->t.vx, r->t.vy) > FUS_PARKED_VETO_SPEED &&
+                eo_parked(c, e->tid, t)) continue;
             /* an in-progress candidate is judged like a married pair (position
              * + size, wider gate) so radar jitter cannot starve its courtship;
              * only a BRAND NEW candidate faces the strict full test */
@@ -595,15 +608,19 @@ static void candidates(FusCore *c, uint64_t t)
         int rt = c->rad[edge[i].ri].t.tid, et = c->eo[edge[i].ei].tid;
         Cand *cd = cand_find(c, rt, et);
         if (!cd) {
-            /* radar tid churn: the same physical object re-numbered mid-
-             * courtship. If an existing candidate for this SAME camera track
-             * has a radar tid that just left the wire, the new tid inherits
-             * the courtship instead of starting from zero - that restart tax
-             * was most of the field's "too long to fuse". */
+            /* tid churn on EITHER side: the same physical object re-numbered
+             * mid-courtship. A candidate whose dead-side tid just left the
+             * wire hands its progress to the new tid instead of restarting -
+             * that restart tax was most of the field's "too long to fuse"
+             * (and the close-range camera churns ids even faster). */
             for (int k2 = 0; k2 < FUS_MAX_CAND; k2++) {
                 Cand *o2 = &c->cand[k2];
-                if (o2->used && o2->e_tid == et && !rad_by_tid(c, o2->r_tid)) {
+                if (!o2->used) continue;
+                if (o2->e_tid == et && !rad_by_tid(c, o2->r_tid)) {
                     o2->r_tid = rt; cd = o2; break;
+                }
+                if (o2->r_tid == rt && !eo_by_tid(c, o2->e_tid)) {
+                    o2->e_tid = et; cd = o2; break;
                 }
             }
         }
@@ -859,12 +876,53 @@ int fus_core_step_rad(FusCore *c, const FusRadTgt *t_in, int n, uint64_t t,
     return pass(c, t, out, max);
 }
 
+/* per-EO-tid motion memory: a track earns `moved` once its net angular drift
+ * or net size change since first sight crosses the parked thresholds; that
+ * verdict then sticks for the track's lifetime. */
+static void emot_update(FusCore *c, uint64_t t)
+{
+    for (int i = 0; i < c->neo; i++) {
+        FusEoTrk *e = &c->eo[i];
+        int found = -1;
+        for (int j = 0; j < c->nemot; j++)
+            if (c->emot[j].tid == e->tid) { found = j; break; }
+        if (found < 0) {
+            /* reuse a slot whose tid is gone, else append */
+            for (int j = 0; j < c->nemot && found < 0; j++)
+                if (!eo_by_tid(c, c->emot[j].tid) &&
+                    since_s(t, c->emot[j].seen_ns) > 2.0) found = j;
+            if (found < 0 && c->nemot < FUS_MAX_EO) found = c->nemot++;
+            if (found < 0) continue;
+            c->emot[found].tid = e->tid; c->emot[found].az0 = e->az;
+            c->emot[found].aw0 = e->aw > 0 ? e->aw : 1e-4;
+            c->emot[found].t0 = t; c->emot[found].moved = 0;
+        }
+        c->emot[found].seen_ns = t;
+        if (!c->emot[found].moved &&
+            (fabs(e->az - c->emot[found].az0) > FUS_PARKED_AZ_RAD * 3 ||
+             fabs(log(fmax(e->aw, 1e-4) / c->emot[found].aw0)) > FUS_PARKED_LNSZ))
+            c->emot[found].moved = 1;
+    }
+}
+
+/* parked verdict: 1 = this EO track has been watched long enough and has
+ * provably never moved. Unknown/young/moving -> 0. */
+static int eo_parked(const FusCore *c, int tid, uint64_t t)
+{
+    for (int j = 0; j < c->nemot; j++)
+        if (c->emot[j].tid == tid)
+            return !c->emot[j].moved &&
+                   since_s(t, c->emot[j].t0) > FUS_PARKED_MIN_AGE_S;
+    return 0;
+}
+
 int fus_core_step_eo(FusCore *c, const FusEoTrk *t_in, int n, uint64_t t,
                      FusOut *out, int max)
 {
     if (n > FUS_MAX_EO) n = FUS_MAX_EO;
     memcpy(c->eo, t_in, (size_t)n * sizeof *t_in);
     c->neo = n; c->eo_ns = t; c->eo_seq++;
+    emot_update(c, t);
     update_liveness(c, t);
     rebind_scan_eo(c, t);
     return pass(c, t, out, max);

@@ -663,6 +663,88 @@ static void t_churn(void)
     printf("PASS churn (radar renumbering every 0.4 s, fused at %.2f s)\n", t_fused);
 }
 
+/* 8f: close range (field 20260722T231015Z: person at 25-45 m, radar box
+ * smeared to 5-7 m wide, EO ids churning fast). One-sided size + EO-side
+ * courtship inheritance must still marry them quickly. */
+static void t_close(void)
+{
+    World w; world_init(&w, 1);
+    w.tgt[0] = (Tgt){ .az0 = 2 * D2R, .vaz = 0.3 * D2R, .el0 = -1 * D2R,
+                      .r0 = 35, .rdot = 1.5, .cls = 1,
+                      .alive_rad = 1, .alive_eo = 1,
+                      .aw = 0.017, .rsx = 2.5 };   /* 0.6 m person, 5 m radar smear */
+    FusCore *c = fus_core_new();
+    FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
+    FusRadTgt rf[8]; FusEoTrk ef[8]; FusOut rows[FUS_MAX_OUT];
+    double t_fused = -1;
+    double next_rad = 0, next_eo = 0.001;
+    while (w.t < 4.0 && t_fused < 0) {
+        double tn = next_rad < next_eo ? next_rad : next_eo;
+        w.t = tn; int n;
+        w.eo_tid_base = 1 + 10 * (int)(w.t / 0.8);   /* EO renumbers every 0.8 s */
+        if (tn == next_rad) {
+            int nr = world_rad_frame(&w, rf);
+            n = fus_core_step_rad(c, rf, nr, sim_ns(tn), rows, FUS_MAX_OUT);
+            next_rad += 1.0 / 26.0;
+        } else {
+            w.eo_age[0] += 1.0 / 15.0;
+            int ne = world_eo_frame(&w, ef);
+            n = fus_core_step_eo(c, ef, ne, sim_ns(tn), rows, FUS_MAX_OUT);
+            next_eo += 1.0 / 15.0;
+        }
+        invariant(rows, n, w.t, NULL); if (g_fail) return;
+        if (find_src(rows, n, FUS_SRC_FUSED)) t_fused = w.t;
+    }
+    CHECK(t_fused > 0, "close-range target never fused");
+    CHECK(t_fused < 2.0, "close-range fuse too slow (%.2f s)", t_fused);
+    fus_core_free(c);
+    printf("PASS close (fat radar box + EO churn, fused at %.2f s)\n", t_fused);
+}
+
+/* 8g: the parked veto - a moving radar car at 120 m beside camera tracks
+ * that have provably never moved: no marriage, ever, not even briefly. */
+static void t_parked_veto(void)
+{
+    World w; world_init(&w, 3);
+    w.tgt[0] = (Tgt){ .az0 = -3 * D2R, .vaz = 0.9 * D2R, .el0 = 0,
+                      .r0 = 120, .rdot = -4, .cls = 2,
+                      .alive_rad = 1, .alive_eo = 0, .rsx = 1.5 };   /* driving car */
+    for (int i = 1; i < 3; i++)
+        w.tgt[i] = (Tgt){ .az0 = (-2 + 2.0 * (i - 1)) * D2R, .el0 = 0,
+                          .r0 = 120, .cls = 2, .alive_rad = 0, .alive_eo = 1,
+                          .aw = 0.037 };                             /* parked cars */
+    FusCore *c = fus_core_new();
+    FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
+    /* let the camera watch the parked cars long enough to call them parked */
+    w.tgt[0].alive_rad = 0;
+    run(&w, c, 4.0, invariant, NULL);
+    CHECK(!g_fail, "invariant");
+    w.tgt[0].alive_rad = 1;
+    long fused_rows = 0;
+    FusRadTgt rf[8]; FusEoTrk ef[8]; FusOut rows[FUS_MAX_OUT];
+    double t0 = w.t;
+    double next_rad = w.t, next_eo = w.t + 0.001;
+    while (w.t < t0 + 6.0) {
+        double tn = next_rad < next_eo ? next_rad : next_eo;
+        w.t = tn; int n;
+        if (tn == next_rad) {
+            int nr = world_rad_frame(&w, rf);
+            n = fus_core_step_rad(c, rf, nr, sim_ns(tn), rows, FUS_MAX_OUT);
+            next_rad += 1.0 / 26.0;
+        } else {
+            for (int i = 1; i < 3; i++) w.eo_age[i] += 1.0 / 15.0;
+            int ne = world_eo_frame(&w, ef);
+            n = fus_core_step_eo(c, ef, ne, sim_ns(tn), rows, FUS_MAX_OUT);
+            next_eo += 1.0 / 15.0;
+        }
+        invariant(rows, n, w.t, NULL); if (g_fail) return;
+        for (int i = 0; i < n; i++) if (rows[i].src == FUS_SRC_FUSED) fused_rows++;
+    }
+    CHECK(fused_rows == 0, "moving radar married a parked camera track (%ld rows)", fused_rows);
+    fus_core_free(c);
+    printf("PASS parked-veto (driving car beside 2 watched parked cars: 0 marriages)\n");
+}
+
 /* 9: emit round-trip sanity + absent-side conventions. */
 static void t_emit(void)
 {
@@ -754,6 +836,8 @@ int main(void)
     RUN(t_sweep);
     RUN(t_braking);
     RUN(t_churn);
+    RUN(t_close);
+    RUN(t_parked_veto);
     RUN(t_emit);
     RUN(t_perf);
     if (g_total) { printf("REPLAY: FAIL\n"); return 1; }

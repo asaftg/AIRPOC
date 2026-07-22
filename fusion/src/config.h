@@ -59,6 +59,24 @@
  * parked car) is a strong veto. Radar boxes are rough - keep it soft. TUNE. */
 #define FUS_SIG_LNSIZE  0.69       /* one sigma = 2x size ratio */
 #define FUS_SIZE_MIN_M  0.3        /* floor on either width, m */
+/* The size test is ONE-SIDED: only "camera object bigger than radar object"
+ * counts against a pair. Radar near-field boxes smear fat (a person at 30 m
+ * came back 5-7 m wide), so radar-bigger-than-camera proves nothing. */
+
+/* A camera track that has PROVABLY not moved for seconds is parked scenery -
+ * a moving radar target may not marry it. Scoped to close/mid range: a far
+ * radial walker genuinely looks angle-static to the camera and must not be
+ * vetoed (radar owns radial at range; drift-divorce covers wrong pairs there). */
+#define FUS_PARKED_VETO_RMAX   200.0   /* apply below this radar range, m */
+#define FUS_PARKED_VETO_SPEED  3.0     /* radar speed above this, m/s */
+#define FUS_PARKED_MIN_AGE_S   3.0     /* EO history needed to call it parked */
+#define FUS_PARKED_AZ_RAD      0.0017  /* < 0.1 deg net drift ... */
+#define FUS_PARKED_LNSZ        0.03    /* ... and < 3% net size change */
+
+/* courtship tolerates brief EO coasting (close range coasts a lot) */
+#define FUS_EO_COURT_COAST_S   0.5
+/* married pairs hold through more jitter than candidates (stickiness) */
+#define FUS_GATE_MARRIED       2.0
 
 /* Passing signature: a same-object pair's angle residual is stationary noise;
  * a radar target sliding past a parked object shows a monotonic residual
