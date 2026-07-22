@@ -25,9 +25,10 @@ typedef struct {
 typedef struct {
     int      used;
     int      tid;
-    /* filtered association state (px) */
+    /* filtered association state (px, IMAGE frame) */
     double   cx, cy, w, h;
-    double   vx, vy;             /* px/s */
+    double   cx_prev, cy_prev;   /* image position before this tick's predict (for world vel) */
+    double   vx, vy;             /* target's own (WORLD) velocity, px/s (camera motion removed) */
     /* smoothed output state (firm position EMA; velocity is coast/wire only) */
     double   ocx, ocy, ovx, ovy;
     double   meas_cx, meas_cy;   /* last matched detection centre (output EMA target) */
@@ -172,15 +173,21 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
     double gate_scale = TRK_GATE_REF_FPS / fps;
     if (n > TRK_MAX_IN) n = TRK_MAX_IN;
 
-    /* 1. predict + ego-compensate the stored history frame (shift by scene motion) */
+    /* 1. predict every track's IMAGE position by the camera motion (ego) PLUS the
+     * target's own world velocity. This is the key to tracking under a moving sensor:
+     * a static object's box moves with the scene, so the detection lands inside the
+     * gate next tick instead of spawning a duplicate while the old track coasts off.
+     * (ego_dx,ego_dy) is the per-tick image shift of the static scene; vx,vy is the
+     * target's motion beyond the camera (~0 for anything world-stationary). */
     for (int i = 0; i < TRK_MAX_TRACKS; i++) {
         Track *t = &c->tr[i];
         if (!t->used) continue;
-        t->cx += t->vx * dt_s;
-        t->cy += t->vy * dt_s;
-        /* the whole scene moved by (ego_dx,ego_dy): a static-world point would drift
-         * that much in the image; remove it from the target's stored path so a pan
-         * does not read as translation. Applied to history only, not the live box. */
+        t->cx_prev = t->cx; t->cy_prev = t->cy;
+        t->cx += ego_dx + t->vx * dt_s;
+        t->cy += ego_dy + t->vy * dt_s;
+        t->ocx += ego_dx;   /* move the smoothed output box with the camera too */
+        t->ocy += ego_dy;
+        /* history is kept WORLD-stabilised for the clutter test (remove the ego). */
         for (int k = 0; k < t->hn; k++) { t->hist[k].x -= ego_dx; t->hist[k].y -= ego_dy; }
         t->lock_on = 0;
     }
@@ -238,11 +245,13 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             /* --- update matched track --- */
             double innov = hypot(d->cx - t->cx, d->cy - t->cy);
             t->sigma += 0.3 * (innov - t->sigma);
-            /* velocity from position change */
-            double nvx = (d->cx - t->cx) / dt_s;
-            double nvy = (d->cy - t->cy) / dt_s;
-            t->vx += 0.4 * (nvx - t->vx);
-            t->vy += 0.4 * (nvy - t->vy);
+            /* WORLD velocity: the target's image displacement this tick MINUS the camera
+             * motion (ego). A world-stationary object under a pan reads ~0 here, so it is
+             * never coasted off along the camera's motion. */
+            double wvx = ((d->cx - t->cx_prev) - ego_dx) / dt_s;
+            double wvy = ((d->cy - t->cy_prev) - ego_dy) / dt_s;
+            t->vx += 0.4 * (wvx - t->vx);
+            t->vy += 0.4 * (wvy - t->vy);
             /* size growth (relative, 1/s) before overwriting w/h */
             double oldsz = 0.5 * (t->w + t->h);
             double newsz = 0.5 * (d->w + d->h);
@@ -338,18 +347,21 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             /* measured this tick: firm ADAPTIVE EMA toward the raw detection centre - NO
              * velocity momentum, so it never overshoots on a jerky pan; the gain rises
              * with the move so it stays smooth when still and responsive when moving.
-             * Velocity is derived here only for coasting + the fusion wire. */
-            double px = t->ocx, py = t->ocy;
+             * (The box was already moved by the camera in step 1, so this EMA only has
+             * to absorb the target's own motion + jitter.) */
             double innov = hypot(t->meas_cx - t->ocx, t->meas_cy - t->ocy);
             double g = TRK_OUT_G_MIN + TRK_OUT_G_SLOPE * innov;
             if (g > TRK_OUT_G_MAX) g = TRK_OUT_G_MAX;
             t->ocx += g * (t->meas_cx - t->ocx);
             t->ocy += g * (t->meas_cy - t->ocy);
-            t->ovx += TRK_OUT_VEL_G * ((t->ocx - px) / dt_s - t->ovx);
-            t->ovy += TRK_OUT_VEL_G * ((t->ocy - py) / dt_s - t->ovy);
+            /* smoothed WORLD velocity for coasting + the fusion wire (the camera is
+             * handled in step 1, so this must be world-frame, not image). */
+            t->ovx += TRK_OUT_VEL_G * (t->vx - t->ovx);
+            t->ovy += TRK_OUT_VEL_G * (t->vy - t->ovy);
         } else {
-            /* coasting: predict on the held velocity (this is the ONLY place velocity
-             * moves the displayed box). */
+            /* coasting: the camera motion was already applied in step 1; add only the
+             * target's own (world) motion, so a world-stationary target coasts IN PLACE
+             * on the object instead of sliding off along the camera pan. */
             t->ocx += t->ovx * dt_s;
             t->ocy += t->ovy * dt_s;
         }
@@ -360,15 +372,63 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
     return no;
 }
 
+/* fraction of the SMALLER box covered by its intersection with the other (center form). */
+static double box_containment(const Track *a, const Track *b)
+{
+    double ax1 = a->ocx - a->w/2, ay1 = a->ocy - a->h/2, ax2 = a->ocx + a->w/2, ay2 = a->ocy + a->h/2;
+    double bx1 = b->ocx - b->w/2, by1 = b->ocy - b->h/2, bx2 = b->ocx + b->w/2, by2 = b->ocy + b->h/2;
+    double ix = fmin(ax2, bx2) - fmax(ax1, bx1);
+    double iy = fmin(ay2, by2) - fmax(ay1, by1);
+    if (ix <= 0 || iy <= 0) return 0;
+    double inter = ix * iy;
+    double aa = a->w * a->h, ab = b->w * b->h;
+    double mn = fmin(aa, ab);
+    return mn > 0 ? inter / mn : 0;
+}
+
 static int emit_tracks(TrkCore *c, int engaged_tid, TrkOut *out, int max)
 {
-    int live = 0, no = 0;
+    /* Collect emittable tracks, strongest first, then drop any that heavily overlaps a
+     * stronger same-class one already kept. The detector fragments a big/close object
+     * into several boxes (whole car + window + body); without this the operator sees a
+     * stack of boxes with churning ids on one target. Strength = lifetime hits; the
+     * engaged track is always kept and never suppressed. Mirrors the radar tracker's
+     * spatial dedup. */
+    int live = 0;
+    int idx[TRK_MAX_TRACKS], ni = 0;
     for (int i = 0; i < TRK_MAX_TRACKS; i++) {
         Track *t = &c->tr[i];
         if (!t->used) continue;
         live++;
         int is_eng = (t->tid == engaged_tid);
         if (!is_eng && (!t->confirmed || !t->emit_latch)) continue;   /* E subset of live */
+        idx[ni++] = i;
+    }
+    /* sort strongest-first: engaged wins, then more hits */
+    for (int a = 1; a < ni; a++) {
+        int k = idx[a], b = a - 1;
+        while (b >= 0) {
+            Track *tk = &c->tr[k], *tb = &c->tr[idx[b]];
+            int k_eng = (tk->tid == engaged_tid), b_eng = (tb->tid == engaged_tid);
+            int k_better = k_eng > b_eng || (k_eng == b_eng && tk->hits_total > tb->hits_total);
+            if (!k_better) break;
+            idx[b+1] = idx[b]; b--;
+        }
+        idx[b+1] = k;
+    }
+    int no = 0;
+    char dropped[TRK_MAX_TRACKS]; memset(dropped, 0, ni);
+    for (int a = 0; a < ni; a++) {
+        Track *t = &c->tr[idx[a]];
+        int is_eng = (t->tid == engaged_tid);
+        if (!is_eng) {
+            for (int b = 0; b < a; b++) {
+                if (dropped[b]) continue;
+                Track *s = &c->tr[idx[b]];
+                if (s->cls == t->cls && box_containment(s, t) > TRK_DEDUP_CONTAIN) { dropped[a] = 1; break; }
+            }
+        }
+        if (dropped[a]) continue;
         if (no >= max) break;
         TrkOut *o = &out[no++];
         o->tid = t->tid;

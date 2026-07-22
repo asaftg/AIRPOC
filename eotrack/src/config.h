@@ -108,6 +108,12 @@
 #define TRK_TRANS_RATIO         0.30    /* net/path below this = oscillator (latch off) */
 #define TRK_LOOM_RATE           0.15    /* rel size growth (1/s) that rescues a radial mover */
 
+/* Cross-track dedup at emit: drop a track whose box is more than this fraction contained
+ * in a stronger same-class track's box. The detector fragments a big/close object into
+ * several overlapping boxes; this keeps one box per target (the strongest). The engaged
+ * track is never dropped. */
+#define TRK_DEDUP_CONTAIN       0.55
+
 /* Output smoothing = a FIRM position low-pass (EMA), NOT a predictive alpha-beta.
  * A velocity/momentum term overshoots on jerky hand-held motion (it predicts the
  * target keeps moving, then it reverses), which reads as "wobble". Measured: an
