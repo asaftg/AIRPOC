@@ -246,7 +246,7 @@ JpegSrc *jpeg_src_open(const char *tap)
     JpegSrc *s = new JpegSrc();
     s->jbuf.resize(4u * 1024 * 1024);          /* generous JPEG cap */
     s->gray.resize((size_t)EO_IMG_W * EO_IMG_H);
-    s->ok = tap_open(&s->sub, tap);
+    s->ok = (tap_open(&s->sub, tap) == 0);   /* tap_open returns 0 on success */
     if (!s->ok) fprintf(stderr, "jpeg_src: tap_open %s failed\n", tap);
     return s;
 }
