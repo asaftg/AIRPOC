@@ -38,7 +38,7 @@ CONNECTED** — there is no synthetic data.
 | `main.c` | supervisor: start the EO + radar consumers + the GUI server, wait for a signal |
 | `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar`+`/radar/stream` · `/det`+`/det/stream` · `/trk`+`/trk/stream` · `/fus`+`/fus/stream` · `/stats`/`/rstats`/`/dstats`/`/tstats`/`/fstats` · `/ctl` (routed) · `/rec/<path>` (recorder pass-through) |
 | `eo_client.c` / `eo_client.h` | consumes the EO module's MJPEG feed (latest JPEG + its `/stats`); forwards controls to its `/ctl` |
-| `radar_client.c` / `radar.h` | consumes the radar daemon's SSE (latest frame + tracks); re-broadcasts each frame to the browser (`/radar/stream`); forwards the ten controls to its `/ctl` |
+| `radar_client.c` / `radar.h` | consumes the radar daemon's SSE (latest frame + tracks); re-broadcasts each frame to the browser (`/radar/stream`); forwards the ten controls to its `/ctl` (four exposed in DEV, all ten accepted) + proxies `/scene` |
 | `trk_client.c` / `trk.h` | consumes the EO tracker's SSE (:8095) — the operator's EO boxes + engaged lock; re-broadcasts on `/trk/stream`; forwards `trk_*` knobs to its `/ctl` |
 | `fus_client.c` / `fus.h` | consumes fusion's SSE (`:8096`) — the ONE target list (fused rows carry range **and** class); re-broadcasts on `/fus/stream`; forwards `fus_*` knobs to its `/ctl` |
 | `det_client.c` / `det.h` | consumes the detection daemon's SSE (`:8094`, per-frame boxes + `/stats`); re-broadcasts to the browser (`/det/stream`); forwards `det_*` controls |
@@ -79,53 +79,59 @@ daemon with `-s` (simulation) in front of an operator.
   to its `/ctl`. On-Jetson validation of the video proxy pending. NOT CONNECTED if the
   feed is down.
 - **Radar** — proxies the real daemon; renders the sector scope (rings, cyan FOV wedge,
-  doppler returns, class-less target boxes with velocity, GUI display-persistence). No
-  coasting in the wire (that's the tracker's job). Cluster ε / min-pts forward to the
-  daemon's `/ctl`; slider reflects the applied (clamped) value. Console load defaults:
+  doppler returns, class-less target boxes with velocity, GUI display-persistence) plus the
+  static **scene layer** (`/scene`, drawn under the live marks and clipped to the FOV). Point
+  `x,y` is derived from polar (`r·cos(el)·sin/cos(az)`) — the wire went polar-only to halve the
+  feed. DEV exposes **four** radar knobs (FOV / EL / MIN SNR / MIN SPD); the other six are a
+  validated set and stay bench-only though `/ctl` still accepts them. Console load defaults:
   **FOV ±60°, EL ±20°**.
 - **Radar → EO overlay** — radar marks drawn on the video, with **AZ/EL trim + SAVE**. The
   trim is the radar↔camera mount alignment, so it's stored **on the Jetson** (`/uiprefs` →
   `/var/lib/airpoc/ui-prefs.json`), not per browser: same value from every device and every
   address (USB / WiFi / field AP), surviving a reboot. Changes are session-only until SAVE.
 - **EO tracker** — proxies `trackerd` (`:8095`, `/trk/stream`) and draws its `tracks[]` as
-  **the** EO boxes: class colour, corner brackets once a track is confirmed/held, green **LOCK**
-  on the engaged one, a small `t` where the detector integrated faint evidence. Tracker down →
-  **EO TRACK · NOT CONNECTED**; it never falls back to raw detections.
-- **Target list** — **fusion drives it when fusion is up** (`FUS` badge in the panel header),
-  otherwise it falls back to the two per-sensor lists. Either way there is **no client-side
-  dedup**: on the fusion wire a track that is a constituent of a fused row is never also
-  published on its own, and without fusion the two sensors are simply different objects.
-  `FUS` rows carry class **and** range on one line; EO rows carry class · confidence · az/el;
-  radar rows carry range · speed. Rows are keyed by their **constituent** (`"eo:<eo_tid>"` /
-  `"rad:<rad_tid>"`), so a tap on a row, a video box or a scope circle all land on the same
-  target; the fusion `gid` picks the row colour, so it survives per-sensor id churn. The
-  engaged target is pinned first.
-- **Fusion** — **live on the Jetson 2026-07-22**: `fusiond` built and started by the launcher,
-  the console dialled in with `-u`, both its feeds connected, and `fus_gate` set through the
-  console read back applied in the daemon's own `/stats`. A **fused row has not been seen yet**
-  — the scene has had no targets at all since it came up (EO `tracks[]` empty, radar 0 targets
-  over 207 raw points), so the join has not had anything to join. Proxies `fusiond` (`:8096`,
-  `/fus/stream`, `/fstats`, `fus_*` knobs). On the
-  video, a track fusion has paired draws **heavier** (a ring around the cross in seeker mode)
-  and carries the **range** fusion brought it; the radar's own circle for the other half is
-  **suppressed** — one object, one mark. Fusion angles are already rig-frame (fusion owns the
-  radar↔EO mount trim), so the console's display trim is never added on top of them. Fusion
-  down, stale, or in replay → straight back to the per-sensor picture.
+  **the** EO boxes: class colour (green for a fused track while staring), corner brackets on the
+  **locked** target only, a small `t` where the detector integrated faint evidence. **No class
+  word on the box** — the colour says what it is; a box carries only confidence, the fused range,
+  and `LOCK`. Tracker down → **EO TRACK · NOT CONNECTED**; it never falls back to raw detections.
+- **Target list** — **fusion drives it when fusion is up** (live or replayed), otherwise the
+  two per-sensor lists. Never any client-side dedup. `FUS` rows carry class **and** range on one
+  line; EO rows carry class · confidence · az/el; radar rows carry range · speed. Rows are keyed
+  by their **constituent** (`"eo:<eo_tid>"` / `"rad:<rad_tid>"`) so a tap on a row, box or scope
+  circle lands on the same target; each shows its published id (`G`/`E`/`R`<n>) and a swatch
+  coloured by class (EO/fused) or by track (radar, matching the scope). Ranked by
+  source → moving → **state** → class → confidence → nearness, with asymmetric smoothing and a
+  converging order so it holds still. The **held target sits in its own strip above the list**,
+  which never reorders — see [`docs/GUI.md`](docs/GUI.md).
+- **Fusion** — proxies `fusiond` (`:8096`, `/fus/stream`, `/fstats`, `fus_*` knobs), live on
+  the Jetson and **confirmed fusing real targets in replay** (session `20260722T195323Z` — parked
+  vehicles fused from ~23 s onward). On the video a fused track draws **heavier** and carries the
+  **range** fusion brought it; the radar's own circle for the other half is **suppressed** — one
+  object, one mark. Fusion angles are already rig-frame (fusion owns the radar↔EO mount trim), so
+  the console's display trim is never added on top of them. Fusion down, stale, or a session
+  without it → straight back to the per-sensor picture.
 - **Tracking / selection** — tap a **list row**, an **EO box**, or a **radar scope circle**:
   all three declare the tracking state. An EO pick sends `trk_engage=<tid>` (the only thing the
   EO tracker can lock); any pick also publishes the console's own `engage=<tid>`, so a
   radar-only pick is real state rather than a dead click. `mode`/`engaged` are **reflected from
-  the tracker's wire, never the button press**. **MANUAL is the default** — AUTO takes row #1 of
-  the merged list, but that ranking is provisional.
+  the tracker's wire, never the button press**. **MANUAL is the default**; AUTO holds the
+  best-scoring live target (same ranking as the list, with hysteresis so it does not chatter).
 - **EO detector** — proxies the detection daemon (`:8094`, `/det/stream`). Now the **tracker's
   input**, so its raw boxes are a **DEV overlay (RAW DET, off by default)** — useful to tell a
   tracker fault from a detector fault. Console load defaults: **MOTION off, MAX DETS 25,
-  TEMPORAL on**. Full knob set in DEV incl. MOT MEM and the temporal controls.
+  TEMPORAL on**. Temporal + mark-style controls in DEV.
+- **EO stream controls** — **SIZE** (`res`), **QUALITY** (`q`, JPEG 30–95) and **FPS CAP**
+  (`fps`) all forward to the EO feed; detection and the master recording read raw Y10, so none
+  of them can cost a detection. **Bandwidth is the field constraint** — see the console's own
+  measurements in [`docs/GUI.md`](docs/GUI.md).
 - **Illuminator** — the EO feed owns it; the console's LIGHT/PWR/BEAM + AUTO-fit forward
   to the EO feed's `/ctl`.
 - **Record / replay** — `REC` records via the recorder daemon (`:8093`, proxied at `/rec/*`);
-  LIBRARY browses/filters/edits/deletes/offloads sessions; replay reuses the live renderers
-  with a transport bar (radar + det overlays push over replay SSE). **Native HD 60fps** replay
+  LIBRARY browses/filters/edits/deletes/offloads sessions; replay reuses the live renderers with
+  a transport bar. **Radar, detector, EO tracks AND fusion all replay** over
+  `/rec/replay/{radar,det,trk,fus}/stream` through the same handlers as live; channel presence
+  comes from `/rec/replay/state`, and an engage in replay is a local highlight only. **Native HD
+  60fps** replay
   streams the recorder's cached `native.mp4` — state-driven, **auto-plays when ready, never
   rebuilds on entry**; each card has a **Convert to HD** button (⬆ HD → HD N% → HD ✓ only when
   actually built). Offload → `.tar` via `/rec/export` (a real download; folder via Chrome's

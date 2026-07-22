@@ -25,9 +25,9 @@ full-screen (see `app.css` media query).
   **radar→EO overlay** (all radar targets projected onto the video — see below), detector
   boxes, zoom **±** (bottom-left), the control cluster (bottom-centre). Scrim shows
   **EO · NOT CONNECTED** / **NO VIDEO RECORDED** (replay of a radar-only session).
-- **Target list (right, top):** **both sensors** — EO tracks (class · confidence · az/el) and
-  radar targets (range · speed), source-tagged, no dedup until fusion exists. Tap a row to
-  select it — see *Target list* and *Tracking* below.
+- **Target list (right, top):** one list — fusion-driven when fusion is up, the two per-sensor
+  lists when it is not, with the **held target in its own strip above** so locking never
+  reorders anything. Tap a row to hold that target — see *Target list* and *Tracking* below.
 - **Radar scope (right, bottom):** see *Radar rendering* below. Expand button flips it to
   the big view (EO drops to a PIP).
 - **Control cluster (over EO):** `LIGHT` (fire) · `TRACK` (auto/man) · `REC` (record).
@@ -54,9 +54,20 @@ recorded) drive playback. Un-recorded channels show **NO VIDEO / NO RADAR RECORD
   transport clock only on a **big (>0.3 s) drift**; scrubbing seeks it directly per drag.
   (Hard-setting `currentTime` every poll — the old behaviour — turned playback/scrub into
   constant seeking that reset to frame 0.) If the mp4 can't decode it falls back to MJPEG.
-- **Replay radar + detections push over SSE** — `/rec/replay/radar/stream` and
-  `/rec/replay/det/stream`, each paced to the playback clock (honours pause/seek/rate) so the
-  scope (~26 Hz) and boxes track smoothly. `closeReplay` closes both on EXIT (not on next-open).
+- **Replay radar, detections, EO TRACKS and FUSION push over SSE** —
+  `/rec/replay/{radar,det,trk,fus}/stream`, each paced to the playback clock (honours
+  pause/seek/rate). The payload is byte-identical to live apart from an injected
+  `"replay":true`, so the recorded wires run through the **same handlers** as the live ones:
+  EO boxes, the lock symbol, the target list and the fused symbology all behave as they did
+  live, with no replay-specific rendering path to drift out of step. `closeReplay` closes all
+  four on EXIT (not on next-open), and clears the engagement — a live lock is not a replay lock.
+- **An engage during replay is a local highlight only** and sends nothing. The recorded wire
+  owns what was locked then, and the live tracker is out there holding a real target now.
+- **Which channels a session actually holds** comes from `/rec/replay/state`
+  (`has_radar`/`has_det`/`has_trk`/`has_fus`) — not from probing endpoints or inferring from
+  byte counts. A channel that was never recorded says **NO ... RECORDED**, never the live
+  wording *NOT CONNECTED*: those mean different things to an operator, and sessions predating
+  the tracker/fusion replay have no such records at all.
 - **Connection budget.** A browser allows only ~6 HTTP/1.1 sockets per host, so the console
   minimises long-lived streams: the **library list holds ZERO** (video/radar/det are closed on
   library-open), and a **replay holds few** (the mp4 `<video>` + the two overlay SSE, all closed
@@ -137,16 +148,29 @@ with identity — stable `tid`, `state` (`tent`/`conf`/`coast`), smoothed positi
 engaged lock. The raw detector boxes are a **DEV overlay only** (below); drawing both is the
 double display this module removes.
 
-- **Colour = class, always** (human cyan, vehicle amber) — never *how* the target was found.
-  A far human promoted from faint evidence is still a human; overloading colour with provenance
-  made it read as a different kind of thing.
+- **Colour = class** (human cyan, vehicle amber, drone violet, unclassified grey) — never *how*
+  the target was found. A far human promoted from faint evidence is still a human; overloading
+  colour with provenance made it read as a different kind of thing. The list uses the same
+  function, so a cyan box on the video is a cyan row in the list.
+  **One exception: in STARE mode a FUSED track is green, whatever its class.** Stare is the
+  scanning state — nothing is held, so green is not spoken for, and while scanning the thing
+  worth shouting is that both sensors are on the same object (and it therefore has a range). In
+  TRACK mode green goes back to meaning the held target and fused tracks return to their class
+  colour, so the two greens are never on screen meaning different things at once.
+- **No class text on the video.** The colour already says what it is, and over a small far
+  target the word was physically larger than the target. A box carries only what the picture
+  cannot: confidence, the range fusion brought it, and `LOCK` when held. The seeker cross
+  carries nothing unless fused or locked — its old `V62` (class letter + confidence) was the
+  whole mark's worth of clutter. The class is still spelled out in the target list, which is
+  where you read rather than watch.
 - **Shape = state.** A confirmed/held track draws as **corner brackets** (the four corners, no
   connecting edges) instead of a plain rectangle or the seeker cross. The **engaged** track adds
   green **LOCK**. A coasting track is dashed.
 - A small **`t`** at the box's top-right marks a target the detector only reported because it
   integrated faint evidence across frames (`tbd`) — a quiet provenance hint, not a recolour.
-- **Tracker down → `EO TRACK · NOT CONNECTED`** on the overlay. It never silently falls back to
-  raw detections: an empty frame would read as "nothing out there".
+- **Tracker down → `EO TRACK · NOT CONNECTED`** on the overlay; **in replay, a session with no
+  tracker channel says `NO EO TRACKS RECORDED`** instead. It never silently falls back to raw
+  detections: an empty frame would read as "nothing out there".
 - **RAW DET** (DEV → DETECTOR) draws the detector's own boxes dim + dashed underneath,
   **off by default**. Diagnostic only — it's how you tell a tracker fault from a detector fault.
 - `px` boxes are in the **native** 1440×1088 frame; the console maps them through the
@@ -167,9 +191,10 @@ Boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:809
   "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
 
 ## Target list — ONE list, fusion-driven when fusion is up
-When **fusion** (`fusion/`, `fusiond` on `:8096`) is delivering frames the list is drawn
-**exclusively** from its `targets[]` and the panel header shows a **`FUS`** badge. Fusion down,
-stale (>3 s), or replaying → the list falls back to the two per-sensor lists. Either way the
+When **fusion** (`fusion/`, `fusiond` on `:8096`) is delivering frames — live **or replayed** —
+the list is drawn **exclusively** from its `targets[]`. Fusion down or stale (>3 s) → the list
+falls back to the two per-sensor lists. (There is no `FUS` badge on the panel title: it read as
+if the targets themselves were called FUS. Each row names its own source.) Either way the
 console **never dedups**: on the fusion wire a per-sensor track that appears as a constituent of
 a fused row is never also published on its own, and without fusion the two sensors are simply
 different objects — guessing at the association is exactly what fusion exists to stop.
@@ -186,10 +211,64 @@ per-sensor wires at their own rate and only know sensor ids, so keying on the co
 what makes a tap on a row, a box and a circle land on the same target. The `gid` still carries
 identity: it picks the row's colour, which therefore survives per-sensor id churn.
 
-Persistence is **each daemon's own**: every producer runs a temporal tracker with stable ids,
-confirm and coast, so rows come straight off the wire. A GUI-side hold would double-persist what
-the daemons already did. Ranking pins the **engaged** target first (so the held target can never
-scroll off), then fused, then confirmed EO tracks, then the rest by confidence/nearness.
+Each row shows the target's **published id** — `G<n>` for a fused target (fusion's global id,
+stable across both sensors' id churn), `E<n>` / `R<n>` for an EO or radar track. The letter names
+the id space the row lives in, which is also the id on the video and the scope and the one an
+engage is sent against. (Every row briefly read `G<n>`, because fusion passes single-sensor
+targets through and gives them a gid too — that made everything look fused.)
+
+The **swatch colour** answers a different question per source, because the sources are different
+things: an EO or fused row takes the **class** colour (same function the video boxes use), while
+a radar row takes the **track** colour hashed from the raw tid exactly as the scope hashes it, so
+a blob's row and its ring on the PPI match. A radar blob has no class, so colour is all the
+identity it has.
+
+### Ranking, and why the list holds still
+Score tiers, most significant first, spaced so a lower tier can never outvote a higher one:
+
+| tier | |
+|---|---|
+| 1. **source** | fused > EO > radar |
+| 2. **moving** | an EO/fused target whose bearing is actually changing outranks a static one, from the tracker's own position-derived rate with a Schmitt gap so a target on the threshold cannot flip tiers |
+| 3. **state** | confirmed > tentative > coasting |
+| 4. **class** | human > vehicle > drone > unclassified |
+| 5. **confidence** | within a class |
+| 6. **nearness** | tiebreak only |
+
+State sits above class and confidence because confidence is the jittery quantity: measured on the
+live wire, the detector's confidence on one parked car swings across tens of points frame to
+frame, and a 4-second coasting blob with 15 hits can carry a similar number to a confirmed track
+with 1100 hits over 70 seconds. Those are not comparable targets and no confidence tuning
+separates them. Fusion rows carry no `state`, so one is derived from the per-side staleness they
+do report; radar rows have none and count as confirmed.
+
+Note this makes a moving *vehicle* outrank a stationary *human* — that is what "moving always
+beats static" asks for; swap tiers 2 and 3 to reverse it.
+
+**Stillness** is three separate mechanisms, because the flicker had three causes:
+- **The order converges, it is not re-sorted.** Re-ranked twice a second, at most two adjacent
+  swaps per tick, and only when the challenger beats the incumbent by a real margin. A straight
+  per-frame sort made two near-equal targets trade places continuously.
+- **Scores are smoothed asymmetrically** — falling fast (0.7), rising slowly (0.3). Symmetric
+  smoothing let a target that had just dropped from 60% to 24% keep its rank for seconds while
+  displaying the new number, so the row you read and the order you saw disagreed.
+- **A vanished target holds its place for one second, dimmed.** One skipped frame no longer
+  collapses a row and shifts everything below it. Display smoothing only: it shows the last real
+  values and extrapolates nothing.
+New targets join at the end and climb, rather than shoving the row being read.
+
+The rows themselves are **built once and updated in place**. They used to be rebuilt with
+`innerHTML` on every wire frame (up to 27/s), which destroyed the `<li>` under the operator's
+finger between press and release — so the browser never produced a click and **row taps did
+nothing at all**. The handler is `pointerdown`, which needs no matching element at release and
+skips the touch delay.
+
+### The held target has its own strip
+It is **not** pinned to row 1 any more: pinning ripped it out of its place and pushed every other
+row down at exactly the moment the operator was concentrating on one target. It keeps its rank in
+the list (marked green) and is shown in full in a strip above, which never moves. The strip is
+**always present** — empty it reads `NO LOCK / tap a target to hold it` — because showing and
+hiding it changed the panel height and jumped the whole list. Tap the strip to release.
 
 ## Fusion overlay — one object, one mark
 The video boxes keep coming from the **tracker** at its own rate (a fusion stall must never
@@ -202,6 +281,43 @@ two things on the video:
   looks.
 - The **radar-on-EO circle is suppressed** for any `rad_tid` that is a fused constituent. Two
   marks for one object is the double display fusion exists to end.
+
+## Scene layer — the world the targets move across
+The radar module accumulates its **stationary** returns into a polar occupancy grid
+(`radar/docs/SCENE_LAYER.md`) and serves it on `GET /scene`; the console proxies that with the
+query intact and draws it **under** the live points and boxes on the scope. **Display only** —
+it never feeds tracking, guidance or fusion, and no target is ever derived from it.
+
+- **Two channels, two questions, so they drive two visual properties.** `occ` (0..255, "is
+  something really there") drives **opacity** — noise sits near 0 and a wall reaches 255, about
+  four orders of magnitude, so opacity alone separates world from noise with no threshold to
+  pick. `snr` drives **colour**, because bearing accuracy is SNR-limited (±2.6° at 60 dB, ±20°
+  at 28 dB): the faint smooth arcs in the far field are real returns whose *angle* is noise, and
+  colouring by strength shows the operator which parts of the picture are geometrically
+  trustworthy instead of hiding it.
+- **A cell is a wedge, not a square** — `r_step` deep in range, `r · az_step` wide in azimuth
+  (0.87 m across at 50 m, 2.6 m at 150 m). Drawing squares paints close-in cells about 3× too
+  wide and under-covers range, which then makes any blur smooth azimuth far more than range and
+  leaves range banding that reads as an artifact. Cells are filled as true annular sectors,
+  drawn **~1.25× oversized so neighbours overlap**, then the whole layer gets **one 1 px blur on
+  composite** — that removes the polar lattice without implying resolution the sensor does not
+  have. Finer bins are deliberately not the answer: the bearing wanders further than a cell is
+  wide, so smaller cells only scatter the same evidence.
+- **The FOV knob governs the backdrop too.** Nothing is drawn outside ±`fov_half_deg`, with the
+  edge cell *clipped* to the boundary rather than dropped so the map ends on the wedge line
+  instead of in a 1° staircase. The daemon keeps accumulating its full ±60° grid regardless, so
+  narrowing throws nothing away and widening brings the map straight back with no rebuild.
+- **Rendered once per snapshot, not per scope frame.** The layer goes to an offscreen canvas
+  re-rendered only when the data or the view geometry changes, then blitted — the scope redraws
+  at ~27 Hz while the layer updates a few times a second.
+- **DEV → SCENE LAYER**: `SCENE` on/off (per browser; off costs nothing — the poll timer only
+  exists while it is on), **MAP RATE** 1–26 Hz, and **CLEAR**. The console **follows the rate the
+  daemon reports** (`rate_hz` in every payload) rather than assuming one, so the fetch rate and
+  the publish rate cannot drift apart. The rate reply itself is one snapshot stale — the daemon
+  serialises on its own timer — so the slider is driven by the *request* and confirmed by the
+  next poll, never by that echo. `CLEAR` matters after a slew: the map accumulates in the
+  sensor's own frame, so turning the rig smears it.
+- Each update is a few tens of KB, so the rate is a real bandwidth choice, not a free one.
 
 > **Geometry note — the scene grid is GROUND range, and the console must not "correct" it.**
 > `/scene` cells carry no elevation, only a range-bin index. That index used to count SLANT
@@ -275,11 +391,20 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   a Save-As folder window on every offload.
 
 ## DEV panel
-- **STREAM** — QUALITY presets `PANIC / FAST / DEFAULT / NATIVE` + FPS CAP (forwarded to
-  the EO feed's `/ctl` as `res`/`fps`; the detector always runs full-native). Measured
-  bitrates: PANIC@15fps ≈ 2 Mb/s · PANIC@60 ≈ 8 · DEFAULT@60 ≈ 28 · NATIVE@60 ≈ 123 Mb/s —
-  NATIVE does not fit the USB tether (~25 Mb/s) or a weak AP moment; pair it with a low
-  FPS CAP. QUALITY is **always the operator's pick** — the console never changes it by itself.
+- **STREAM** — three levers on the same problem, all forwarded to the EO feed's `/ctl`
+  (`res` / `q` / `fps`; the detector and the master recording always read the raw sensor frame,
+  so none of these can cost a detection):
+  - **SIZE** — `PANIC / FAST / DEFAULT / NATIVE` (`res`). The coarse lever.
+  - **QUALITY** — JPEG compression 30–95, default 85 (`q`). The **fine** lever, and until the EO
+    module made it a runtime knob it did not exist: a weak link's only move was the cliff down a
+    size step. Measured on the wire: q85 → 6.9 Mb/s, q60 → 3.65, q40 → 2.61 at the same size. A
+    bigger soft picture usually beats a small sharp one.
+  - **FPS CAP** (`fps`) — the sensor rate.
+
+  Measured whole-stream bitrates: PANIC@15fps ≈ 2 Mb/s · PANIC@60 ≈ 8 · DEFAULT@60 ≈ 28 ·
+  **NATIVE@60 at q30 ≈ 52 Mb/s** — native does not fit the USB tether (~25 Mb/s) or any field
+  AP, at any quality, so pair it with a low FPS CAP. Both SIZE and QUALITY are **always the
+  operator's pick** — the console never changes either by itself.
   When the link chip shows **SAT** (delivered < half of produced — the "frozen EO" symptom)
   that is reported and nothing more; an earlier LINK MANUAL/AUTO mode that stepped QUALITY
   down and probed back up was removed at the operator's request (unused, and silently moving
@@ -309,7 +434,7 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
   rolling-background window: how far back the static scene is modelled; shorter adapts faster,
   longer forgets a stopped object slower). All except MARK forwarded namespaced `det_<key>=` →
   detection daemon `/ctl`; readback from `/dstats` (values under `knobs`). The console pushes
-  **MOTION on**, **MAX DETS 25** and **TEMPORAL on** as load defaults — MAX DETS has no slider,
+  **MOTION off**, **MAX DETS 25** and **TEMPORAL on** as load defaults — MAX DETS has no slider,
   it's a fixed value the operator doesn't change.
 - **DETECTOR → temporal integration** — three controls that let the detector collect faint
   evidence across frames so far/weak targets get reported at all (costing ~0.2–0.4 s of extra
@@ -329,17 +454,26 @@ beam to the camera FOV at max power; MANUAL uses the PWR/BEAM sliders. `LIGHT` =
     > parameters it doesn't know, so a 200 proves the forward arrived — never that the running
     > build honours it. `/stats` → `knobs.<name>` is the only real presence test. That's why these
     > rows stay hidden until `knobs.temporal` appears (see *Gated controls* below).
-- **RADAR** — the daemon's **ten** tracker knobs: FOV ± (azimuth gate), **EL ±** (`elmax` —
-  elevation gate, 5–90°, the antenna's physical elevation beam edge; 90 = off), MIN SNR,
-  MIN SPD, MERGE GATE (`doppler` — velocity-coherence for the dedup merge), DEDUP (`eps` —
-  merge radius for co-located boxes), MIN PTS, CONFIRM (M-of-N hits before a track appears,
-  1–6), COAST (seconds a track survives a dropout, 0–3), PARK HOLD (seconds a stopped mover is
-  held, 0–60). All forward to the **daemon** namespaced `radar_<key>=` (the app strips the
+- **RADAR** — **four** knobs, on purpose (`radar/docs/CONSOLE_CONTROLS.md`): **FOV ±**
+  (azimuth gate), **EL ±** (`elmax`, 5–90°, narrow it to reject ground clutter and multipath
+  from below; the 20° default is the antenna's beam edge, i.e. the useful ceiling), **MIN SNR**
+  (sensitivity: detections vs false alarms) and **MIN SPD** (what counts as a mover). MIN SNR
+  and MIN SPD drive **both** radar detectors — the per-frame clusterer and the slow chainer are
+  one tracker to the operator, so one pair of controls governs both and there is deliberately no
+  separate switch for the slow one.
+  The other six (`eps`, `minpts`, `doppler`, `confirm`, `coast`, `park`) were **removed from the
+  operator screen**: they are tracker internals with no physical meaning — nobody can reason
+  about "merge gate 1.2 m/s" in a field — and they are a *validated set*, pinned as a
+  `knob_vector` in `radar/tools/regression/tracker_baseline.json`, so moving one on the rig
+  silently invalidates every corpus result with no record of what changed. **`/ctl` still accepts
+  all ten**; the bench drives the rest through `radar/tools/track_replay.c`. All forward to the
+  **daemon** namespaced `radar_<key>=` (the app strips the
   prefix → daemon `/ctl`); sliders read back the **applied (clamped)** value from the daemon's
   `/stats`. The console pushes the operator's chosen radar defaults on load: **FOV ±60°** and
   **EL ±20°**. (These were briefly *not* pushed — an earlier auto-`radar_fov=60` was removed
   because it overrode the daemon mid-test — but the operator asked for a defined default, so
   they are asserted again. Nothing else on the radar is touched.)
+- **SCENE LAYER** — `SCENE` on/off, `MAP RATE` (1–26 Hz), `CLEAR`. See *Scene layer* above.
 - **SYSTEM** — Jetson **TEMP** (junction/`tj` thermal zone), **CPU %** (aggregate, plus
   core-equivalents `x/N`), **GPU %** (Tegra load). RETURN TO CONTROL → the launcher (`:8088`).
 
@@ -378,9 +512,10 @@ rows (`knobs.temporal`).
 | `/fus` | fusion's latest message verbatim (one-shot poll) |
 | `/fstats` | fusion's `/stats` (health, feeds, trim + `knobs`) |
 | `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
+| `/scene` | **pass-through** to the radar daemon's `/scene` (the static occupancy layer), query intact — `on=0|1`, `reset=1`, `rate=<hz>`; every form returns the layer |
 | `/uiprefs` | operator UI prefs stored **on the Jetson** (`/var/lib/airpoc/ui-prefs.json`): plain `GET` reads, `?set=<url-encoded json>` writes. Currently the radar→EO AZ/EL trim — rig-level state that must not depend on which browser or which IP the console was opened from. Deliberately schema-less: the console stores the blob the page hands it, so new prefs need no C change |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |
-| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; `trk_*` → the EO tracker; `fus_*` → fusion (`trim_az/trim_el/gate/confirm/divorce_s/coast_s`); the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/denoise/disp_fps/fps/res`) → the EO feed |
+| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; `trk_*` → the EO tracker; `fus_*` → fusion (`trim_az/trim_el/gate/confirm/divorce_s/coast_s`); the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/denoise/disp_fps/fps/res/q`) → the EO feed. **Every key is matched at a token boundary** (start of query or after `&`), never by substring: `q=` is one character and would otherwise match inside any key ending in q — the same trap that once had a bare `engage=` swallowing `trk_engage=` |
 | `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export` (offload `.tar`), `/rec/replay/*` (incl. `/rec/replay/state` with `native_mp4` status, `/rec/replay/{radar,det}/stream` SSE, `/rec/replay/transcode?sid=` HD build) |
 
 The `/rec/*` proxy sets a **180 s** upstream read timeout (a slow `/rec/export` tar build can
