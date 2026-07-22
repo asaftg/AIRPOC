@@ -67,6 +67,14 @@ daemon with `-s` (simulation) in front of an operator.
 
 ## Status
 - **Console = pure proxy.** No capture/ISP/AE/encode/illuminator-serial on the app side.
+- **Shutdown is bounded.** Every feed client reads with a 5 s socket timeout, `*_stop()` shuts
+  the live session socket down before joining, and the retry/poll sleeps run in 100 ms slices.
+  Before this the console **could not be stopped at all** while its feeds were healthy: the
+  reader threads sat in an unbounded `read()`, never re-read the run flag, and the join never
+  returned — SIGTERM released `:8080` and left a process still consuming every feed (including
+  the 60 fps EO stream). Measured on the Jetson: `SIGTERM` → **exit in 3 ms** (was: alive
+  indefinitely). The same timeout also means a **wedged** daemon — socket open, nothing sent —
+  ends the session and shows **NOT CONNECTED** rather than a frozen picture presented as live.
 - **EO** — proxies the EO module's MJPEG feed; forwards zoom/AE/gain/exposure/illuminator
   to its `/ctl`. On-Jetson validation of the video proxy pending. NOT CONNECTED if the
   feed is down.
@@ -92,7 +100,12 @@ daemon with `-s` (simulation) in front of an operator.
   `"rad:<rad_tid>"`), so a tap on a row, a video box or a scope circle all land on the same
   target; the fusion `gid` picks the row colour, so it survives per-sensor id churn. The
   engaged target is pinned first.
-- **Fusion** — proxies `fusiond` (`:8096`, `/fus/stream`, `/fstats`, `fus_*` knobs). On the
+- **Fusion** — **live on the Jetson 2026-07-22**: `fusiond` built and started by the launcher,
+  the console dialled in with `-u`, both its feeds connected, and `fus_gate` set through the
+  console read back applied in the daemon's own `/stats`. A **fused row has not been seen yet**
+  — the scene has had no targets at all since it came up (EO `tracks[]` empty, radar 0 targets
+  over 207 raw points), so the join has not had anything to join. Proxies `fusiond` (`:8096`,
+  `/fus/stream`, `/fstats`, `fus_*` knobs). On the
   video, a track fusion has paired draws **heavier** (a ring around the cross in seeker mode)
   and carries the **range** fusion brought it; the radar's own circle for the other half is
   **suppressed** — one object, one mark. Fusion angles are already rig-frame (fusion owns the

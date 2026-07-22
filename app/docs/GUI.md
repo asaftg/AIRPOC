@@ -390,6 +390,14 @@ reserved `null`: `batt`, `alt`, `brg`, `rng`; plus **`eo`** — the EO feed's `/
 - **"Recorder tap" ≠ "feed up".** A feed's port can be up (live view fine) while its
   `/dev/shm/airpoc.*` tap is gone → recordings come out empty. The launcher's `/status`
   reports this honestly (`eo_rec`/`radar_rec`); press START to re-attach.
+- **Feed reads time out (5 s), on purpose.** Every client socket carries `SO_RCVTIMEO`. Two
+  things depend on it: the console can be **stopped** (a reader parked in an unbounded `read()`
+  never re-reads its run flag, so the process used to hang after SIGTERM while still consuming
+  every feed), and a **wedged** daemon — connection open, nothing sent — ends the session and
+  shows NOT CONNECTED instead of a frozen picture that looks live. 5 s sits far above every
+  feed's message interval (EO 60 Hz, radar ~26 Hz, detector/tracker 15 Hz, fusion ≥1 Hz
+  heartbeat), so a working connection is never recycled. If a feed ever legitimately goes quiet
+  for longer than that, the symptom is a reconnect every 5 s — raise this before muting it.
 
 > Pitfall: `LIGHT` is live-fire (invisible 850 nm, eye hazard). There is **no**
 > confirmation step — one click emits immediately, and the device resets to MAX

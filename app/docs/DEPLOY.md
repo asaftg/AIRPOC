@@ -52,6 +52,25 @@ curl -s localhost:8096/stats                  # read the daemon's own knobs back
 A `/ctl` reply of `ok` only means the console accepted and forwarded the request. Whether the
 daemon honoured it is only visible in that daemon's `/stats`.
 
+## Restarting the console
+
+`pkill -x app` (or stop.sh's `pkill -f "[.]/app -p 8080"`) is a clean SIGTERM and the console
+now exits in milliseconds. If you are running a build from **before 2026-07-22**, expect it to
+release `:8080` and then hang forever, still consuming every feed — check `pgrep -af "[.]/app"`
+after a stop and `kill -9` anything left over.
+
+Do not start a second console while one is alive: only one can hold `:8080`, and you end up
+debugging a page served by the process you thought you replaced. The launcher's START skips
+`:8080` when it is already up, so **stop first, then START**.
+
+## The launcher binary is separate
+
+`start.sh` / `stop.sh` are scripts — a `git pull` is enough. `airpoc-launcher.c` is a compiled
+binary behind a systemd service, so a change there needs `cc -O2 -Wall -o airpoc-launcher
+airpoc-launcher.c` **and** `sudo systemctl restart airpoc-launcher` (or `launcher/install.sh`,
+which also rewrites the unit and the sudoers rule). Until that restart, `/status` is still the
+old binary's.
+
 ## Shared bench
 
 Other agents work on the same box and the same checkout. `git reset --hard` there will
