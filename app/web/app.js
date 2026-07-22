@@ -1250,27 +1250,29 @@
       draw(false, true);
     }).catch(function () {});
   }
-  /* The daemon's applied rate is the authority — it clamps, so the value that comes back is not
-   * always the value that was asked for. Re-time the poll to it and reflect it on the slider
-   * (unless the operator is mid-drag). */
+  /* Re-time the running poll so the console fetches at the daemon's publish rate — no faster
+   * (the same bytes twice) and no slower (a backdrop staler than it needs to be). */
+  function setSceneTimer(hz) {
+    scene.hz = hz;
+    if (!scene.on) return;
+    if (scene.poll) clearInterval(scene.poll);
+    scene.poll = setInterval(pollScene, Math.max(40, Math.round(1000 / hz)));
+  }
+  /* Take the rate from a POLLED payload — that one is current. Reflect it on the slider unless
+   * the operator is mid-drag, and re-time only on a real change. */
   function applySceneHz(hz) {
     if (typeof hz !== "number" || !isFinite(hz) || hz <= 0) return;
     var shown = Math.max(1, Math.min(26, Math.round(hz)));
     if ($("scn-rate") && Date.now() - scene.hzTouch > 1500 && document.activeElement !== $("scn-rate")) {
       $("scn-rate").value = shown; $("scn-ratev").textContent = shown + " Hz";
     }
-    if (Math.abs(hz - scene.hz) < 0.01) return;
-    scene.hz = hz;
-    if (scene.on && scene.poll) {                       /* re-time the running poll to match */
-      clearInterval(scene.poll);
-      scene.poll = setInterval(pollScene, Math.max(40, Math.round(1000 / hz)));
-    }
+    if (Math.abs(hz - scene.hz) >= 0.01) setSceneTimer(hz);
   }
   function setScene(on) {
     scene.on = on ? 1 : 0;
     try { localStorage.setItem("sceneOn", String(scene.on)); } catch (x) {}
     if (scene.poll) { clearInterval(scene.poll); scene.poll = null; }
-    if (scene.on) { pollScene(); scene.poll = setInterval(pollScene, Math.max(40, Math.round(1000 / scene.hz))); }
+    if (scene.on) { pollScene(); setSceneTimer(scene.hz); }
     else { scene.data = null; sceneKey = ""; if ($("scn-age")) $("scn-age").textContent = "—"; }
     draw(false, true);
   }
@@ -1288,8 +1290,13 @@
     fetch("/scene?rate=" + hz).then(function (r) { return r.json(); }).then(function (d) {
       if (!d) return;
       if (d.cells) { scene.data = d; scene.frames = d.frames || 0; sceneKey = ""; }
-      scene.hzTouch = 0;                      /* let the applied value win from here */
-      applySceneHz(d.rate_hz);
+      /* Do NOT read rate_hz out of THIS reply. The daemon serialises its snapshot on its own
+       * timer, so a control request comes back with the snapshot that predates it — measured on
+       * the box: ask for 3 Hz, the reply still says 12, and 1.5 s later it reads 3. Driving the
+       * slider from that echo would visibly snap it back to the old value mid-drag. The slider's
+       * range (1..26) sits inside the daemon's clamp (0.2..26), so the request is what applies;
+       * the next poll confirms it from the wire, which is where readback belongs. */
+      setSceneTimer(hz);
       draw(false, true);
     }).catch(function () {});
   };
