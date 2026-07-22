@@ -5,8 +5,14 @@ How the EO feed is delivered, and the plan for the RF datalink.
 ## Two consumers, two needs
 - **Detector** (on-device): consumes the **full-native 1440×1088** frame directly from
   `libeo` — no encode, no downscale, ever.
-- **Operator display**: an encoded stream sized for the link. The operator picks the
-  size (`/ctl?res=`) and rate (`/ctl?fps=`); shrinking it never touches the detector.
+- **Operator display**: an encoded stream sized for the link. Three bandwidth levers,
+  all live and none of which touch the detector (it reads raw Y10 off the tap): frame
+  **size** (`/ctl?res=`, coarse 4-step ladder), display **rate** (`/ctl?disp_fps=`,
+  caps `/stream` fps without slowing the sensor), and JPEG **quality** (`/ctl?q=`,
+  30…95, default 85 — the *fine* axis the res ladder lacks: q60 ≈ −47 % bytes for a
+  difference you have to hunt for, so on a weak link the same budget buys a bigger soft
+  picture instead of a tiny sharp one). `fps=` also exists but is the sensor operating
+  rate (it caps exposure), not a display-only knob.
 
 ## Platform fact: no hardware video encoder
 > The Orin Nano Super has **no NVENC** (fused off) and its NVJPG engine is decode-only.
