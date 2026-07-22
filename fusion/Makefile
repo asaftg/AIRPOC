@@ -33,8 +33,10 @@ tools/fake_feeds: tools/fake_feeds.c
 # Tier 3: two-daemon loopback smoke (fake SSE feeds -> fusiond -> endpoints).
 check: tools fusiond
 	./tools/replay
-	gunzip -kf tools/fixtures/radar_wire.jsonl.gz tools/fixtures/trk_wire.jsonl.gz
+	gunzip -kf tools/fixtures/radar_wire.jsonl.gz tools/fixtures/trk_wire.jsonl.gz \
+	           tools/fixtures/flicker_radar.jsonl.gz tools/fixtures/flicker_trk.jsonl.gz
 	./tools/wire_replay tools/fixtures/radar_wire.jsonl tools/fixtures/trk_wire.jsonl
+	./tools/wire_replay tools/fixtures/flicker_radar.jsonl tools/fixtures/flicker_trk.jsonl --wire-stamps
 	./tools/smoke.sh
 
 %.o: %.c
@@ -42,6 +44,7 @@ check: tools fusiond
 
 clean:
 	rm -f $(OBJ) fusiond tools/replay tools/wire_replay tools/fake_feeds \
-	      tools/fixtures/radar_wire.jsonl tools/fixtures/trk_wire.jsonl
+	      tools/fixtures/radar_wire.jsonl tools/fixtures/trk_wire.jsonl \
+	      tools/fixtures/flicker_radar.jsonl tools/fixtures/flicker_trk.jsonl
 
 .PHONY: all tools check clean

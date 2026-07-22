@@ -104,7 +104,13 @@ static void on_rad_frame(const char *json, void *user)
     RadMeta m;
     int n = rad_parse(json, tgts, FUS_MAX_RAD, &m);
     pthread_mutex_lock(&S.lk);
-    uint64_t t = m.timestamp_s > 0 ? (uint64_t)(m.timestamp_s * 1e9) : now_ns();
+    /* One clock for the whole core: our own CLOCK_MONOTONIC at processing.
+     * The two wires are stamped by pipelines with different latencies (the EO
+     * stamp lags the radar stamp by 20-80 ms), so using wire stamps makes the
+     * tick time jump backwards on every EO frame - that was the radar-flicker
+     * bug (REC 20260722T165848Z). Arrival-time skew (sub-ms on localhost) is
+     * far below the association gates. */
+    uint64_t t = now_ns();
     if (S.rad_frame_id && m.frame_id && m.frame_id < S.rad_frame_id)
         fus_core_sensor_reset(S.core, 0, t);          /* daemon restarted */
     S.rad_frame_id = m.frame_id;
@@ -128,7 +134,7 @@ static void on_trk_frame(const char *json, void *user)
     int n = trk_parse(json, trks, FUS_MAX_EO, &m);
     pthread_mutex_lock(&S.lk);
     if (m.ifov_rad > 0) fus_core_set_eo_geom(S.core, m.img_w, m.img_h, m.ifov_rad);
-    uint64_t t = m.t_pub_ns ? m.t_pub_ns : now_ns();
+    uint64_t t = now_ns();     /* one clock for the core - see on_rad_frame */
     if (S.eo_frame_id && m.frame_id && m.frame_id < S.eo_frame_id)
         fus_core_sensor_reset(S.core, 1, t);
     S.eo_frame_id = m.frame_id;

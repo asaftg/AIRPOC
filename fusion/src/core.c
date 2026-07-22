@@ -75,6 +75,17 @@ struct FusCore {
 static double clampd(double v, double lo, double hi){ return v<lo?lo:v>hi?hi:v; }
 static double sq(double v){ return v*v; }
 
+/* Signed seconds since `a`. The two sensor wires are stamped by different
+ * pipelines with different latencies, so the tick time is NOT monotonic
+ * across sensors - a naive uint64 subtraction underflows on a backwards
+ * step and made "22 ms ago" look like centuries (the radar-flicker bug,
+ * REC 20260722T165848Z). Negative = `a` is newer than t; durations clamp
+ * that to 0 at the call site. */
+static double since_s(uint64_t t, uint64_t a)
+{
+    return (double)(int64_t)(t - a) / 1e9;
+}
+
 FusCore *fus_core_new(void)
 {
     FusCore *c = calloc(1, sizeof *c);
@@ -115,9 +126,9 @@ static FusEoTrk *eo_by_tid(FusCore *c, int tid)
     return NULL;
 }
 static int rad_fresh(const FusCore *c, uint64_t t)
-{ return c->rad_ns && (t - c->rad_ns) < (uint64_t)(FUS_RAD_FRESH_S * 1e9); }
+{ return c->rad_ns && since_s(t, c->rad_ns) < FUS_RAD_FRESH_S; }
 static int eo_fresh(const FusCore *c, uint64_t t)
-{ return c->eo_ns && (t - c->eo_ns) < (uint64_t)(FUS_EO_FRESH_S * 1e9); }
+{ return c->eo_ns && since_s(t, c->eo_ns) < FUS_EO_FRESH_S; }
 
 /* rig-frame radar angles (trim applied) */
 static double r_az(const FusCore *c, const RSlot *s){ return s->az + c->k.trim_az; }
@@ -186,8 +197,8 @@ static double pair_d2(const FusCore *c, const RSlot *r, const FusEoTrk *e,
     double infl = 1.0;                     /* sigma scale during a reset grace */
     if (t < c->reset_until_ns[0] || t < c->reset_until_ns[1]) infl = 2.0;
 
-    double dt_r = c->rad_ns ? clampd((double)(t - c->rad_ns) / 1e9, 0, FUS_MAX_EXTRAP_S) : 0;
-    double dt_e = c->eo_ns  ? clampd((double)(t - c->eo_ns)  / 1e9, 0, FUS_MAX_EXTRAP_S) : 0;
+    double dt_r = c->rad_ns ? clampd(since_s(t, c->rad_ns), 0, FUS_MAX_EXTRAP_S) : 0;
+    double dt_e = c->eo_ns  ? clampd(since_s(t, c->eo_ns),  0, FUS_MAX_EXTRAP_S) : 0;
 
     double s_eaz = fmax(e->s_az, FUS_EO_SIG_FLOOR), s_eel = fmax(e->s_el, FUS_EO_SIG_FLOOR);
     double S_az = sq(infl) * (sq(FUS_SIG_RAD_AZ) + sq(s_eaz))
@@ -265,7 +276,7 @@ static void rebind_scan_rad(FusCore *c, uint64_t t)
     for (int i = 0; i < FUS_MAX_TRK; i++) {
         FTrk *f = &c->trk[i]; if (!f->used) continue;
         if (f->r_tid < 0 || !f->r_lost_ns) { f->rb_r_tid = -1; f->rb_r_cnt = 0; continue; }
-        double dt = clampd((double)(t - f->r_lost_ns) / 1e9, 0, FUS_REBIND_GRACE_S);
+        double dt = clampd(since_s(t, f->r_lost_ns), 0, FUS_REBIND_GRACE_S);
         double paz = f->az + f->vaz * dt, pel = f->el + f->vel * dt;
         double pr  = f->have_r ? f->r_f + f->rdot_f * dt : -1;
         double gaz = FUS_REBIND_SIGMA_K * FUS_SIG_RAD_AZ;
@@ -296,7 +307,7 @@ static void rebind_scan_eo(FusCore *c, uint64_t t)
     for (int i = 0; i < FUS_MAX_TRK; i++) {
         FTrk *f = &c->trk[i]; if (!f->used) continue;
         if (f->e_tid < 0 || !f->e_lost_ns) { f->rb_e_tid = -1; f->rb_e_cnt = 0; continue; }
-        double dt = clampd((double)(t - f->e_lost_ns) / 1e9, 0, FUS_REBIND_GRACE_S);
+        double dt = clampd(since_s(t, f->e_lost_ns), 0, FUS_REBIND_GRACE_S);
         double paz = f->az + f->vaz * dt, pel = f->el + f->vel * dt;
         int hit = -1;
         for (int j = 0; j < c->neo; j++) {
@@ -361,7 +372,7 @@ static void sustain_fused(FusCore *c, uint64_t t)
             f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t; continue;
         }
         double gate, d2 = pair_d2(c, r, e, t, &gate);
-        double dt = f->cofresh_ns ? clampd((double)(t - f->cofresh_ns) / 1e9, 0, 0.5) : 0;
+        double dt = f->cofresh_ns ? clampd(since_s(t, f->cofresh_ns), 0, 0.5) : 0;
         f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t;
         if (d2 < gate * FUS_GATE_INCUMBENT) {
             f->miss_s = 0;
@@ -437,7 +448,7 @@ static void candidates(FusCore *c, uint64_t t)
         Cand *cd = &c->cand[i]; if (!cd->used) continue;
         FTrk *fe = trk_by_etid(c, cd->e_tid), *fr = trk_by_rtid(c, cd->r_tid);
         if ((fe && fe->fused) || (fr && fr->fused) ||
-            (cd->last_hit_ns && (t - cd->last_hit_ns) > 1000000000ull))
+            (cd->last_hit_ns && since_s(t, cd->last_hit_ns) > 1.0))
             cd->used = 0;
     }
     if (!rad_fresh(c, t) || !eo_fresh(c, t)) return;
@@ -518,7 +529,7 @@ static void kill_dead(FusCore *c, uint64_t t)
         int r_live = (f->r_tid >= 0 && !f->r_lost_ns);
         int e_live = (f->e_tid >= 0 && !f->e_lost_ns);
         if (r_live || e_live) continue;
-        if ((double)(t - f->last_live_ns) / 1e9 > FUS_REBIND_GRACE_S) f->used = 0;
+        if (since_s(t, f->last_live_ns) > FUS_REBIND_GRACE_S) f->used = 0;
     }
 }
 
@@ -526,7 +537,7 @@ static void kill_dead(FusCore *c, uint64_t t)
 
 static void vote_class(FTrk *f, const FusEoTrk *e, uint64_t t)
 {
-    double dt = f->votes_ns ? (double)(t - f->votes_ns) / 1e9 : 0;
+    double dt = f->votes_ns ? fmax(0, since_s(t, f->votes_ns)) : 0;
     double decay = exp(-dt / FUS_CLS_DECAY_TAU);
     for (int k2 = 0; k2 < 4; k2++) f->votes[k2] *= decay;
     f->votes_ns = t;
@@ -576,7 +587,7 @@ static int compose(FusCore *c, uint64_t t, FusOut *out, int max)
 
         /* range state */
         if (r) {
-            double dt = f->r_ns ? (double)(t - f->r_ns) / 1e9 : 0;
+            double dt = f->r_ns ? fmax(0, since_s(t, f->r_ns)) : 0;
             double pred = f->have_r ? f->r_f + f->rdot_f * dt : r->r;
             double lim = fmax(FUS_R_CLAMP_BASE, 3.0 * FUS_R_CLAMP_BIN + fabs(f->rdot_f) * dt);
             if (!f->have_r || fabs(r->r - pred) <= lim || f->r_rejects >= 1) {
@@ -586,7 +597,7 @@ static int compose(FusCore *c, uint64_t t, FusOut *out, int max)
             f->have_r = 1; f->r_ns = t;
             o->r_m = f->r_f; o->rdot_mps = f->rdot_f; o->r_stale = 0;
         } else if (f->have_r && f->r_lost_ns) {
-            double lost = (double)(t - f->r_lost_ns) / 1e9;
+            double lost = fmax(0, since_s(t, f->r_lost_ns));
             if (lost < FUS_R_DROP_S) {
                 double dt = clampd(lost, 0, FUS_R_PROP_S);
                 o->r_m = f->r_f + f->rdot_f * dt;
@@ -605,17 +616,17 @@ static int compose(FusCore *c, uint64_t t, FusOut *out, int max)
         }
         if (r) {
             o->rad_tid = f->r_tid;
-            o->rad_coast_s = (double)(t - c->rad_ns) / 1e9;
+            o->rad_coast_s = fmax(0, since_s(t, c->rad_ns));
             o->rad_np = r->t.np; o->sus = r->t.sus; o->mv = r->t.mv;
             conf_r = r->t.conf;
         } else if (f->r_tid >= 0 && f->r_lost_ns && o->r_m > 0) {
             /* radar side lost but range still credited: show the dead binding */
             o->rad_tid = f->r_tid;
-            o->rad_coast_s = (double)(t - f->r_lost_ns) / 1e9;
+            o->rad_coast_s = fmax(0, since_s(t, f->r_lost_ns));
         }
 
         o->src = (f->fused && r && e) ? FUS_SRC_FUSED : (e ? FUS_SRC_EO : FUS_SRC_RAD);
-        o->fused_age_s = f->fused ? (double)(t - f->fused_ns) / 1e9 : 0;
+        o->fused_age_s = f->fused ? fmax(0, since_s(t, f->fused_ns)) : 0;
         o->cls = f->cls;
         double vsum = f->votes[0] + f->votes[1] + f->votes[2] + f->votes[3];
         o->cls_conf = vsum > 0 ? f->votes[f->cls] / vsum : 0;
