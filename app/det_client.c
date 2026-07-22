@@ -21,7 +21,14 @@
 static pthread_t       th;
 static pthread_t       stats_th;
 static int             stats_th_ok = 0;
+/* Seconds a socket read may block before the session is abandoned. Bounds shutdown and
+ * detects a wedged (open but silent) daemon; well above every feed's real message interval. */
+#define RD_TIMEOUT_S 5
+
 static volatile int    run_flag = 0;
+/* The live session socket, so *_stop() can wake a thread parked in read() instead of waiting
+ * out the timeout. -1 when no session is up. */
+static volatile int    g_sess_fd = -1;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  cv = PTHREAD_COND_INITIALIZER;   /* signalled on every message */
 static char           *g_json = NULL;
@@ -32,7 +39,18 @@ static char            g_dstats[STATS_CAP] = "";
 static char            g_host[96] = "127.0.0.1";
 static int             g_port = 8094;
 
-static void nap(int ms) { struct timespec t = { ms / 1000, (long)(ms % 1000) * 1000000L }; nanosleep(&t, NULL); }
+/* Sleep in slices, so a shutdown is noticed within ~100 ms instead of at the end of a full
+ * retry/poll interval. A stop that waits out every thread's longest sleep is a stop the
+ * operator experiences as a hang. */
+static void nap(int ms)
+{
+    while (ms > 0 && run_flag) {
+        int s = ms > 100 ? 100 : ms;
+        struct timespec t = { 0, (long)s * 1000000L };
+        nanosleep(&t, NULL);
+        ms -= s;
+    }
+}
 
 static int connect_daemon(void)
 {
@@ -41,6 +59,15 @@ static int connect_daemon(void)
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons((uint16_t)g_port) };
     if (inet_pton(AF_INET, g_host, &a.sin_addr) != 1) { close(fd); return -1; }
     if (connect(fd, (struct sockaddr *)&a, sizeof(a)) < 0) { close(fd); return -1; }
+    /* A READ TIMEOUT ON EVERY SOCKET. Without one, a session read blocks forever: the feed has
+     * no reason to close a healthy connection, so the reader thread never looks at run_flag
+     * again and the console could not be shut down at all — SIGTERM released the listen port
+     * and then hung in pthread_join, leaving a process that still consumed every feed. It also
+     * means a WEDGED daemon (socket open, nothing sent) ends the session and flips the console
+     * to NOT CONNECTED instead of showing a frozen picture as live. Far above every real feed
+     * rate, so it never recycles a working connection. */
+    struct timeval tv = { RD_TIMEOUT_S, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     return fd;
 }
 
@@ -113,7 +140,9 @@ static void *reader(void *a)
         int fd = connect_daemon();
         if (fd < 0) { g_connected = 0; nap(1000); continue; }
         refresh_stats();
+        g_sess_fd = fd;
         run_session(fd);
+        g_sess_fd = -1;
         close(fd);
         g_connected = 0;
         pthread_mutex_lock(&lk); g_seq++; pthread_cond_broadcast(&cv); pthread_mutex_unlock(&lk);  /* wake pushers so they emit disconnected */
@@ -146,7 +175,15 @@ int det_start(const char *host_port)
 
 void det_stop(void)
 {
-    if (run_flag) { run_flag = 0; pthread_join(th, NULL); if (stats_th_ok) pthread_join(stats_th, NULL); }
+    if (run_flag) {
+        run_flag = 0;
+        /* wake the reader NOW: it is parked in read() on a healthy socket the feed will never
+         * close on its own, and join would otherwise wait out the read timeout (or, before that
+         * timeout existed, forever) */
+        int f = g_sess_fd; if (f >= 0) shutdown(f, SHUT_RDWR);
+        pthread_join(th, NULL);
+        if (stats_th_ok) pthread_join(stats_th, NULL);
+    }
     free(g_json); g_json = NULL; g_cap = g_len = 0;
 }
 
