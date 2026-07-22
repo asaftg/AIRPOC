@@ -689,8 +689,10 @@
         }
         /* Temporal marker: a tiny "t" at the box's top-right corner (in the CLASS colour, so it
          * flags provenance without recolouring the box). Small on purpose — a quiet hint that this
-         * one was promoted from collected evidence, not an alarm. */
-        if (tbd) {
+         * one was promoted from collected evidence, not an alarm.
+         * BOX SHAPES ONLY. The seeker cross draws no box, so a corner-anchored "t" floated in
+         * empty space away from the mark and just read as a stray character. */
+        if (tbd && !(detStyle === "seeker" && !forceBox && !tracked)) {
           ctx.save();
           ctx.font = "bold " + (9 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "left";
           var tx = bx + bw2 / 2 - 6 * dpr, ty = by - bh2 / 2 + 9 * dpr;
