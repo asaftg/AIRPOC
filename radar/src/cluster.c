@@ -131,7 +131,7 @@
 #define FLOOD_R 40.0
 #define FLOOD_N 25
 #define FLOOD_AZ 80.0
-#define FLOOD_HOLD 2.0
+#define FLOOD_HOLD 0.3   /* FIX V1: freeze lapses when the trigger does */
 #define FLOOD_MARGIN 10.0
 /* emission-evidence handoff (re-acquired target after a dropout death) */
 #define INHERIT_S 2.0
@@ -265,6 +265,18 @@
                               *      always takes several consistent hits */
 #define LLR_HIT_MIN (-2.0)   /*      per-hit floor (gate-edge hit != death) */
 #define LLR_MAX 30.0         /*      score cap */
+/* ---- doppler-native association (2026-07-13, ported from 8b277e0) ----
+ * MOVING points are claimed in a 3-D gate (range, azimuth, doppler): a point
+ * must also tell the track's velocity story. dd is claim-to-claim (fast
+ * vehicles carry a systematic claimed-doppler bias and must match their own
+ * claim); the blend only PREDICTS range. Fold-aware at +-V_FOLD. */
+#define DN_R 4.0             /* m    range gate norm */
+#define DN_AZ 4.0            /* deg  azimuth gate norm */
+#define DN_D 1.5             /* m/s  doppler gate norm */
+#define DN_SUM 2.5           /*      combined gate */
+#define DN_YOUNG_HITS 5      /*      below this the velocity fit is not trusted */
+#define DN_MED_ALPHA 0.3     /*      claimed-doppler median EWMA gain */
+#define V_FOLD_MPS 41.45     /*      from the A/G chirp timing */
 #define LLR_MIN (-10.0)      /*      score floor (misses must stay recoverable) */
 /* ---- liar latch (2026-07-16): starved claims = far-clutter ghost ----
  * A real mover past 100 m owns integrable claimed doppler nearly every
@@ -401,6 +413,7 @@ typedef struct {
     double last_moved_t;
     /* consistency guard */
     int guard_bad, ok_streak, guard_pass, ever_passed, coh_bad;
+    double walk_latch_t, liar_t;               /* FIX V4: parole clocks */
     int jit_ctr, deep_pass;  /* soft-trouble counter; held a FULL streak once */
     double pass_r;           /* range where the latch was last held */
     double dop_err;          /* EWMA |median claimed doppler - fitted vr| */
@@ -412,6 +425,8 @@ typedef struct {
     int walk_bad;            /* consecutive decidable-fail frames */
     int walk_latch;          /* convicted breather: lives on, never emitted */
     double llr;              /* sequential track score (LLR confirmation) */
+    double dop_med;          /* EWMA of median claimed doppler (velocity id) */
+    int dop_ok;              /* track has owned moving points */
     double wD, wdR, wcnet, wmed; /* last walk metrics (introspection) */
     double shadow_s;         /* time spent in a stronger target's co-range
                                 co-velocity shadow (reflection suppressor) */
@@ -876,11 +891,37 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             int ti=R->ord[oi]; Track *t=&R->tracks[ti];
             if(t->confirmed != tier) continue;
             int st_ok = t->max_mv >= ST_SUSTAIN_MV;
+            /* velocity identity + doppler-native gate norms (see DN_*) */
+            int dnative = t->dop_ok;
+            double vr_eff;
+            if(!t->dop_ok)                      vr_eff = t->vr;
+            else if(t->hits_total < DN_YOUNG_HITS || t->coh_bad)
+                                                vr_eff = t->dop_med;
+            else                                vr_eff = 0.6*t->dop_med + 0.4*t->vr;
+            double prd = t->r + vr_eff*dt;
+            double gcap = t->confirmed ? CONF_GROW_CAP : MISS_GROW_CAP;
+            double g = t->coh_bad ? 1.0 : 1.0 + MISS_GROW*t->misses;
+            if(g > gcap) g = gcap;
+            double nr = DN_R*g, naz = DN_AZ*g;
             for(int i=0;i<m;i++){
                 if(!tier && tier1[i]) continue;          /* leftovers only */
-                if(!ismv[i] && !st_ok) continue;
-                double dr=fabs(rs[i]-PR[ti])/RG[ti], da=fabs(azs[i]-PAZ[ti])/AZG[ti];
-                if(dr<1.0 && da<1.0){ double d=dr+da; if(d<bestd[i]){ bestd[i]=d; owner[i]=ti; } }
+                if(ismv[i] && dnative){
+                    /* 3-D doppler-native gate (moving points) */
+                    double dr=fabs(rs[i]-prd)/nr, da=fabs(azs[i]-PAZ[ti])/naz;
+                    if(dr>=1.0 || da>=1.0) continue;
+                    double dd0=fabs(dops[i]-t->dop_med);
+                    double ddm=fabs(dops[i]-t->dop_med+2.0*V_FOLD_MPS);
+                    double ddp=fabs(dops[i]-t->dop_med-2.0*V_FOLD_MPS);
+                    double dd=(ddm<dd0?ddm:dd0); if(ddp<dd) dd=ddp;
+                    dd/=DN_D;
+                    if(dd>=1.0) continue;
+                    double d=dr+da+dd;
+                    if(d<DN_SUM && d<bestd[i]){ bestd[i]=d; owner[i]=ti; }
+                } else {
+                    if(!ismv[i] && !st_ok) continue;
+                    double dr=fabs(rs[i]-PR[ti])/RG[ti], da=fabs(azs[i]-PAZ[ti])/AZG[ti];
+                    if(dr<1.0 && da<1.0){ double d=dr+da; if(d<bestd[i]){ bestd[i]=d; owner[i]=ti; } }
+                }
             }
         }
         if(tier){
@@ -940,6 +981,8 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 vd=med(gv,nmv_hit);
                 double derr=fabs(vd - t->vr);
                 t->dop_err=(1-DOP_ALPHA)*t->dop_err + DOP_ALPHA*derr;
+                if(!t->dop_ok){ t->dop_med=vd; t->dop_ok=1; }
+                else t->dop_med=(1-DN_MED_ALPHA)*t->dop_med + DN_MED_ALPHA*vd;
             }
             /* half-extents from the frame's points (for the wire box) */
             double mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
@@ -1050,7 +1093,10 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
         else if(t->guard_bad>0) t->guard_bad--;
         if(soft) t->jit_ctr++;
         else if(t->jit_ctr>0) t->jit_ctr--;
-        if(hard || soft) t->ok_streak=0;
+        if(hard) t->ok_streak-=2;               /* FIX V3: decay, not reset */
+        else if(soft) t->ok_streak-=1;
+        if(t->ok_streak<0) t->ok_streak=0;
+        if(0) t->ok_streak=0;
         else {
             int frozen = (now_t < R->flood_until) && (t->r < FLOOD_R+FLOOD_MARGIN);
             int standing = t->ever_passed && fabs(t->r - t->pass_r) < RELATCH_DR;
@@ -1058,12 +1104,23 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                && (r_net>=POS_NET || c_net>=c_move_floor || standing))
                 t->ok_streak++;
         }
-        int need = t->ever_passed ? GUARD_EMIT_RE : GUARD_EMIT;
+        int need = GUARD_EMIT_RE;   /* FIX V2: same short bar for first emission */
         if(t->ok_streak>=need){ t->guard_pass=1; t->ever_passed=1; }
         if(t->ok_streak>=GUARD_EMIT) t->deep_pass=1;
         if(t->guard_pass) t->pass_r=t->r;
         if(t->guard_bad>=GUARD_UNLATCH || t->jit_ctr>=GUARD_UNLATCH)
             t->guard_pass=0;
+    }
+    /* FIX V4: parole - a ban expires after 3 s; counters stay one short of
+     * the kill threshold so one clean re-offense re-latches immediately. */
+    for(int oi=0;oi<R->nord;oi++){
+        Track *t=&R->tracks[R->ord[oi]];
+        if(t->walk_latch && now_t - t->walk_latch_t > 3.0){
+            t->walk_latch=0; t->walk_bad = WALK_KILL>0 ? WALK_KILL-1 : 0;
+        }
+        if(t->liar && now_t - t->liar_t > 3.0){
+            t->liar=0; t->liar_bad = LIAR_KILL>0 ? LIAR_KILL-1 : 0;
+        }
     }
     /* ---- walk guard: motion verification (see WALK_* block) ---- */
     for(int oi=0;oi<R->nord;oi++){
@@ -1103,7 +1160,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             } else {
                 t->walk_bad++; t->mv_class=MV_SUSPECT;
                 if(!t->mv_ever && t->walk_bad>=WALK_KILL)
-                    t->walk_latch=1;            /* breather: off the wire */
+                    { t->walk_latch=1; t->walk_latch_t=now_t; } /* breather (paroled, V4) */
             }
         } else {               /* slow / tangential-quiet: not judged */
             t->walk_bad=0; t->mv_class=MV_UNVERIFIED;
@@ -1127,7 +1184,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
             t->liar_bad++;                             /* starved claims */
         else if(tcov>=WALK_COV_MIN_S && t->liar_bad>0)
             t->liar_bad--;                             /* guard_bad hysteresis */
-        if(t->liar_bad>=LIAR_KILL) t->liar=1;          /* latch: off the wire */
+        if(t->liar_bad>=LIAR_KILL && !t->liar){ t->liar=1; t->liar_t=now_t; }  /* paroled latch (V4) */
     }
     /* ---- lifecycle + confirmation (python order) ---- */
     for(int oi=0;oi<R->nord;){
@@ -1231,6 +1288,7 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                 t->pass_r=crr;
                 t->f_az=caz; t->f_el=cel; t->f_r=crr;   /* output filter seed */
                 t->o_az=caz; t->o_el=cel; t->f_init=1;
+                t->dop_med=cdop; t->dop_ok=1;           /* velocity identity */
                 if(any_unk) t->snr_unknown=1;
                 if(smax>-1e9
                    && !(now_t < R->flood_until && crr < FLOOD_R+FLOOD_MARGIN))
