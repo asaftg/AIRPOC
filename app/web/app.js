@@ -456,6 +456,12 @@
                az: a[0] * D, el: a[1] * D,
                rng: (typeof t.r_m === "number" && t.r_m >= 0) ? t.r_m : null,   /* -1 = no range */
                rdot: (typeof t.rdot_mps === "number") ? t.rdot_mps : null,
+               /* Fusion has no state field; it reports per-side staleness instead. A row whose
+                * live side has not been measured for half a second is coasting, whatever the
+                * label says — same meaning the tracker's own "coast" carries, so the ranking can
+                * treat them identically. -1 means that side is absent, not stale. */
+               state: ((typeof t.eo_coast_s === "number" && t.eo_coast_s > 0.5) ||
+                       (typeof t.rad_coast_s === "number" && t.rad_coast_s > 0.5)) ? "coast" : "conf",
                rstale: t.r_stale === 1, raw: t };
     });
   }
@@ -512,6 +518,12 @@
    * Note this makes a moving VEHICLE outrank a stationary HUMAN. That follows "EO moving targets
    * are always stronger than static"; swap tiers 2 and 3 if class should win instead. */
   var CLS_RANK = { human: 300, vehicle: 200, drone: 100 };
+  /* How solid the track itself is, above class and confidence. Measured on the live wire: a
+   * confirmed vehicle can sit at 1052 hits over 70 s while a flickering blob 4 s old with 15 hits
+   * carries a similar instantaneous confidence. They are not comparable targets, and confidence
+   * alone cannot tell them apart — the detector's confidence on one parked car swings across tens
+   * of points frame to frame. State is the tracker's own verdict on whether the thing exists. */
+  var STATE_RANK = { conf: 600, tent: 300, coast: 0 };
   /* Bearing rate that counts as MOVING, in rad/s, with a Schmitt gap so a target sitting on the
    * threshold does not flip tiers every frame. 0.003 rad/s ~= 0.17 deg/s — above the tracker's
    * position jitter, below a walker at any range we care about. */
@@ -525,6 +537,7 @@
   function rankScore(t, moving) {
     var s = (t.src === "fus" ? 30000 : t.src === "eo" ? 20000 : 10000);
     if (moving) s += 3000;
+    s += STATE_RANK[t.state || "conf"] || 0;   /* a row with no state (radar) counts as confirmed */
     s += CLS_RANK[t.cls] || 0;
     s += (t.conf || 0) * 30;                      /* 0..30: a 0.1 confidence gap is worth 3 */
     s -= Math.min(t.rng || 0, 5000) / 2000;       /* 0..-2.5: nearer wins ties only */
@@ -617,7 +630,12 @@
       var e = tgtSeen[k];
       e.moving = isMoving(e.t, e.moving);
       var raw = rankScore(e.t, e.moving);
-      e.score = (e.score == null) ? raw : e.score + (raw - e.score) * 0.4;   /* smooth the jitter */
+      /* ASYMMETRIC smoothing: fall fast, rise slow. A symmetric average made a target that had
+       * just dropped from 60% to 24% keep its old rank for seconds while displaying the new
+       * number — the row you read and the order you saw were answering different questions.
+       * Rising slowly still keeps the list calm; falling quickly keeps it honest. */
+      if (e.score == null) e.score = raw;
+      else e.score += (raw - e.score) * (raw < e.score ? 0.7 : 0.3);
     });
     for (var i = 0, swaps = 0; i < tgtOrder.length - 1 && swaps < MAX_SWAPS; i++) {
       var a = tgtSeen[tgtOrder[i]], b = tgtSeen[tgtOrder[i + 1]];
