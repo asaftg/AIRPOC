@@ -1,7 +1,8 @@
 # Radar controls the console should expose — message for the GUI agent
 
-**Ask: cut the radar tuning panel down to three controls.** Keep **FOV**,
-**MIN SNR** and **MIN SPD**. Remove the other seven from the operator screen.
+**Ask: cut the radar tuning panel down to four controls.** Keep **FOV**,
+**EL**, **MIN SNR** and **MIN SPD**. Remove the other six from the operator
+screen.
 
 They all still work and `/ctl` keeps accepting all of them — this is about what
 belongs in front of an operator, not about deleting the endpoint. The bench
@@ -12,14 +13,15 @@ through them).
 
 | control | `/ctl` param | why it belongs to the operator |
 |---|---|---|
-| **FOV ±** | `fov` | where to look. Narrowing it cuts off-axis clutter. |
+| **FOV ±** | `fov` | where to look, horizontally. Narrowing it cuts off-axis clutter. |
+| **EL ±** | `elmax` | where to look, vertically. Same control, other axis: narrow it to reject ground clutter and multipath from below. Clamps 5-90 deg, exactly like FOV. Default 20 deg is the antenna's beam edge - the useful CEILING, not a fixed setting. |
 | **MIN SNR** | `snrmin` | the one real sensitivity lever: detections vs false alarms. |
 | **MIN SPD** | `speed` | how fast a thing must move to count as a mover. |
 
 ## Remove from the operator screen
 
 `DEDUP` (`eps`), `MIN PTS` (`minpts`), `MERGE GATE` (`doppler`),
-`CONFIRM` (`confirm`), `COAST` (`coast`), `PARK HOLD` (`park`), `EL ±` (`elmax`).
+`CONFIRM` (`confirm`), `COAST` (`coast`), `PARK HOLD` (`park`).
 
 Two reasons:
 
@@ -32,11 +34,6 @@ Two reasons:
    doppler=1.200 confirm=3 coast=0.400 park=15.000`.
    Moving one in the field silently invalidates every corpus result, with no
    record of what changed.
-
-`EL ±` is a judgement call — its 20° default is the antenna's physical
-elevation beam edge, so it is physically meaningful rather than arbitrary. It is
-on the remove list because it is set-and-forget, not something to drive during a
-mission. If you would rather keep it, that is defensible; the other six are not.
 
 ## MIN SNR and MIN SPD now drive BOTH detectors
 
