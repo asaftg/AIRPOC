@@ -51,16 +51,22 @@ Build: `make libeo.a`, then link `libeo.a -ljpeg -lpthread -lm` (libeo itself ne
 at a time:
 
 - **Production: `eo_pipeline`.** It owns the camera and serves the module's HTTP
-  surface on `:8091` (systemd `eo-pipeline.service`, `Restart=always`). The
+  surface on `:8091`. It is started by the **`:8088` launcher** (`app/launcher/start.sh`),
+  **not** systemd — `eo-pipeline.service` ships in the repo but is not installed, and
+  `start.sh` has no respawn loop, so **nothing auto-restarts EO today** (see README). The
   operator console (`app/`) does **not** link `libeo` — it is a thin HTTP proxy
   that consumes `:8091` (`app/Makefile` links its own five objects, no libeo and
   no libjpeg).
 - **`libeo.a` is the static library `eo_pipeline` is built from** (capture, sensor,
   AE, ISP) and has **no consumer today**. Note what it does *not* contain: the
-  `/ctl`, `/stats` and `/stream` surface documented below, and the tone-map,
-  median, denoiser and illuminator controls, all live in the `eo_pipeline` binary
-  (`Makefile`: `LIBEO_SRC` vs `APP_SRC`). Linking `libeo.a` gets you frames and AE
-  only — not the control surface this document describes.
+  `/ctl`, `/stats` and `/stream` HTTP surface documented below, the display loop that
+  drives the ISP (`main.c`), the night denoiser (`tdn.c`) and the illuminator
+  (`illum.c`) — all `APP_SRC`, i.e. the binary. What IS in `libeo.a` (`LIBEO_SRC` =
+  `libeo.c capture.c sensor.c ae.c isp.c`): capture, sensor, AE, the ISP primitives
+  (tone-map, median, metering) **and the full `eo_bench.h` control API** — every
+  `eo_set_*` / `eo_stats` / `eo_frame_ae` is implemented in `libeo.c`. So linking
+  `libeo.a` gets you frames *plus* the control API; what you do **not** get is the HTTP
+  transport, the display loop, the denoiser and the illuminator.
 - Only one process may hold the camera. `eo_start()` returns `<0` if it is already
   held, so stop the service before running a second instance by hand.
 
@@ -122,6 +128,7 @@ Two bandwidth levers + the full ISP panel. The **display** shrinks freely; the
 | `?denoise=` | 0/1 | **night temporal denoiser** (display-only; default 1). The knob ENABLES it; it actually runs only when the night gate engages (high applied gain, hysteresis) — `/stats.dn_active` says so. Turn OFF to reclaim its CPU (~0.5 core at night); day cost is zero either way. Detector is unaffected (raw tap) |
 | `?spot_ae=` | 0/1 | **illuminated-region AE** (default 1). When the illuminator is ON, the AE meters the beam region (auto-located; median of lit pixels, robust to blown road signs) instead of the whole frame — exposes the lit SUBJECT to mid-gray + cuts gain (less grain) instead of over-exposing it to lift a black background. Gated on illuminator-on + enough lit content, so daytime / far-dark falls back to whole-frame. `/stats.spot_active` says when it's running; `spot_cx/cy` = the beam-window center. Affects the whole pipeline (it's real exposure), so the detector benefits too |
 | `?disp_fps=` | 12…60 | **display-only frame-rate cap** (default 30). Decimates the display chain (denoise → tone-map → encode) to `min(sensor_fps, disp_fps)`; the sensor rate, AE, exposure, and the detector's native Y10 tap all stay at full 60 fps. Halves preview CPU at 30. Wire rate of `/stream` = this value. |
+| `?q=` | 30…95 | **JPEG quality** of the display stream (default 85, clamped). The *fine* bandwidth axis — the `res` ladder is a coarse 4-step cliff, this degrades gracefully. Measured on the wire: q85 ≈ 6.9 Mb/s, q60 ≈ 3.65 Mb/s (−47 %), q40 ≈ 2.6 Mb/s. On a weak link the same bytes buy ~640×480 at q60 instead of 320×240 at q85. Display path ONLY — the detector reads raw Y10 off the tap and the recorder's **native** channel records raw frames, so neither is affected (the recorder's *display* channel does follow it, being the preview copy). Below ~30 the 8×8 blocking starts eating small far-target signatures; above 95 costs bits for nothing |
 | `?zoom=` | 1/2/4/8 | digital zoom |
 | `?laser=`·`?power=`·`?fov=` | 0/1 · 0…255 · deg | illuminator |
 
@@ -146,7 +153,8 @@ zoom, hfov, vfov, sharp, connected, laser, lpower, lfov, lpresent`, the denoiser
 state: **`denoise`** (the knob), **`dn_active`** (night gate actually running this
 frame), **`dn_ms`** (measured cost/frame — the GUI can surface it next to the toggle),
 the display-rate state: **`disp_fps`** (applied cap) + **`clients`** (live `/stream`
-clients; 0 = display chain idle), and the spot-AE state: **`spot_ae`** (the knob),
+clients; 0 = display chain idle), **`q`** (applied JPEG quality, 30…95 — read back after
+`/ctl?q=` since it is clamped), and the spot-AE state: **`spot_ae`** (the knob),
 **`spot_active`** (metering the beam this tick), **`spot_cx/spot_cy`** (auto-located beam
 window center, native px; −1 = not yet located).
 
