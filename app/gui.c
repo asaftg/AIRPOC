@@ -43,7 +43,10 @@ void gui_set_recorder(const char *hp)
 }
 
 /* console state (not owned by a feed) */
-static volatile int g_track_man = 0;      /* tracking select: 0 auto / 1 manual */
+/* MANUAL by default — nothing self-selects a target. This is the DECLARED system state that
+ * other modules read, so it must be manual even before any browser connects; leaving it auto
+ * meant a freshly started console announced "auto" until someone opened the page. */
+static volatile int g_track_man = 1;      /* tracking select: 0 auto / 1 manual */
 static volatile int g_engage    = -1;     /* engaged target tid, -1 = none       */
 static volatile unsigned long long g_stream_bytes = 0;  /* total video bytes relayed → true Mb/s meter */
 static volatile unsigned long long g_stream_frames = 0; /* total frames written to clients → delivered-fps meter */
