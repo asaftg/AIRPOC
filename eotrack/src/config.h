@@ -102,8 +102,10 @@
  * unsupported (no detection AND the 60 fps lock cannot find it) for this long, the
  * target has really left the field of view. The track is then dropped and the daemon
  * releases the lock (engaged -> -1) so the operator is never stuck locked on empty space.
- * Much longer than the normal 1 s coast (so the lock is sticky) but bounded. */
-#define TRK_LOCK_LOST_S         2.5
+ * Longer than the normal 1 s coast (so the lock is sticky through occlusion) but bounded.
+ * A target that is really there is re-detected every tick or two, so it never approaches
+ * this; only a target the detector has stopped seeing (left the FOV) does. */
+#define TRK_LOCK_LOST_S         1.5
 
 /* Clutter (translate-vs-oscillate) horizon: over this many seconds a track's net
  * displacement is compared to its path length. An oscillator (foliage) has a long
@@ -155,7 +157,8 @@
  * raw Y10 frame; template rebuilt only from class-consistent NN detections. */
 #define TRK_LOCK_ROI_MAX        192     /* max ROI side (px); template is <= this */
 #define TRK_LOCK_SEARCH         24      /* +/- search radius around the prediction (px) */
-#define TRK_LOCK_SCORE_MIN      0.35    /* NCC below this = "hold", not a fresh anchor */
+#define TRK_LOCK_SCORE_MIN      0.50    /* NCC below this = no match (avoid latching onto
+                                           low-texture background as the target leaves) */
 #define TRK_LOCK_META_HOLD      4       /* frames to freeze template after an AE/illum step */
 
 #endif /* TRK_CONFIG_H */

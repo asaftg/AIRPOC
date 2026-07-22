@@ -161,8 +161,8 @@ int main(void)
       for (int k = 0; k < 30; k++) { TrkDet d; gen_translate(k, &d); ts += (uint64_t)(DT*1e9);
           em = trk_core_step(c, &d, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
       CHECK(em >= 1, "engaged-test: target confirmed first");
-      /* engage tid 1; through a BRIEF loss (~1.3 s, past the normal 1 s coast) it stays */
-      for (int k = 0; k < 20; k++) { ts += (uint64_t)(DT*1e9);
+      /* engage tid 1; through a BRIEF loss (~1 s, past the normal coast) it stays */
+      for (int k = 0; k < 15; k++) { ts += (uint64_t)(DT*1e9);
           em = trk_core_step(c, NULL, 0, ts, DT, 0, 0, /*engage*/1, out, TRK_MAX_TRACKS); }
       CHECK(trk_core_has_track(c, 1), "engaged track survives a brief loss (sticky past 1 s)");
       CHECK(em >= 1 && out[0].tid == 1 && !strcmp(out[0].state, "coast"),

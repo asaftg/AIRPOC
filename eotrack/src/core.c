@@ -516,7 +516,12 @@ void trk_core_lock_update(TrkCore *c, int engaged_tid,
         t->t_meas_ns = t_src_ns;
         t->lock_on = 1;
         t->lock_score = score;
-        if (t->misses > 0) t->misses = 0;       /* the lock is holding it */
+        /* The lock provides smooth position between detector ticks, but it does NOT reset
+         * the miss counter: the DETECTOR is ground truth for "is the target there". If it
+         * did reset, an NCC that hallucinates a match on the background as the target
+         * leaves the FOV would keep the lock alive forever on empty space. So the give-up
+         * timer counts detector misses only, and the lock releases when the detector stops
+         * seeing the target regardless of what the correlator imagines. */
         return;
     }
 }
