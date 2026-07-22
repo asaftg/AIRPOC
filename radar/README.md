@@ -72,8 +72,9 @@ Frame JSON (stable — the GUI/fusion consume this unchanged):
 ```
 { connected, frame_id, timestamp, profile, max_range_m, fov_half_deg,
   num_points, num_targets,
-  points:  [{r,az,el,v,snr,tid}, ...],        // polar canonical; derive
-                                              // x=r*sin(az), y=r*cos(az), z=r*sin(el)
+  points:  [{r,az,el,v,snr,tid}, ...],        // polar canonical; r is SLANT range:
+                                              // x=r*cos(el)*sin(az), y=r*cos(el)*cos(az),
+                                              // z=r*sin(el)
   targets: [{tid,x,y,z,vx,vy,vz,sx,sy,sz,conf,np,sus,mv_class,class}, ...] }
 ```
 Sensor frame: `+x` right, `+y` forward (boresight), `+z` up, metres (`z` carries

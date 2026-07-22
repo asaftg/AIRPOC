@@ -80,7 +80,11 @@ if it trends to ~0 the frame period is too aggressive and frames will drop.
 - **Frame:** sensor frame, metres. `+x` right, `+y` forward (boresight), `+z`
   up. `az = atan2(x,y)` deg, `el = atan2(z, hypot(x,y))` deg.
 - **points[]:** raw cloud, **polar canonical** (2026-07-22): cartesian was
-  dropped - derive `x = r*sin(az)`, `y = r*cos(az)`, `z = r*sin(el)` (degrees).
+  dropped. **`r` is SLANT range** (the straight-line distance, `hypot(x,y,z)` -
+  verified to 5 mm on a live frame), NOT ground range - forgetting this puts
+  every point too far out, worst at high elevation, and looks exactly like a
+  calibration fault. Derive `x = r*cos(el)*sin(az)`, `y = r*cos(el)*cos(az)`,
+  `z = r*sin(el)` (degrees); that reproduces the old cartesian to 3.5 cm.
   Precision is matched to the sensor (r 2dp = native 2.61 m bins, az/el 1dp vs
   ~2.6 deg best bearing accuracy, v 2dp = 0.108 m/s Doppler bin, snr integer
   dB); this halves the point bytes on the operator link. Old recordings replay
