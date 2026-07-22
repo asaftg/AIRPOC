@@ -1854,7 +1854,7 @@
     else if (e.key === "Escape") { closeReplay(); }
   });
 
-  setTrack("auto"); setIllum("auto"); setExpMode(true); applyTheme();
+  setTrack("man");   /* MANUAL on boot - nothing self-selects a target */ setIllum("auto"); setExpMode(true); applyTheme();
   /* NO video-stream watchdog. It caused more harm than it fixed: its reconnect blanked the
    * <img> (src="") to BLACK, and at native res the reload can't complete before the next
    * check, so the video stays black while the overlays keep running — the exact bug seen.
