@@ -89,6 +89,40 @@ Suggested: `turbo` or similar over 16–62 dB for colour, `alpha = occ/255`
 (clamped to a small floor so faint cells stay just visible). Draw **under** the
 live points and target boxes.
 
+## Drawing the cells — get the footprint right
+
+A cell is **not a square**. It is `r_step` deep in RANGE and `r * az_step` wide
+in AZIMUTH, oriented along its own bearing — a wedge, not an axis-aligned box.
+At 50 m a 1 deg cell is **0.87 m** wide; at 150 m it is **2.6 m**.
+
+```
+depth = r_step                      // radial, constant
+width = r * az_step_radians         // tangential, grows with range
+angle = the cell's bearing
+```
+
+Drawing a square of `r_step` on both sides (which is what the radar previewer
+did at first) paints close-in cells ~3x too wide and leaves range under-covered
+relative to azimuth — which also makes any uniform blur smooth azimuth far more
+than range, so range banding survives and looks like an artifact.
+
+Draw the cells slightly oversized (~1.25x) so neighbours overlap, then apply a
+light blur (~1 px) on composite. That removes the polar lattice without implying
+resolution the sensor does not have.
+
+**Do not use finer bins.** Measured on the night street, going from 2 deg to
+0.25 deg azimuth *reduces* confident structure from 65 cells to 39 and more than
+halves median occupancy: the bearing wanders further than the cell is wide, so
+finer cells just scatter the same evidence. 1 deg is the shipped grid and is
+already finer than the sensor's bearing accuracy. Range is hard-quantised at the
+native 2.61 m bin (192 distinct values in the data) — there is nothing between
+range bins to interpolate.
+
+**Presentation:** a PPI fan is the right full-range view. A square x-y map is
+better for a close-range zoom (0-150 m) but wastes most of its area at full
+range, because the +/-60 deg fan is ~870 m wide at 500 m. Both come from the
+same payload, so offering an x-y zoom mode is purely a client-side choice.
+
 ## What it looks like in practice
 
 Night street recording, 100 s, by range band:
