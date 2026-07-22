@@ -87,6 +87,19 @@ static double clampd(double v, double lo, double hi){ return v<lo?lo:v>hi?hi:v; 
 static double sq(double v){ return v*v; }
 static int eo_parked(const FusCore *c, int tid, uint64_t t, double rdot, double r);
 
+/* class-size range: smallest box dimension vs the class WIDTH prior.
+ * Returns -1 when the class is unknown or the box degenerate. */
+static double eo_size_range(const FusEoTrk *e)
+{
+    double w = e->cls == 1 ? FUS_W_HUMAN_M
+             : e->cls == 2 ? FUS_W_VEHICLE_M
+             : e->cls == 3 ? FUS_W_DRONE_M : -1;
+    if (w < 0) return -1;
+    double a = fmin(e->aw, e->ah);
+    if (a < 1e-4) return -1;
+    return w / a;
+}
+
 /* Signed seconds since `a`. The two sensor wires are stamped by different
  * pipelines with different latencies, so the tick time is NOT monotonic
  * across sensors - a naive uint64 subtraction underflows on a backwards
@@ -444,6 +457,11 @@ static void sustain_fused(FusCore *c, uint64_t t)
         int r_ok = f->have_r &&
                    rinno < fmax(FUS_R_CLAMP_BASE,
                                 3.0 * FUS_R_CLAMP_BIN + fabs(f->rdot_f) * rdt);
+        /* fully anchored: range continuous AND the camera's size-range agrees
+         * with it - both strong axes cross-confirmed by the other sensor */
+        double rse = eo_size_range(e);
+        int anchored = r_ok && rse > 0 &&
+                       fabs(log(rse / fmax(r->r, 1.0))) < FUS_SIZERANGE_HOLD_LN;
         f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t;
         /* pair residual ring: a sustained trend means the radar target is
          * sliding PAST this EO object (a pass-by), not riding with it */
@@ -467,9 +485,11 @@ static void sustain_fused(FusCore *c, uint64_t t)
              * it) walking away from the residual this pair married at is
              * definitive evidence of a wrong marriage */
             if (!f->have_ref) { f->res_ref = med; f->have_ref = 1; }
-            else if (fabs(med - f->res_ref) >
-                     FUS_DRIFT_ABS * (r_ok ? FUS_DEPART_RANGE_SCALE : 1.0))
-                departed = 1;
+            else {
+                double sc = anchored ? FUS_DEPART_ANCHORED_SCALE
+                          : r_ok    ? FUS_DEPART_RANGE_SCALE : 1.0;
+                if (fabs(med - f->res_ref) > FUS_DRIFT_ABS * sc) departed = 1;
+            }
         }
         if (departed) {
             /* divorce now, and bar the radar tid from marrying anyone - a
@@ -484,7 +504,10 @@ static void sustain_fused(FusCore *c, uint64_t t)
                                    * that precede a divorce corrupt r_f */
         } else {
             f->miss_s += dt;
-            if (f->miss_s > c->k.divorce_s * (r_ok && !drifting ? FUS_DIVORCE_RANGE_SCALE : 1.0)) {
+            double dsc = drifting ? 1.0
+                       : anchored ? FUS_DIVORCE_ANCHORED_SCALE
+                       : r_ok     ? FUS_DIVORCE_RANGE_SCALE : 1.0;
+            if (f->miss_s > c->k.divorce_s * dsc) {
                 /* divorce: the gid follows the side closer to the row's last
                  * published angles; the other side gets a fresh row. */
                 double de = sq((e->az - f->az) / fmax(e->s_az, FUS_EO_SIG_FLOOR));
@@ -589,6 +612,11 @@ static void candidates(FusCore *c, uint64_t t)
              * no range constant (a slow far approacher simply needs a longer
              * watch before the veto can arm). */
             if (r->t.mv == 1 && eo_parked(c, e->tid, t, r->rdot, r->r)) continue;
+            /* gross-range veto: the camera's size-implied range and the
+             * radar's range beyond ~2.7x apart cannot be the same object */
+            double rse0 = eo_size_range(e);
+            if (rse0 > 0 && fabs(log(rse0 / fmax(r->r, 1.0))) > FUS_SIZERANGE_FORM_LN)
+                continue;
             /* an in-progress candidate is judged like a married pair (position
              * + size, wider gate) so radar jitter cannot starve its courtship;
              * only a BRAND NEW candidate faces the strict full test */
@@ -813,6 +841,7 @@ static int compose(FusCore *c, uint64_t t, FusOut *out, int max)
 
         /* per-side passthrough */
         double conf_e = 0, conf_r = 0;
+        o->r_est = e ? eo_size_range(e) : -1;
         if (e) {
             o->eo_tid = f->e_tid; o->eo_coast_s = e->coast_s;
             o->eo_hits = e->hits; o->grow = e->grow;

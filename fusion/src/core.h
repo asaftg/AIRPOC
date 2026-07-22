@@ -60,6 +60,9 @@ typedef struct {
     double   r_m, rdot_mps;        /* radar range/state; r_m = -1 when absent.
                                     * rdot = dr/dt: NEGATIVE = closing. */
     int      r_stale;              /* 1 = range propagated, radar side lost */
+    double   r_est;                /* camera size-implied range (class width /
+                                    * smallest box dimension), ~+-50% gross;
+                                    * -1 when class unknown. Never overrides r_m. */
     int      cls;                  /* fusion-owned label (sticky vote) */
     double   cls_conf, conf;
     double   fused_age_s;          /* seconds since the pair confirmed (0 unfused) */

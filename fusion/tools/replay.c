@@ -259,7 +259,8 @@ static void t_gid_inherit(void)
 {
     World w; world_init(&w, 1);
     w.tgt[0] = (Tgt){ .az0 = -3 * D2R, .el0 = 0.5 * D2R, .r0 = 250, .rdot = -3,
-                      .cls = 1, .alive_rad = 0, .alive_eo = 1 };
+                      .cls = 1, .alive_rad = 0, .alive_eo = 1,
+                      .aw = 0.002, .rsx = 0.5 };   /* 0.5 m human at 250 m */
     FusCore *c = fus_core_new();
     FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
     FusOut rows[FUS_MAX_OUT];
@@ -753,7 +754,8 @@ static void t_slip(void)
 {
     World w; world_init(&w, 1);
     w.tgt[0] = (Tgt){ .az0 = 1 * D2R, .el0 = 0, .r0 = 180, .rdot = -4, .cls = 2,
-                      .alive_rad = 1, .alive_eo = 1 };
+                      .alive_rad = 1, .alive_eo = 1,
+                      .aw = 0.0094, .rsx = 1.0 };   /* 1.7 m wide vehicle at 180 m */
     FusCore *c = fus_core_new();
     FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
     run(&w, c, 2.5, invariant, NULL);
@@ -763,8 +765,10 @@ static void t_slip(void)
     int n = fus_core_step_rad(c, rf, nr, sim_ns(w.t += 0.01), rows, FUS_MAX_OUT);
     CHECK(find_src(rows, n, FUS_SRC_FUSED), "no marriage before the slip");
 
-    /* radar azimuth slips 1.0 deg, range track stays continuous: hold */
-    w.tgt[0].rad_az_bias = 1.0 * D2R;
+    /* radar azimuth slips 2.5 deg - a REAL slip - with a continuous range
+     * track and the camera's size-range agreeing (class=vehicle): the fully
+     * anchored marriage must hold */
+    w.tgt[0].rad_az_bias = 2.5 * D2R;
     double t0 = w.t;
     while (w.t < t0 + 2.5) {
         w.t += 1.0 / 26.0;

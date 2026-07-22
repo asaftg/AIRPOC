@@ -91,6 +91,25 @@
 #define FUS_DEPART_RANGE_SCALE   1.75  /* departure threshold x when range ok */
 #define FUS_DIVORCE_RANGE_SCALE  2.5   /* divorce_s x when range ok */
 
+/* Class-size range: the box's SMALLEST dimension against a per-class WIDTH
+ * prior. Width survives slant view, prone posture, and vehicle aspect (a car
+ * is 1.8 m across from every angle; its length varies 1.8-4.5 m). Gross
+ * (~+-50%) - never overrides radar, but it is a second witness. */
+#define FUS_W_HUMAN_M   0.5
+#define FUS_W_VEHICLE_M 1.7
+#define FUS_W_DRONE_M   0.4
+#define FUS_SIZERANGE_FORM_LN 1.0  /* formation veto: size-range vs radar range
+                                    * beyond e^1.0 (~2.7x) cannot marry */
+#define FUS_SIZERANGE_HOLD_LN 0.7  /* anchor: size-range within e^0.7 (~2x) of
+                                    * the radar range counts as agreeing */
+
+/* Fully anchored marriage: radar range continuous AND the camera's size-range
+ * agrees with it. Both of the pair's strong axes are then cross-confirmed, so
+ * angle wobble - radar slips run degrees, not tenths - cannot divorce; only a
+ * range break or a pass-by trend can. */
+#define FUS_DEPART_ANCHORED_SCALE  3.5  /* ~2.9 deg departure tolerance */
+#define FUS_DIVORCE_ANCHORED_SCALE 5.0
+
 /* Passing signature: a same-object pair's angle residual is stationary noise;
  * a radar target sliding past a parked object shows a monotonic residual
  * trend. Net drift beyond this across the trend window blocks confirmation

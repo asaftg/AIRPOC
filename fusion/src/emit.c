@@ -26,13 +26,13 @@ static size_t append_row(char *buf, size_t cap, size_t off, const FusOut *o)
     off = adv(off, cap, snprintf(buf + off, cap - off,
         "{\"gid\":%u,\"src\":\"%s\",\"eo_tid\":%d,\"rad_tid\":%d,"
         "\"ang\":[%.4f,%.4f,%.4f,%.4f],\"ang_src\":\"%s\","
-        "\"rate\":[%.4f,%.4f],\"r_m\":%.1f,\"rdot_mps\":%.2f,\"r_stale\":%d,"
+        "\"rate\":[%.4f,%.4f],\"r_m\":%.1f,\"rdot_mps\":%.2f,\"r_stale\":%d,\"r_est\":%.1f,"
         "\"cls\":\"%s\",\"cls_conf\":%.2f,\"conf\":%.3f,"
         "\"fused_age_s\":%.2f,\"eo_coast_s\":%.2f,\"rad_coast_s\":%.2f,"
         "\"grow\":%.3f,\"eo_hits\":%d,\"rad_np\":%d,\"sus\":%d,\"mv\":%d",
         o->gid, src, o->eo_tid, o->rad_tid,
         o->az, o->el, o->aw, o->ah, o->ang_src ? "eo" : "rad",
-        o->vaz, o->vel, o->r_m, o->rdot_mps, o->r_stale,
+        o->vaz, o->vel, o->r_m, o->rdot_mps, o->r_stale, o->r_est,
         cls, o->cls_conf, o->conf,
         o->fused_age_s, o->eo_coast_s, o->rad_coast_s,
         o->grow, o->eo_hits, o->rad_np, o->sus, o->mv));
