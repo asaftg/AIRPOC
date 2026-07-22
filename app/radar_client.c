@@ -105,6 +105,33 @@ static void refresh_stats(void)
     if (body) { body += 4; pthread_mutex_lock(&lk); snprintf(g_rstats, sizeof g_rstats, "%s", body); pthread_mutex_unlock(&lk); }
 }
 
+/* One-shot GET of the daemon's SCENE layer (radar/docs/SCENE_LAYER.md) — the static
+ * occupancy backdrop, plus its own show/hide/clear controls carried in the same query. Not
+ * cached and not part of the SSE session: the daemon only refreshes the snapshot once a
+ * second, so the browser polls it at ~1 Hz through this pass-through. Payload is a few tens
+ * of KB (lit cells only), so the caller owns a large buffer. Returns body length, or 0. */
+int radar_get_scene(const char *query, char *buf, int cap)
+{
+    int fd = connect_daemon();
+    if (fd < 0) return 0;
+    char req[256];
+    int rn = snprintf(req, sizeof req, "GET /scene%s%s HTTP/1.0\r\nHost: radar\r\n\r\n",
+                      (query && *query) ? "?" : "", (query && *query) ? query : "");
+    if (rn < 0 || rn >= (int)sizeof req || write(fd, req, (size_t)rn) < 0) { close(fd); return 0; }
+    int len = 0; ssize_t n;
+    while (len < cap - 1 && (n = read(fd, buf + len, (size_t)(cap - 1 - len))) > 0) len += (int)n;
+    close(fd);
+    if (len <= 0) return 0;
+    buf[len] = 0;
+    char *body = strstr(buf, "\r\n\r\n");
+    if (!body) return 0;
+    body += 4;
+    int blen = len - (int)(body - buf);
+    memmove(buf, body, (size_t)blen);
+    buf[blen] = 0;
+    return blen;
+}
+
 /* Read one SSE session: send GET /stream, skip headers, extract `data: <json>` lines
  * until the socket closes. Returns when the connection ends. */
 static void run_session(int fd)

@@ -22,13 +22,21 @@ int  radar_num_targets(void);    /* target count in the latest frame (for /stats
  * browser over SSE at the sensor's native rate instead of the browser polling. */
 int  radar_wait_frame(unsigned *last_seq, char *buf, int cap, int timeout_ms);
 
-/* Forward a raw control query to the daemon's /ctl (e.g. "eps=8&fov=60"). The daemon
- * owns all six live controls (eps/minpts/speed/snrmin/fov/doppler) and clamps them
- * server-side, so the GUI just forwards and reads back. Best-effort GET /ctl. */
+/* Forward a raw control query to the daemon's /ctl (e.g. "eps=8&fov=60"). The daemon owns
+ * all TEN live controls (eps/minpts/speed/snrmin/fov/elmax/doppler/confirm/coast/park) and
+ * clamps them server-side, so the GUI just forwards and reads back. All ten stay accepted
+ * here even though the operator screen only exposes four of them
+ * (radar/docs/CONSOLE_CONTROLS.md) — the bench drives the rest. Best-effort GET /ctl. */
 void radar_ctl(const char *daemon_query);
 
-/* Copy the daemon's latest /stats JSON (fps, drops, counts, and the current value of
- * all six controls) into buf for slider init + readback. Returns length or 0. */
+/* Copy the daemon's latest /stats JSON (fps, drops, counts, and the current value of every
+ * control) into buf for slider init + readback. Returns length or 0. */
 int  radar_get_stats(char *buf, int cap);
+
+/* One-shot GET of the daemon's /scene — the static occupancy backdrop
+ * (radar/docs/SCENE_LAYER.md). `query` carries its controls verbatim ("on=0", "reset=1",
+ * "halflife=60", ...) or is NULL/empty for a plain read; every form returns the layer.
+ * Display only: it never feeds tracking, guidance or fusion. Returns body length, or 0. */
+int  radar_get_scene(const char *query, char *buf, int cap);
 
 #endif /* AIRPOC_RADAR_H */

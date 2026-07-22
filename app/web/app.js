@@ -259,21 +259,28 @@
   });
   $("s-fps").oninput = function () { $("o-fps").textContent = this.value; fpsTouch = Date.now(); ctl("fps=" + this.value); };
 
-  /* ── radar controls — the daemon's six live knobs (radar/docs/INTEGRATION.md). Sent
-   * namespaced as radar_<key>= (the app strips the prefix → daemon /ctl); clamps are
-   * server-side. Init + readback come from /rstats (the daemon's own /stats). ── */
+  /* ── radar controls — FOUR, on purpose (radar/docs/CONSOLE_CONTROLS.md). Sent namespaced as
+   * radar_<key>= (the app strips the prefix → daemon /ctl); clamps are server-side. Init +
+   * readback come from /rstats (the daemon's own /stats).
+   *
+   * The daemon still accepts all TEN knobs and `/ctl` still forwards all ten — the other six
+   * (eps, minpts, doppler, confirm, coast, park) simply have no place in front of an operator:
+   *   - they are tracker internals with no physical meaning ("merge gate 1.2 m/s" is not
+   *     something anyone can reason about in a field), exposed originally for development;
+   *   - and they are a VALIDATED SET. The defaults are the offline-validated operating point,
+   *     pinned as a knob_vector in radar/tools/regression/tracker_baseline.json. Nudging one on
+   *     the rig silently invalidates every corpus result with no record of what changed.
+   * Bench tuning goes through radar/tools/track_replay.c against the corpus, not through here.
+   *
+   * The four that stay are the ones that answer physical questions: where to look (FOV / EL),
+   * how sensitive to be (MIN SNR), and what counts as moving (MIN SPD). MIN SNR and MIN SPD
+   * drive BOTH detectors — the per-frame clusterer and the slow chainer are one tracker to the
+   * operator, so there is one pair of controls for both and deliberately no separate switch. ── */
   var RADARC = [
     { key: "fov",     stat: "fov_half_deg",     fmt: function (v) { return v.toFixed(0) + "°"; } },
     { key: "elmax",   stat: "el_max_deg",       fmt: function (v) { return v.toFixed(0) + "°"; } },
     { key: "snrmin",  stat: "snr_min_db",       fmt: function (v) { return v.toFixed(0) + " dB"; } },
-    { key: "speed",   stat: "speed_min_mps",    fmt: function (v) { return v.toFixed(1) + " m/s"; } },
-    { key: "doppler", stat: "doppler_gate_mps", fmt: function (v) { return v.toFixed(1) + " m/s"; } },
-    { key: "eps",     stat: "cluster_eps_m",    fmt: function (v) { return v.toFixed(1) + " m"; } },
-    { key: "minpts",  stat: "cluster_min_pts",  fmt: function (v) { return String(v | 0); } },
-    /* temporal-tracker knobs (daemon 94af558): M-of-N confirm, dropout coast, park hold */
-    { key: "confirm", stat: "confirm",          fmt: function (v) { return String(v | 0); } },
-    { key: "coast",   stat: "coast_s",          fmt: function (v) { return v.toFixed(1) + " s"; } },
-    { key: "park",    stat: "park_s",           fmt: function (v) { return v.toFixed(0) + " s"; } }
+    { key: "speed",   stat: "speed_min_mps",    fmt: function (v) { return v.toFixed(1) + " m/s"; } }
   ];
   var rcTouch = 0;
   RADARC.forEach(function (c) {
@@ -1025,6 +1032,104 @@
   });
 
   var radarGeom = null;
+  /* ── SCENE LAYER — the static occupancy backdrop (radar/docs/SCENE_LAYER.md) ──────────────
+   * Stationary radar returns (|doppler| < 0.1 m/s) accumulated into a polar grid, so over tens
+   * of seconds the world draws itself: walls, parked cars, buildings. DISPLAY ONLY — it never
+   * feeds tracking, guidance or fusion, and no target is ever derived from it. It is the fog-of-
+   * war the targets move across, drawn UNDER the live points and boxes.
+   *
+   * Two channels, two questions, so they are bound to two visual properties:
+   *   occ (0..255) = is something really there  -> OPACITY. Noise sits near 0, a wall reaches
+   *                  255, ~4 orders of magnitude, so opacity alone separates world from noise
+   *                  with no threshold to pick.
+   *   snr (dB)     = can you believe WHERE it is -> COLOUR. Bearing accuracy is SNR-limited
+   *                  (±2.6° at 60 dB, ±20° at 28 dB), so the faint smooth arcs in the far field
+   *                  are real returns whose ANGLE is noise. Colouring by strength shows the
+   *                  operator which parts of the picture are geometrically trustworthy instead
+   *                  of hiding it.
+   *
+   * Rendered to an offscreen canvas and blitted: the layer changes once a second while the scope
+   * redraws at the radar's ~27 Hz, so drawing a few thousand sectors per scope frame would be
+   * pure waste. Re-rendered only when new data lands or the view geometry moves. ── */
+  var scene = { on: 0, data: null, frames: 0, poll: null };
+  var sceneCv = null, sceneKey = "";
+  try { scene.on = localStorage.getItem("sceneOn") === "1" ? 1 : 0; } catch (x) {}
+
+  /* 16 dB (noise floor) -> 62 dB (hard structure), cold to hot. Bearing you can trust reads warm. */
+  function snrColor(db) {
+    var t = Math.max(0, Math.min(1, (db - 16) / (62 - 16)));
+    var r, g, b;
+    if (t < 0.5) { var u = t / 0.5; r = 30 + u * 20; g = 90 + u * 140; b = 200 - u * 60; }   /* blue -> green */
+    else { var v = (t - 0.5) / 0.5; r = 50 + v * 205; g = 230 - v * 90; b = 140 - v * 130; } /* green -> amber */
+    return "rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")";
+  }
+
+  /* Draw every lit cell as its true annular sector, in the CURRENT view geometry. Exact rather
+   * than an axis-aligned approximation — at ±60° a rectangle per cell visibly shears the map. */
+  function renderScene(w, h, cx, cy, scale) {
+    var d = scene.data;
+    var key = w + "x" + h + ":" + cx.toFixed(1) + "," + cy.toFixed(1) + "," + scale.toFixed(4) + ":" + scene.frames;
+    if (sceneCv && sceneKey === key) return sceneCv;
+    if (!sceneCv) sceneCv = document.createElement("canvas");
+    if (sceneCv.width !== w || sceneCv.height !== h) { sceneCv.width = w; sceneCv.height = h; }
+    var c = sceneCv.getContext("2d");
+    c.clearRect(0, 0, w, h);
+    sceneKey = key;
+    if (!d || !d.cells || !d.cells.length) return sceneCv;
+    var cells = d.cells, rs = d.r_step || 2.61, a0 = d.az0 || -60, as = d.az_step || 1;
+    var D = Math.PI / 180, diag = Math.hypot(w, h);
+    for (var i = 0; i + 3 < cells.length; i += 4) {
+      var ri = cells[i], ai = cells[i + 1], occ = cells[i + 2], snr = cells[i + 3];
+      var r0 = ri * rs * scale, r1 = (ri + 1) * rs * scale;
+      if (r0 > diag) continue;                                  /* wholly off-canvas */
+      var t0 = (a0 + ai * as) * D, t1 = (a0 + (ai + 1) * as) * D;
+      var p0 = -Math.PI / 2 + t0, p1 = -Math.PI / 2 + t1;       /* world azimuth -> canvas angle */
+      c.globalAlpha = Math.max(0.10, Math.min(0.92, occ / 255)); /* floor: faint cells stay visible */
+      c.fillStyle = snrColor(snr);
+      c.beginPath();
+      c.arc(cx, cy, r1, p0, p1);
+      c.arc(cx, cy, r0, p1, p0, true);
+      c.closePath();
+      c.fill();
+    }
+    c.globalAlpha = 1;
+    return sceneCv;
+  }
+
+  /* ~1 Hz, and only while the layer is shown: the daemon rebuilds its snapshot once a second, so
+   * polling faster just re-sends the same tens of KB over the operator's link. */
+  function pollScene() {
+    fetch("/scene").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.cells) return;
+      scene.data = d; scene.frames = d.frames || 0;
+      var a = $("scn-age");
+      if (a) a.textContent = scene.frames < 250 ? (scene.frames + " f · forming") : (scene.frames + " f");
+      draw(false, true);
+    }).catch(function () {});
+  }
+  function setScene(on) {
+    scene.on = on ? 1 : 0;
+    try { localStorage.setItem("sceneOn", String(scene.on)); } catch (x) {}
+    if (scene.poll) { clearInterval(scene.poll); scene.poll = null; }
+    if (scene.on) { pollScene(); scene.poll = setInterval(pollScene, 1000); }
+    else { scene.data = null; sceneKey = ""; if ($("scn-age")) $("scn-age").textContent = "—"; }
+    draw(false, true);
+  }
+  document.querySelectorAll("#scn-btns [data-scn]").forEach(function (b) {
+    b.onclick = function () { setSeg("scn-btns", b); setScene(parseInt(b.dataset.scn, 10)); };
+  });
+  /* CLEAR wipes the daemon's accumulation. The map is built in the SENSOR's frame, so slewing
+   * the rig smears it — until the gimbal encoders let it accumulate in a world frame, this is
+   * the operator's tool for "I moved, start over". */
+  $("scn-clearbtn").onclick = function () {
+    var btn = this;
+    fetch("/scene?reset=1").then(function (r) { return r.json(); }).then(function (d) {
+      scene.data = d && d.cells ? d : null; scene.frames = (d && d.frames) || 0; sceneKey = "";
+      btn.classList.add("on"); setTimeout(function () { btn.classList.remove("on"); }, 700);
+      draw(false, true);
+    }).catch(function () {});
+  };
+
   function drawRadar(radar) {
     /* Force the scope panel to 2:1 (a forward half-circle wants width = 2 x height) so it
      * fills like the daemon's previewer instead of cramming into a tall box. When expanded
@@ -1084,6 +1189,10 @@
 
     if (!radar || !radar.connected) { ctx.globalAlpha = 0.6; ctx.fillStyle = dim; ctx.textAlign = "center"; ctx.fillText((replaying && !replayHasRadar) ? "NO RADAR RECORDED" : "NOT CONNECTED", cx, cy - maxR * 0.45); ctx.textAlign = "left"; ctx.globalAlpha = 1; radarGeom = null; return; }
     radarGeom = { cx: cx, cy: cy, scale: scale, dpr: dpr };
+
+    /* SCENE LAYER, under everything live — the world the targets move across. Blitted from its
+     * own canvas (re-rendered only when the layer or the view actually changes). */
+    if (scene.on && scene.data && !replaying) ctx.drawImage(renderScene(w, h, cx, cy, scale), 0, 0);
 
     /* raw returns — already gated server-side by the daemon (snr/speed/fov). v = +approaching */
     (radar.points || []).forEach(function (p) {
@@ -2103,6 +2212,12 @@
   openFusStream();                                  /* FUSION — the one target list when it is up */
   initRadarOv();                                    /* overlay toggle (browser) + AZ/EL trim (from the Jetson) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
+  /* scene layer: off unless this browser had it on. It is a viewing preference, and the daemon
+   * keeps accumulating either way — showing it is free, so the choice is purely the operator's. */
+  (function () {
+    var b = document.querySelector('#scn-btns [data-scn="' + scene.on + '"]'); if (b) setSeg("scn-btns", b);
+    if (scene.on) setScene(1);
+  })();
   setInterval(pollRstats, 400); pollRstats();
   setInterval(pollDstats, 1000); pollDstats();
   setInterval(pollRec, 400); pollRec();

@@ -453,6 +453,32 @@ static void handle_fstats(int fd)
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
 }
 
+/* Radar SCENE layer pass-through (radar/docs/SCENE_LAYER.md): the static occupancy backdrop
+ * the targets move across. The browser's whole query — "on=0" / "reset=1" / "halflife=..." —
+ * rides through to the daemon untouched, because those controls belong to the layer and every
+ * form of the request returns the layer anyway. Polled at ~1 Hz: the daemon only rebuilds its
+ * snapshot once a second, so anything faster re-sends the same bytes. */
+static void handle_scene(int fd, const char *req)
+{
+    char q[128]; q[0] = 0;
+    const char *qs = strstr(req, "/scene?");
+    if (qs) {
+        qs += 7;
+        int i = 0;
+        while (qs[i] && qs[i] != ' ' && qs[i] != '\r' && qs[i] != '\n' && i < (int)sizeof(q) - 1) { q[i] = qs[i]; i++; }
+        q[i] = 0;
+    }
+    int cap = 262144;                    /* lit cells only, but that is still tens of KB */
+    char *b = malloc(cap);
+    if (!b) return;                      /* client() owns the single close(fd) */
+    int n = radar_get_scene(q, b, cap);
+    if (n <= 0) n = snprintf(b, cap, "{\"scene\":0,\"cells\":[]}");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Cache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", n);
+    ssize_t w = write(fd, b, n); (void)w;
+    free(b);
+}
+
 /* the daemon's /stats (its 6 control values + fps/drops), for slider init + readback */
 static void handle_rstats(int fd)
 {
@@ -754,6 +780,7 @@ static void *client(void *arg)
 
     if (has(req, "/rec/"))           handle_rec(fd, req);
     else if (has(req, "/rstats"))    handle_rstats(fd);
+    else if (has(req, "/scene"))     handle_scene(fd, req);
     else if (has(req, "/stats"))     handle_stats(fd);
     else if (has(req, "/radar/stream")) handle_radar_stream(fd);
     else if (has(req, "/radar"))     handle_radar(fd);
