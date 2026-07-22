@@ -456,3 +456,10 @@ body.replay #dev #rov-btns button,body.replay #dev #rov-az,body.replay #dev #rov
 .tsrc.eo{color:#40c4ff;border-color:#2f6f8f}
 .tsrc.rad{color:var(--amber);border-color:var(--bd3)}
 .tsrc.fus{color:var(--on);border-color:#2e6b3f}
+/* Locked-target close-up, pinned top-right of the EO panel. Sits ABOVE the overlay and is never
+ * transformed, so main-view zoom/ROI cannot move or scale it. Hidden unless a target is held. */
+.pip{position:absolute;top:8px;right:10px;z-index:5;width:26%;max-width:320px;min-width:150px;
+  aspect-ratio:4/3;border:1px solid var(--on);border-radius:3px;background:#000;
+  box-shadow:0 2px 10px rgba(0,0,0,.6);pointer-events:none}
+.pip[hidden]{display:none}
+@media (max-width:720px){.pip{width:38%;min-width:120px;top:6px;right:6px}}

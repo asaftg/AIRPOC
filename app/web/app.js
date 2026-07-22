@@ -562,6 +562,84 @@
     ctx.lineCap = "butt";
   }
 
+  /* ── LOCKED-TARGET CLOSE-UP (PIP) ──────────────────────────────────────────────────────────
+   * A magnified crop of the held target, pinned top-right, independent of what the main view is
+   * doing. It samples the SAME video element the operator is watching, but crops in the source
+   * image's own pixels — so panning/zooming the main view with ROI (a CSS transform) cannot move
+   * it, and the target stays framed even when it is off the main view entirely.
+   * Sizing is driven by the target's own box: a small far target gets magnified hard, a near one
+   * barely at all, so the target fills a similar share of the PIP either way. */
+  var PIP_FILL = 0.42;             /* target's long edge as a share of the PIP window */
+  function drawPip() {
+    var cv = $("pip");
+    if (!engagedKey) { cv.hidden = true; return; }
+    var es = lastStats.eo || {};
+    var im = (lastTrk && lastTrk.img) || { w: 1440, h: 1088 };
+    var z = (replaying && replayVideoSrc === "native") ? 1 : (es.zoom || 1);
+    var cw = im.w / z, ch = im.h / z, ox = (im.w - cw) / 2, oy = (im.h - ch) / 2;
+
+    /* where is the held target, in NATIVE sensor pixels? */
+    var nx, ny, nw, nh, lab = "";
+    var t = null;
+    eoTracks().forEach(function (x) { if (x.key === engagedKey) t = x; });
+    if (t && t.px && t.px.length >= 4) {
+      nx = t.px[0]; ny = t.px[1]; nw = t.px[2]; nh = t.px[3];
+      lab = String(t.cls || "?").toUpperCase();
+    } else {
+      /* radar lock: no box, so project its bearing into the frame and use a nominal window */
+      var r = null;
+      radarTargets().forEach(function (x) { if (x.key === engagedKey) r = x; });
+      var hf = es.hfov || 0, vf = es.vfov || (hf * 0.75);
+      if (!r || !hf) { cv.hidden = true; return; }
+      nx = im.w / 2 + (r.az / (hf / 2)) * (cw / 2);
+      ny = im.h / 2 - (r.el / (vf / 2)) * (ch / 2);
+      nw = nh = Math.max(im.w, im.h) * 0.06;
+      lab = "RDR " + r.rng.toFixed(0) + " m";
+    }
+
+    /* which element is actually showing video right now */
+    var src = ($("nvid").style.display === "block") ? $("nvid") : $("video");
+    var iw = src.naturalWidth || src.videoWidth || 0, ih = src.naturalHeight || src.videoHeight || 0;
+    if (!iw || !ih) { cv.hidden = true; return; }
+
+    /* native → source-image pixels (the stream is the zoom crop, scaled to its own size) */
+    var sx = (nx - ox) / cw * iw, sy = (ny - oy) / ch * ih;
+    var sw = nw / cw * iw, sh = nh / ch * ih;
+
+    /* unhide BEFORE measuring: fit() sizes the backing store from the layout box, and a hidden
+     * canvas measures 0, which would give a 1x1 buffer on the first frame after locking. */
+    cv.hidden = false;
+    var f = fit(cv), ctx = f.ctx, W = f.w, H = f.h;
+    /* window sized so the target occupies PIP_FILL of it, clamped so we neither pixel-peep a
+     * single blob nor zoom so far out that the point of the PIP is lost */
+    var want = Math.max(sw, sh) / PIP_FILL;
+    var ww = Math.min(iw, Math.max(want, iw * 0.06)), wh = ww * (H / W);
+    if (wh > ih) { wh = ih; ww = wh * (W / H); }
+    var wx = Math.min(Math.max(sx - ww / 2, 0), Math.max(0, iw - ww));
+    var wy = Math.min(Math.max(sy - wh / 2, 0), Math.max(0, ih - wh));
+
+    ctx.clearRect(0, 0, W, H);
+    try { ctx.drawImage(src, wx, wy, ww, wh, 0, 0, W, H); }
+    catch (e) { cv.hidden = true; return; }        /* frame not decodable yet */
+    /* ROI is a CSS crop, so the target is still in the stream and the PIP just works. The EO
+     * feed's own ZOOM is a real sensor crop, though — if it cut the target out, there are no
+     * pixels to show and the clamped window would quietly display the wrong patch. Say so. */
+    if (sx < 0 || sx > iw || sy < 0 || sy > ih) {
+      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
+      ctx.font = (10 * f.dpr) + "px ui-monospace, monospace"; ctx.textAlign = "center";
+      haloText(ctx, "TARGET OUTSIDE EO ZOOM", W / 2, H / 2, css("--err"), f.dpr);
+      ctx.textAlign = "left";
+      return;
+    }
+    /* mark the target inside the close-up, same bracket language as the main view */
+    var dpr = f.dpr, bx = (sx - wx) / ww * W, by = (sy - wy) / wh * H;
+    var bw = Math.max(10 * dpr, sw / ww * W), bh = Math.max(10 * dpr, sh / wh * H);
+    cornerBrackets(ctx, bx - bw / 2, by - bh / 2, bx + bw / 2, by + bh / 2, css("--on"), dpr);
+    ctx.font = (10 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "left";
+    haloText(ctx, "LOCK " + lab, 5 * dpr, 13 * dpr, css("--on"), dpr);
+    cv.hidden = false;
+  }
+
   function drawEO() {
     var f = fit($("eo-ovl")), ctx = f.ctx, w = f.w, h = f.h, dpr = f.dpr;
     ctx.clearRect(0, 0, w, h);
@@ -943,7 +1021,7 @@
     });
   }
 
-  function redrawAll() { drawEO(); drawRadar(lastRadar); }
+  function redrawAll() { drawEO(); drawPip(); drawRadar(lastRadar); }
   window.addEventListener("resize", redrawAll);
 
   /* Coalesce overlay redraws: radar (~27/s) + detector (~15/s) events would otherwise call
@@ -959,7 +1037,7 @@
       if (document.hidden) { _dEO = _dRadar = false; return; }
       var r = _dRadar, e = _dEO; _dRadar = _dEO = false;
       if (r) drawRadar(lastRadar);
-      if (e) drawEO();
+      if (e) { drawEO(); drawPip(); }
     });
   }
 
