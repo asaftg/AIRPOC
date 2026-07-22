@@ -180,6 +180,27 @@ int main(void)
       CHECK(!trk_core_has_track(c, 9999), "bogus engaged id reports no track (lock released)");
       trk_core_free(c); }
 
+    /* 11. tight gate: a well-tracked STATIONARY track must NOT grab a different object
+     *     passing ~70 px away (the parked-car-snaps-onto-a-passing-car churn bug). */
+    { TrkCore *c = trk_core_new();
+      uint64_t ts = 1000; int em = 0;
+      /* a parked car at (500,500), a big box, seen every tick -> confirmed, low sigma */
+      for (int k = 0; k < 40; k++) {
+          TrkDet d = { .src=0, .cls=2, .conf=0.7, .cx=500, .cy=500, .w=90, .h=60, .tbd=0, .hits=-1, .age=-1 };
+          ts += (uint64_t)(DT*1e9);
+          em = trk_core_step(c, &d, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
+      CHECK(em >= 1, "parked car confirmed");
+      int parked_tid = out[0].tid;
+      /* now the parked car BLINKS OUT and a different car passes 71 px below it */
+      TrkDet passer = { .src=0, .cls=2, .conf=0.7, .cx=500, .cy=571, .w=90, .h=60, .tbd=0, .hits=-1, .age=-1 };
+      ts += (uint64_t)(DT*1e9);
+      trk_core_step(c, &passer, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS);
+      /* the parked track must still exist AND still be near (500,500), NOT dragged to 571 */
+      double pcx=0, pcy=0;
+      int found = trk_core_engaged_box(c, parked_tid, &pcx, &pcy, NULL, NULL, NULL);
+      CHECK(found && pcy < 530, "parked track holds position, did not snap onto the passing car");
+      trk_core_free(c); }
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }
