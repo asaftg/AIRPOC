@@ -3,8 +3,8 @@
  * Consumes the detector's SSE /stream (:8094), turns per-frame boxes into
  * persistent smoothed/coasted tracks with stable IDs, and serves them on
  * /stream + /stats + /ctl plus the airpoc.trk_wire recorder tap. When the
- * operator engages a target (/ctl?engage=<tid>) it runs a 60 fps NCC lock on
- * the raw EO frames for guidance-grade, camera-rate az/el.
+ * operator engages a target (/ctl?engage=<tid>) it runs a 60 fps Lucas-Kanade
+ * optical-flow lock on the raw EO frames for guidance-grade, camera-rate az/el.
  *
  * Threads: det_feed (SSE consumer -> on_det_frame), lock (60 fps), heartbeat
  * (1 s). All three publish through publish_wire() under g_lk. See README.
@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <time.h>
+#include <signal.h>
 
 static struct {
     pthread_mutex_t lk;
@@ -273,6 +274,13 @@ static void usage(const char *p)
 
 int main(int argc, char **argv)
 {
+    /* A dropped SSE client must not kill us: writing to a socket the viewer already
+     * closed raises SIGPIPE, whose default action terminates the process - so one
+     * browser tab or curl disconnecting mid-frame would take trackerd down. Ignore it;
+     * the write then returns EPIPE and the per-client stream thread cleans up that
+     * client, which is what http.c already expects. (All other AIRPOC daemons do this.) */
+    signal(SIGPIPE, SIG_IGN);
+
     int port = TRK_PORT_DEFAULT;
     char det_host[64] = DET_STREAM_HOST; int det_port = DET_STREAM_PORT;
     double ifov = EO_IFOV_RAD_DEFAULT;
