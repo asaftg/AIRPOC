@@ -1,0 +1,9 @@
+fusiond
+tools/replay
+tools/wire_replay
+tools/fake_feeds
+tools/refit
+tools/det_to_trk
+*.o
+tools/fixtures/*.jsonl
+fusion-trim.json

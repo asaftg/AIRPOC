@@ -49,10 +49,20 @@ angles get the mount trim added first):
   its closing speed predicts how fast the EO box should grow. A bush the
   camera model keeps calling "vehicle" never grows in step with a radar
   closure, so this also filters persistent camera false positives.
+- **Size must agree.** The pair hypothesis carries the radar's range, so the
+  camera box has a width in metres - it must roughly match the radar's box
+  (softly: radar boxes are crude). A ~1 m person cannot marry a ~4.5 m parked
+  car, whichever is momentarily nearest in angle.
 
-A match must hold for several consecutive co-observations before the pair is
-declared fused, and a fused pair only splits after sustained disagreement
-(`divorce_s`) - a one-frame blink never splits it. Radar targets outside the
+A marriage needs both hits AND time: several co-observations over at least
+~0.7 s, with the radar-vs-camera angle gap holding steady. A gap that slides
+steadily is a pass-by (the radar target moving across a parked object), not
+a match - a drifting candidate is refused, and a married pair whose gap
+walks off the value it married at is divorced immediately, with that radar
+track barred from marrying anyone for 1.5 s (otherwise a driving car chains
+through every parked car on its path - seen in the field, now a regression
+test). A one-frame blink never splits a pair: the drift checks use the
+window median, which outliers cannot move. Radar targets outside the
 camera's field of view are simply radar-only rows, never evidence against.
 
 ## What a fused row carries
@@ -75,8 +85,11 @@ not writable), loaded at start. Shipped defaults are az +1.1 / el +2.2 deg
 re-check on any mount change).
 
 **Calibration (2 minutes):** with both sensors live, have one person or
-vehicle move in view. Watch `trim.est_az_deg`/`est_el_deg` in `/stats` - the
-median residual over healthy fused pairs, i.e. what the trim *should* be.
+vehicle move in view - somewhere OPEN: the estimator only measures isolated
+targets (a radar mover with exactly one camera track anywhere near it), so a
+row of parked cars teaches it nothing. Watch `trim.est_az_deg`/`est_el_deg`
+in `/stats` - the median residual over those clean sightings, i.e. what the
+trim *should* be.
 Nudge `/ctl?trim_az=&trim_el=` until `tracks.fused` holds steadily and the
 estimator agrees with the setting. The estimator only reports; it never
 changes the trim by itself.
@@ -96,9 +109,11 @@ changes the trim by itself.
 
 ```
 make            # fusiond (pure C11, pthreads/libm only)
-make check      # offline gates - synthetic core scenarios, a real recorded
-                # radar+EO pair through the real parsers, and a two-daemon
-                # loopback smoke. Exits nonzero on any failure.
+make check      # offline gates - synthetic core scenarios (including the
+                # walker-beside-a-parked-car and car-sweeping-parked-cars
+                # street scenes), TWO real recorded radar+EO pairs through
+                # the real parsers, and a two-daemon loopback smoke.
+                # Exits nonzero on any failure.
 ./fusiond -p 8096 -r 127.0.0.1:8092 -t 127.0.0.1:8095
 ```
 
@@ -108,6 +123,13 @@ running the recording's real det_wire through the real eotrack core offline -
 `tools/det_to_trk.c`). Longer runs against full recordings:
 `tools/airec_to_jsonl.py <session>/radar_wire radar.jsonl` (same for det/trk
 channels), then `tools/wire_replay radar.jsonl trk.jsonl`.
+
+**Re-doing a recording's fusion after a core change:** `tools/refit.c` runs a
+session's recorded radar+tracker wires through the CURRENT core and prints
+the fus wire it would have published; `tools/airec_from_jsonl.py` packs that
+back into an AIREC channel directory. Drop it into a hardlink copy of the
+session (new sid, "REFIT " name in the manifest) and the replay library shows
+the new behaviour against the same video.
 
 > Pitfall: `tools/fake_feeds` serves a synthetic scene for the smoke test on
 > non-production ports. Never point it at the production ports or run it in
