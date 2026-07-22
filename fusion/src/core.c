@@ -438,6 +438,12 @@ static void sustain_fused(FusCore *c, uint64_t t)
         }
         double gate, resid, d2 = pair_d2(c, r, e, t, 1, &gate, &resid);
         double dt = f->cofresh_ns ? clampd(since_s(t, f->cofresh_ns), 0, 0.5) : 0;
+        /* is the radar's range track still continuous with this marriage? */
+        double rdt = f->r_ns ? fmax(0, since_s(t, f->r_ns)) : 0;
+        double rinno = fabs(r->r - (f->r_f + f->rdot_f * rdt));
+        int r_ok = f->have_r &&
+                   rinno < fmax(FUS_R_CLAMP_BASE,
+                                3.0 * FUS_R_CLAMP_BIN + fabs(f->rdot_f) * rdt);
         f->rs_seen = c->rad_seq; f->es_seen = c->eo_seq; f->cofresh_ns = t;
         /* pair residual ring: a sustained trend means the radar target is
          * sliding PAST this EO object (a pass-by), not riding with it */
@@ -461,7 +467,9 @@ static void sustain_fused(FusCore *c, uint64_t t)
              * it) walking away from the residual this pair married at is
              * definitive evidence of a wrong marriage */
             if (!f->have_ref) { f->res_ref = med; f->have_ref = 1; }
-            else if (fabs(med - f->res_ref) > FUS_DRIFT_ABS) departed = 1;
+            else if (fabs(med - f->res_ref) >
+                     FUS_DRIFT_ABS * (r_ok ? FUS_DEPART_RANGE_SCALE : 1.0))
+                departed = 1;
         }
         if (departed) {
             /* divorce now, and bar the radar tid from marrying anyone - a
@@ -476,7 +484,7 @@ static void sustain_fused(FusCore *c, uint64_t t)
                                    * that precede a divorce corrupt r_f */
         } else {
             f->miss_s += dt;
-            if (f->miss_s > c->k.divorce_s) {
+            if (f->miss_s > c->k.divorce_s * (r_ok && !drifting ? FUS_DIVORCE_RANGE_SCALE : 1.0)) {
                 /* divorce: the gid follows the side closer to the row's last
                  * published angles; the other side gets a fresh row. */
                 double de = sq((e->az - f->az) / fmax(e->s_az, FUS_EO_SIG_FLOOR));

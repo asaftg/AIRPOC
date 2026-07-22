@@ -82,6 +82,15 @@
 /* married pairs hold through more jitter than candidates (stickiness) */
 #define FUS_GATE_MARRIED       2.0
 
+/* Range-continuity arbiter for divorces: when the radar's range track is
+ * still continuous with the marriage, an angle slip is almost certainly the
+ * radar (or camera) wobbling, not a different object - and the fused angles
+ * come from the camera anyway, so tolerate more before divorcing. Range
+ * broken (the id-steal signature) or angles trending (pass-by) divorce as
+ * fast as ever. */
+#define FUS_DEPART_RANGE_SCALE   1.75  /* departure threshold x when range ok */
+#define FUS_DIVORCE_RANGE_SCALE  2.5   /* divorce_s x when range ok */
+
 /* Passing signature: a same-object pair's angle residual is stationary noise;
  * a radar target sliding past a parked object shows a monotonic residual
  * trend. Net drift beyond this across the trend window blocks confirmation

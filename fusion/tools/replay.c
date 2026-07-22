@@ -39,6 +39,7 @@ typedef struct {
     int    cls;           /* EO class */
     int    alive_rad, alive_eo;
     double eo_az_bias;    /* offset applied ONLY to EO (simulates disagreement) */
+    double rad_az_bias;   /* offset applied ONLY to radar (simulates angle slip) */
     double aw;            /* EO angular width, rad (0 = default 0.01) */
     double rsx;           /* radar box half-extent, m (0 = default 1.0) */
     int    vgarbage;      /* 1 = radar reports nonsense velocity (braking car) */
@@ -69,7 +70,7 @@ static int world_rad_frame(World *w, FusRadTgt *out)
     int n = 0;
     for (int i = 0; i < w->n; i++) {
         Tgt *g = &w->tgt[i]; if (!g->alive_rad) continue;
-        double az = taz(g, w->t) - w->mount_az + frand() * 2 * 0.6 * D2R;
+        double az = taz(g, w->t) - w->mount_az + g->rad_az_bias + frand() * 2 * 0.6 * D2R;
         double el = tel(g, w->t) - w->mount_el + frand() * 2 * 2.0 * D2R;
         double r  = tr(g, w->t) + frand() * 2 * 1.0;
         FusRadTgt *o = &out[n++];
@@ -745,6 +746,55 @@ static void t_parked_veto(void)
     printf("PASS parked-veto (driving car beside 2 watched parked cars: 0 marriages)\n");
 }
 
+/* 8h: radar angle slip with CONTINUOUS range must not divorce a marriage
+ * (the fused angles come from the camera anyway); the same slip with a
+ * broken range track must divorce fast. */
+static void t_slip(void)
+{
+    World w; world_init(&w, 1);
+    w.tgt[0] = (Tgt){ .az0 = 1 * D2R, .el0 = 0, .r0 = 180, .rdot = -4, .cls = 2,
+                      .alive_rad = 1, .alive_eo = 1 };
+    FusCore *c = fus_core_new();
+    FusKnobs k; fus_core_get_knobs(c, &k); k.trim_az = k.trim_el = 0; fus_core_set_knobs(c, &k);
+    run(&w, c, 2.5, invariant, NULL);
+    CHECK(!g_fail, "invariant");
+    FusRadTgt rf[8]; FusEoTrk ef[8]; FusOut rows[FUS_MAX_OUT];
+    int nr = world_rad_frame(&w, rf);
+    int n = fus_core_step_rad(c, rf, nr, sim_ns(w.t += 0.01), rows, FUS_MAX_OUT);
+    CHECK(find_src(rows, n, FUS_SRC_FUSED), "no marriage before the slip");
+
+    /* radar azimuth slips 1.0 deg, range track stays continuous: hold */
+    w.tgt[0].rad_az_bias = 1.0 * D2R;
+    double t0 = w.t;
+    while (w.t < t0 + 2.5) {
+        w.t += 1.0 / 26.0;
+        nr = world_rad_frame(&w, rf);
+        fus_core_step_rad(c, rf, nr, sim_ns(w.t), rows, FUS_MAX_OUT);
+        int ne = world_eo_frame(&w, ef); w.eo_age[0] += 1.0 / 26.0;
+        n = fus_core_step_eo(c, ef, ne, sim_ns(w.t + 0.001), rows, FUS_MAX_OUT);
+        invariant(rows, n, w.t, NULL); if (g_fail) return;
+    }
+    CHECK(find_src(rows, n, FUS_SRC_FUSED) != NULL,
+          "a 1 deg radar slip with continuous range divorced the marriage");
+
+    /* now the range track BREAKS too (id-steal signature): divorce fast */
+    w.tgt[0].rad_az_bias = 2.5 * D2R; w.tgt[0].r0 -= 45;
+    t0 = w.t; double t_div = -1;
+    while (w.t < t0 + 2.0) {
+        w.t += 1.0 / 26.0;
+        nr = world_rad_frame(&w, rf);
+        fus_core_step_rad(c, rf, nr, sim_ns(w.t), rows, FUS_MAX_OUT);
+        int ne = world_eo_frame(&w, ef); w.eo_age[0] += 1.0 / 26.0;
+        n = fus_core_step_eo(c, ef, ne, sim_ns(w.t + 0.001), rows, FUS_MAX_OUT);
+        if (!find_src(rows, n, FUS_SRC_FUSED)) { t_div = w.t - t0; break; }
+    }
+    CHECK(t_div >= 0, "broken range + big slip never divorced");
+    CHECK(t_div < 1.5, "range-broken divorce too slow (%.2f s)", t_div);
+    fus_core_free(c);
+    printf("PASS slip (1 deg slip held %.1f s+, range-broken divorced in %.2f s)\n",
+           2.5, t_div);
+}
+
 /* 9: emit round-trip sanity + absent-side conventions. */
 static void t_emit(void)
 {
@@ -838,6 +888,7 @@ int main(void)
     RUN(t_churn);
     RUN(t_close);
     RUN(t_parked_veto);
+    RUN(t_slip);
     RUN(t_emit);
     RUN(t_perf);
     if (g_total) { printf("REPLAY: FAIL\n"); return 1; }
