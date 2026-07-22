@@ -1232,8 +1232,10 @@
     return sceneCv;
   }
 
-  /* ~1 Hz, and only while the layer is shown: the daemon rebuilds its snapshot once a second, so
-   * polling faster just re-sends the same tens of KB over the operator's link. */
+  /* ~1 Hz, and only while the layer is shown. The daemon can publish faster than this (its rate
+   * is configurable, 5 Hz by default), but the console deliberately does not ask for it: this is
+   * a slowly accumulating backdrop of things that do not move, and each poll is tens of KB over
+   * the operator's link. Five times the bandwidth buys nothing an operator can see. */
   function pollScene() {
     fetch("/scene").then(function (r) { return r.json(); }).then(function (d) {
       if (!d || !d.cells) return;
