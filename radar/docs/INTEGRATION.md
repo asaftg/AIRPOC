@@ -71,7 +71,7 @@ if it trends to ~0 the frame period is too aggressive and frames will drop.
 { "connected": true, "frame_id": 60, "timestamp": 1248.807,
   "profile": "awr2944P_ag.cfg", "max_range_m": 500.0, "fov_half_deg": 90.0,
   "num_points": 18, "num_targets": 2,
-  "points":  [{"x":-11.9,"y":30.5,"z":0.1,"v":0.45,"snr":42.0,"r":32.7,"az":-21.4,"el":0.2,"tid":1}],
+  "points":  [{"r":32.70,"az":-21.4,"el":0.2,"v":0.45,"snr":42,"tid":1}],
   "targets": [{"tid":1,"x":-11.6,"y":30.2,"z":0.1,"vx":1.34,"vy":0.25,"vz":0.04,
                "sx":0.95,"sy":0.99,"sz":0.25,"conf":1.0,"np":61,"sus":0,"mv_class":1,
                "class":"radar_detection"}] }
@@ -79,7 +79,12 @@ if it trends to ~0 the frame period is too aggressive and frames will drop.
 
 - **Frame:** sensor frame, metres. `+x` right, `+y` forward (boresight), `+z`
   up. `az = atan2(x,y)` deg, `el = atan2(z, hypot(x,y))` deg.
-- **points[]:** raw cloud. `v` = radial Doppler m/s (**+approaching**). `snr`
+- **points[]:** raw cloud, **polar canonical** (2026-07-22): cartesian was
+  dropped - derive `x = r*sin(az)`, `y = r*cos(az)`, `z = r*sin(el)` (degrees).
+  Precision is matched to the sensor (r 2dp = native 2.61 m bins, az/el 1dp vs
+  ~2.6 deg best bearing accuracy, v 2dp = 0.108 m/s Doppler bin, snr integer
+  dB); this halves the point bytes on the operator link. Old recordings replay
+  fine - parsers key by field name. `v` = radial Doppler m/s (**+approaching**). `snr`
   is the **per-point SNR in dB** (live — typically ~16–50 dB, floored at the
   CFAR threshold). It can be `null` only if a firmware without SideInfo is ever
   flashed; the shipped A/G cfg emits it. `tid` = owning track, or `255` if

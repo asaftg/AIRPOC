@@ -20,6 +20,12 @@ static void num(char *buf, size_t cap, size_t *off, float v) {
     else             ap(buf, cap, off, "null");
 }
 
+/* integer-dB variant for per-point SNR (precision matched to the sensor) */
+static void num0(char *buf, size_t cap, size_t *off, float v) {
+    if (isfinite(v)) ap(buf, cap, off, "%.0f", v);
+    else             ap(buf, cap, off, "null");
+}
+
 int wire_frame_json(char *buf, size_t cap, const RadarFrame *f,
                     double timestamp, double max_range_m, double fov_half_deg,
                     const char *profile) {
@@ -33,11 +39,15 @@ int wire_frame_json(char *buf, size_t cap, const RadarFrame *f,
 
     for (int i = 0; i < f->n_points; i++) {
         const RadarPoint *p = &f->points[i];
-        ap(buf, cap, &off, "%s{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"v\":%.3f,\"snr\":",
-           i ? "," : "", p->x, p->y, p->z, p->doppler);
-        num(buf, cap, &off, p->snr);
-        ap(buf, cap, &off, ",\"r\":%.2f,\"az\":%.2f,\"el\":%.2f,\"tid\":%d}",
-           p->range, p->az, p->el, p->tid);
+        /* Polar is canonical - the sensor measures r/az/el (range is quantised
+         * to 2.61 m bins); cartesian derives as x=r*sin(az), y=r*cos(az),
+         * z=r*sin(el). Precision matches the sensor: r 2dp, az/el 1dp (best
+         * bearing accuracy is ~2.6 deg), v 2dp (Doppler bin 0.108 m/s), snr
+         * integer dB. Cuts the console's biggest bandwidth consumer ~50%. */
+        ap(buf, cap, &off, "%s{\"r\":%.2f,\"az\":%.1f,\"el\":%.1f,\"v\":%.2f,\"snr\":",
+           i ? "," : "", p->range, p->az, p->el, p->doppler);
+        num0(buf, cap, &off, p->snr);
+        ap(buf, cap, &off, ",\"tid\":%d}", p->tid);
     }
     ap(buf, cap, &off, "],\"targets\":[");
     for (int i = 0; i < f->n_targets; i++) {

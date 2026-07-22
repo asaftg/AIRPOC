@@ -151,7 +151,8 @@ class RadarView {
   drawPoints(points) {
     const ctx = this.ctx, dpr = window.devicePixelRatio || 1, rad = 2 * dpr;
     for (const p of (points || [])) {
-      const { px, py } = this.toCanvas(p.x, p.y);
+      const paz = p.az * Math.PI / 180;          /* wire is polar-canonical */
+      const { px, py } = this.toCanvas(p.r * Math.sin(paz), p.r * Math.cos(paz));
       ctx.fillStyle = this.pointStyle(p.v, p.snr);
       ctx.beginPath(); ctx.arc(px, py, rad, 0, 2 * Math.PI); ctx.fill();
     }
