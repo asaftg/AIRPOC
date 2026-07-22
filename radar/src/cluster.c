@@ -131,7 +131,7 @@
 #define FLOOD_R 40.0
 #define FLOOD_N 25
 #define FLOOD_AZ 80.0
-#define FLOOD_HOLD 0.3   /* FIX V1: freeze lapses when the trigger does */
+#define FLOOD_HOLD 2.0   /* V5.1: near-field discipline restored */
 #define FLOOD_MARGIN 10.0
 /* emission-evidence handoff (re-acquired target after a dropout death) */
 #define INHERIT_S 2.0
@@ -1104,7 +1104,10 @@ int cluster_step(RadarClusterer *R, RadarPoint *pts, int n,
                && (r_net>=POS_NET || c_net>=c_move_floor || standing))
                 t->ok_streak++;
         }
-        int need = GUARD_EMIT_RE;   /* FIX V2: same short bar for first emission */
+        /* V5.1: near targets face the old strict bar; far targets keep the
+         * short one. Re-latch is always short. */
+        int need = (t->ever_passed || t->r >= FLOOD_R+FLOOD_MARGIN)
+                   ? GUARD_EMIT_RE : GUARD_EMIT;
         if(t->ok_streak>=need){ t->guard_pass=1; t->ever_passed=1; }
         if(t->ok_streak>=GUARD_EMIT) t->deep_pass=1;
         if(t->guard_pass) t->pass_r=t->r;
