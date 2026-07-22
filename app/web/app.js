@@ -1146,18 +1146,25 @@
           drawDet(mv, true, "rgba(150,157,168,0.45)", "", true);
         });
       }
-      /* EO TRACKS — the operator's boxes. Colour is the CLASS, always: never how the target
-       * was arrived at (a far human promoted from faint evidence is still a human).
-       * SHAPE marks exactly ONE thing: the LOCKED target. Every other track draws as the
-       * ordinary rectangle (or seeker cross) it always did — corner brackets on every
+      /* EO TRACKS — the operator's boxes.
+       * Colour is the CLASS, with ONE exception: in STARE mode a FUSED track goes green,
+       * whatever it is. Stare is the scanning state — nothing is held, so green is not
+       * spoken for, and the one thing worth shouting while scanning is "both sensors agree
+       * on this object". A green box in stare means radar and camera are on the same thing
+       * and it therefore has a range; the class is still on the label. In TRACK mode green
+       * goes back to meaning the held target and fused tracks return to their class colour,
+       * so the two greens can never be on screen meaning different things at once.
+       * SHAPE still marks exactly ONE thing: the LOCKED target. Every other track draws as
+       * the ordinary rectangle (or seeker cross) it always did — corner brackets on every
        * confirmed track made the whole frame look "tracked" and hid which one is held.
        * When a target IS locked, only that target is drawn: the operator asked for the
        * picture to clear down to the thing being tracked. */
+      var staring = !engagedKey && !(lastTrk && lastTrk.mode === "track");
       eoBoxes = [];
       trkTracks.forEach(function (t) {
         var eng = (t.key === engagedKey);
         if (engagedKey && lockLive && !eng) return;      /* locked AND drawable → show only it */
-        var col = classColor(t.cls);          /* same colour this target gets in the list */
+        var col = (staring && fmap.eo[t.tid]) ? css("--on") : classColor(t.cls);
         var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
         var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
                        : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
