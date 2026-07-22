@@ -45,6 +45,7 @@ typedef struct {
     int      cls;
     /* source mix */
     int      app_hits, mot_hits;
+    int      tbd;                /* sticky: 1 once any matched detection was tbd-promoted */
     /* size growth (looming), relative 1/s, EMA */
     double   grow;
     /* clutter test */
@@ -276,6 +277,7 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             t->misses = 0;
             t->t_meas_ns = t_src_ns;
             t->meas_cx = d->cx; t->meas_cy = d->cy;   /* firm output EMA targets this */
+            if (d->tbd) t->tbd = 1;                    /* sticky provenance flag */
             hist_push(t, clk, t->cx, t->cy);
             det_taken[di] = 1; trk_taken[i] = 1;
         }
@@ -292,6 +294,7 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
         t->cx = d->cx; t->cy = d->cy; t->w = d->w; t->h = d->h;
         t->meas_cx = d->cx; t->meas_cy = d->cy;
         t->vx = t->vy = 0;
+        t->tbd = d->tbd;
         t->conf = d->conf;
         t->score = d->tbd ? 1.0 : clampd(d->conf, 0.1, 1.0);
         if (d->cls >= 0 && d->cls <= 3) t->cls_votes[d->cls]++;
@@ -315,12 +318,15 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             t->score = t->score - TRK_SCORE_MISS;
             /* coast: keep position moving on held velocity; sigma grows */
             t->sigma += 0.5 * dt_s * fps;
-            /* An operator-engaged track is STICKY: the global coast budget never kills
-             * it. It coasts (held velocity, growing coast_s) until the operator releases
-             * the lock or the lock loop re-anchors it, so a locked target is always
-             * drawable and its id never dangles. Everything else dies normally, EXCEPT a
-             * stationary confirmed track gets park-hold (keeps its id through a blink). */
-            if (t->tid != engaged_tid) {
+            /* An operator-engaged track is STICKY through a brief loss (the lock resets
+             * misses whenever it holds the target), but it is dropped after TRK_LOCK_LOST_S
+             * of no support at all - the target has left the FOV, so the daemon releases
+             * the lock rather than leaving it stuck on empty space. A non-engaged track
+             * dies on the normal coast, EXCEPT a stationary confirmed one gets park-hold
+             * (keeps its id through a detection blink). */
+            if (t->tid == engaged_tid) {
+                if (t->misses > (int)(TRK_LOCK_LOST_S * fps + 0.5)) { t->used = 0; continue; }
+            } else {
                 if (!t->confirmed && t->score <= TRK_SCORE_FLOOR) { t->used = 0; continue; }
                 if (t->confirmed) {
                     int stationary = hypot(t->ovx, t->ovy) < TRK_STATIONARY_VEL;
@@ -446,6 +452,7 @@ static int emit_tracks(TrkCore *c, int engaged_tid, TrkOut *out, int max)
         o->coast_s = t->coast_s;
         o->t_meas_ns = t->t_meas_ns;
         o->src = (t->app_hits && t->mot_hits) ? 2 : (t->mot_hits ? 1 : 0);
+        o->tbd = t->tbd;
         o->lock_on = t->lock_on;
         o->lock_score = t->lock_score;
     }

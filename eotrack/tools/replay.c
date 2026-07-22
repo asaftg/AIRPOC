@@ -161,16 +161,16 @@ int main(void)
       for (int k = 0; k < 30; k++) { TrkDet d; gen_translate(k, &d); ts += (uint64_t)(DT*1e9);
           em = trk_core_step(c, &d, 1, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
       CHECK(em >= 1, "engaged-test: target confirmed first");
-      /* engage tid 1, then 90 empty ticks (~6 s, way past the 1 s coast budget) */
-      for (int k = 0; k < 90; k++) { ts += (uint64_t)(DT*1e9);
+      /* engage tid 1; through a BRIEF loss (~1.3 s, past the normal 1 s coast) it stays */
+      for (int k = 0; k < 20; k++) { ts += (uint64_t)(DT*1e9);
           em = trk_core_step(c, NULL, 0, ts, DT, 0, 0, /*engage*/1, out, TRK_MAX_TRACKS); }
-      CHECK(trk_core_has_track(c, 1), "engaged track survives 6 s of misses (sticky)");
+      CHECK(trk_core_has_track(c, 1), "engaged track survives a brief loss (sticky past 1 s)");
       CHECK(em >= 1 && out[0].tid == 1 && !strcmp(out[0].state, "coast"),
-            "engaged track still emitted as coast after long loss");
-      /* release the lock: now it dies on the normal budget */
-      for (int k = 0; k < 30; k++) { ts += (uint64_t)(DT*1e9);
-          trk_core_step(c, NULL, 0, ts, DT, 0, 0, -1, out, TRK_MAX_TRACKS); }
-      CHECK(!trk_core_has_track(c, 1), "released track then dies on the normal coast");
+            "engaged track still emitted as coast during a brief loss");
+      /* but a SUSTAINED loss (target left the FOV, no lock support) -> give up + release */
+      for (int k = 0; k < 40; k++) { ts += (uint64_t)(DT*1e9);
+          trk_core_step(c, NULL, 0, ts, DT, 0, 0, /*engage*/1, out, TRK_MAX_TRACKS); }
+      CHECK(!trk_core_has_track(c, 1), "engaged track dropped after a sustained loss (lock released)");
       trk_core_free(c); }
 
     /* 10. bogus engage: has_track is false for an id that never existed (daemon releases) */

@@ -39,6 +39,7 @@ typedef struct {
     double      coast_s;         /* seconds since last real measurement */
     uint64_t    t_meas_ns;       /* t_src of the last measurement (correlation key) */
     int         src;             /* 0 app, 1 mot, 2 both (dominant evidence source) */
+    int         tbd;             /* 1 = ever promoted from faint evidence (detector tbd) */
     int         lock_on;         /* engaged track only */
     double      lock_score;
 } TrkOut;

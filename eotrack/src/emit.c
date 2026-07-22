@@ -37,6 +37,9 @@ static size_t append_track(char *buf, size_t cap, size_t off, const TrkOut *t, d
         vaz, vel, sig, sig, t->grow,
         t->hits, t->age_s, t->coast_s, (unsigned long long)t->t_meas_ns, src));
     if (off >= cap) return off;
+    if (t->tbd)
+        off = adv(off, cap, snprintf(buf + off, cap - off, ",\"tbd\":1"));
+    if (off >= cap) return off;
     if (t->lock_on)
         off = adv(off, cap, snprintf(buf + off, cap - off,
             ",\"lock\":{\"on\":true,\"score\":%.3f}", t->lock_score));

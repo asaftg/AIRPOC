@@ -97,6 +97,14 @@
 #define TRK_PARK_S              4.0     /* stationary-confirmed coast budget (s) */
 #define TRK_STATIONARY_VEL     10.0     /* |output velocity| below this = parked (px/s) */
 
+/* Lock give-up: an operator-engaged track is held through a BRIEF loss (occlusion, a
+ * frame the detector missed, a fast pan) so the lock feels solid - but if it goes
+ * unsupported (no detection AND the 60 fps lock cannot find it) for this long, the
+ * target has really left the field of view. The track is then dropped and the daemon
+ * releases the lock (engaged -> -1) so the operator is never stuck locked on empty space.
+ * Much longer than the normal 1 s coast (so the lock is sticky) but bounded. */
+#define TRK_LOCK_LOST_S         2.5
+
 /* Clutter (translate-vs-oscillate) horizon: over this many seconds a track's net
  * displacement is compared to its path length. An oscillator (foliage) has a long
  * path and ~zero net -> emission-latched OFF. NO size/speed/displacement KILL gate
