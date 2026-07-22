@@ -39,10 +39,10 @@ void http_set_ctl_cb(void (*cb)(double, int, double, double, double, double, dou
 /* ---- scene layer (static occupancy) ---- */
 static char   *g_scene = NULL;
 static size_t  g_scene_len = 0, g_scene_cap = 0;
-static void  (*g_scene_cb)(int, int, void *) = NULL;
+static void  (*g_scene_cb)(int, int, double, void *) = NULL;
 static void   *g_scene_user = NULL;
 
-void http_set_scene_cb(void (*cb)(int on, int reset, void *user), void *user) {
+void http_set_scene_cb(void (*cb)(int on, int reset, double halflife_s, void *user), void *user) {
     g_scene_cb = cb; g_scene_user = user;
 }
 
@@ -245,7 +245,10 @@ static void *client(void *arg) {
         if (strstr(req, "on=1")) on = 1;
         else if (strstr(req, "on=0")) on = 0;
         if (strstr(req, "reset=1")) reset = 1;
-        if ((on >= 0 || reset) && g_scene_cb) g_scene_cb(on, reset, g_scene_user);
+        double hl = -1.0;
+        { const char *h = strstr(req, "halflife="); if (h) hl = atof(h + 9); }
+        if ((on >= 0 || reset || hl >= 0.0) && g_scene_cb)
+            g_scene_cb(on, reset, hl, g_scene_user);
         pthread_mutex_lock(&g_lock);
         size_t len = g_scene_len;
         char *copy = NULL;

@@ -8,16 +8,18 @@
 #define NCELL (SCENE_NR * SCENE_NA)
 
 struct SceneMap {
-    unsigned int  hits[NCELL];    /* frames in which the cell was occupied */
-    unsigned char peak[NCELL];    /* strongest echo seen in the cell, dB      */
-    unsigned char seen[NCELL];    /* per-frame scratch: counted this frame?   */
-    unsigned int  frames;
+    float         hits[NCELL];    /* discounted count of frames the cell was lit */
+    unsigned char peak[NCELL];    /* strongest echo seen in the cell, dB         */
+    unsigned char seen[NCELL];    /* per-frame scratch                           */
+    float         frames_eff;     /* discounted frame count (the denominator)    */
+    unsigned int  frames_raw;     /* frames since reset, for "map age"           */
+    double        halflife_s;     /* 0 = never forget                            */
     int           enabled;
 };
 
 SceneMap *scene_new(void) {
     SceneMap *s = (SceneMap *)calloc(1, sizeof(*s));
-    if (s) s->enabled = 1;
+    if (s) { s->enabled = 1; s->halflife_s = SCENE_HALFLIFE_DEFAULT; }
     return s;
 }
 void scene_free(SceneMap *s) { free(s); }
@@ -26,15 +28,40 @@ void scene_reset(SceneMap *s) {
     if (!s) return;
     memset(s->hits, 0, sizeof(s->hits));
     memset(s->peak, 0, sizeof(s->peak));
-    s->frames = 0;
+    s->frames_eff = 0.0f; s->frames_raw = 0;
 }
 void scene_set_enabled(SceneMap *s, int on) { if (s) s->enabled = on ? 1 : 0; }
 int  scene_enabled(const SceneMap *s) { return s ? s->enabled : 0; }
+void scene_set_halflife(SceneMap *s, double seconds) {
+    if (!s) return;
+    if (seconds < 0.0) seconds = 0.0;
+    s->halflife_s = seconds;
+}
+double scene_halflife(const SceneMap *s) { return s ? s->halflife_s : 0.0; }
 
-void scene_step(SceneMap *s, const RadarPoint *pts, int n) {
+void scene_step(SceneMap *s, const RadarPoint *pts, int n, double dt) {
     if (!s || !s->enabled) return;
-    s->frames++;
+
+    /* Exponential forgetting. Old evidence fades smoothly instead of falling off
+     * the edge of a window, and it costs one multiply per cell per frame.
+     * Discounting the denominator too keeps occupancy = hits/frames_eff a true
+     * fraction, and makes frames_eff saturate at halflife/ln2 * rate. */
+    if (s->halflife_s > 0.0 && dt > 0.0) {
+        float lam = (float)exp(-M_LN2 * dt / s->halflife_s);
+        if (lam < 0.0f) lam = 0.0f;
+        if (lam < 1.0f) {
+            for (int c = 0; c < NCELL; c++) {
+                s->hits[c] *= lam;
+                if (s->hits[c] < 1e-3f) { s->hits[c] = 0.0f; s->peak[c] = 0; }
+            }
+            s->frames_eff *= lam;
+        }
+    }
+
+    s->frames_eff += 1.0f;
+    s->frames_raw++;
     memset(s->seen, 0, sizeof(s->seen));
+
     for (int i = 0; i < n; i++) {
         const RadarPoint *p = &pts[i];
         if (fabsf(p->doppler) >= SCENE_DOP_MAX) continue;       /* it is moving */
@@ -45,7 +72,7 @@ void scene_step(SceneMap *s, const RadarPoint *pts, int n) {
         int ia = (int)(azrel / SCENE_ASTEP);
         if (ir < 0 || ir >= SCENE_NR || ia < 0 || ia >= SCENE_NA) continue;
         int c = ir * SCENE_NA + ia;
-        if (!s->seen[c]) { s->seen[c] = 1; s->hits[c]++; }      /* one vote per frame */
+        if (!s->seen[c]) { s->seen[c] = 1; s->hits[c] += 1.0f; }  /* one vote per frame */
         if (isfinite(p->snr) && p->snr > 0.0f) {
             int db = (int)(p->snr + 0.5f);
             if (db > 255) db = 255;
@@ -54,29 +81,29 @@ void scene_step(SceneMap *s, const RadarPoint *pts, int n) {
     }
 }
 
-/* {"scene":1,"frames":N,"nr":..,"na":..,"r_step":..,"az0":..,"az_step":..,
- *  "cells":[ri,ai,occ,snr, ...]}   occ = 0..255 (fraction of frames occupied) */
+/* {"scene":1,"frames":N,"halflife_s":..,"nr":..,"na":..,"r_step":..,"az0":..,
+ *  "az_step":..,"cells":[ri,ai,occ,snr, ...]}   occ = 0..255 */
 int scene_json(const SceneMap *s, char *buf, size_t cap) {
     if (!s || cap < 256) return 0;
     size_t off = 0;
     int w = snprintf(buf, cap,
-        "{\"scene\":%d,\"frames\":%u,\"nr\":%d,\"na\":%d,"
+        "{\"scene\":%d,\"frames\":%u,\"halflife_s\":%.1f,\"nr\":%d,\"na\":%d,"
         "\"r_step\":%.3f,\"az0\":%.1f,\"az_step\":%.2f,\"cells\":[",
-        s->enabled, s->frames, SCENE_NR, SCENE_NA,
+        s->enabled, s->frames_raw, s->halflife_s, SCENE_NR, SCENE_NA,
         (double)SCENE_RSTEP, (double)SCENE_AZ0, (double)SCENE_ASTEP);
     if (w < 0 || (size_t)w >= cap) return 0;
     off = (size_t)w;
 
-    unsigned int fr = s->frames ? s->frames : 1;
+    float fr = s->frames_eff > 1e-6f ? s->frames_eff : 1.0f;
     int first = 1;
     for (int c = 0; c < NCELL; c++) {
-        if (!s->hits[c]) continue;
-        unsigned int occ = (s->hits[c] * 255u) / fr;
-        if (occ > 255u) occ = 255u;
+        if (s->hits[c] <= 0.0f) continue;
+        int occ = (int)((s->hits[c] / fr) * 255.0f + 0.5f);
+        if (occ > 255) occ = 255;
+        if (occ <= 0) continue;
         int ir = c / SCENE_NA, ia = c % SCENE_NA;
-        /* leave room for the closing "]}" */
         if (off + 32 >= cap) break;
-        w = snprintf(buf + off, cap - off, "%s%d,%d,%u,%u",
+        w = snprintf(buf + off, cap - off, "%s%d,%d,%d,%u",
                      first ? "" : ",", ir, ia, occ, (unsigned)s->peak[c]);
         if (w < 0 || (size_t)w >= cap - off) break;
         off += (size_t)w; first = 0;

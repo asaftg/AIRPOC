@@ -24,6 +24,7 @@ GET /scene?on=0                 -> stop accumulating (layer freezes)
 GET /scene?on=1                 -> resume
 GET /scene?reset=1              -> clear and start over
 GET /scene?on=1&reset=1         -> both
+GET /scene?halflife=SECONDS     -> set the evidence half-life (0 = never forget)
 ```
 Any control form also returns the current layer. **Poll at ~1 Hz** — the daemon
 only refreshes the snapshot once per second, so faster polling just re-sends the
@@ -40,6 +41,7 @@ same bytes.
 
 - `scene` — 1 if accumulating, 0 if paused
 - `frames` — frames accumulated so far (use it to show "map age")
+- `halflife_s` — current evidence half-life in seconds (0 = never forget)
 - `cells` — **flat** array, 4 numbers per lit cell. Only lit cells are sent
   (typically 3–5k of the 23,040, so ~50 KB).
 
@@ -102,6 +104,25 @@ Night street recording, 100 s, by range band:
 Solid structure inside ~150 m, thinning to a faint haze past 300 m. The haze is
 the bearing-noise population — deliberately not filtered out, because with the
 sensor moving it is expected to firm up.
+
+## Decay — why it is exponential and not a window
+
+Old evidence fades with an **exponential half-life** (default **60 s**), not a
+hard time window. A window makes the map pop discontinuously as evidence falls
+off its edge and needs a frame ring buffer; exponential forgetting fades
+smoothly at constant memory — one multiply over the grid per frame.
+
+Measured: at a 2 s half-life the layer collapses to ~45 cells above 50 %
+occupancy (the persistent core) against ~2–3 k lit cells at 60 s. So the knob
+directly trades "how much of the world is remembered" against "how quickly it
+reacts to change".
+
+**Time is only a proxy for the thing that actually matters.** A stationary
+sensor's map stays valid indefinitely — there is no reason to forget it. A
+moving one invalidates immediately. The real driver is platform motion, so once
+the gimbal encoders are available the decay should be driven by how far the
+sensor has turned/moved rather than by the clock, and the map should be held in
+a world frame instead of reset. Until then: 60 s default, `reset=1` on a slew.
 
 ## Caveats the console should respect
 

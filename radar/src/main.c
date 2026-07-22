@@ -49,9 +49,10 @@ static volatile int g_run = 1;
 static void on_sig(int s) { (void)s; g_run = 0; }
 
 /* /scene handler — enable/disable or clear the static occupancy layer. */
-static void on_scene(int on, int reset, void *user) {
+static void on_scene(int on, int reset, double halflife_s, void *user) {
     SceneMap *s = (SceneMap *)user;
     if (on >= 0) scene_set_enabled(s, on);
+    if (halflife_s >= 0.0) scene_set_halflife(s, halflife_s);
     if (reset)   scene_reset(s);
 }
 
@@ -129,7 +130,7 @@ static void on_frame(void *user, uint32_t frame_no, const RadarPoint *pts, int n
                                    c->frame.targets, RADAR_MAX_TARGETS);
 
     /* Static occupancy display layer: fold this frame in, publish ~1 Hz. */
-    scene_step(c->scene, c->frame.points, n);
+    scene_step(c->scene, c->frame.points, n, dt);
     if (c->scene_json && t - c->scene_pub_t >= 1.0) {
         int sl = scene_json(c->scene, c->scene_json, SCENE_JSON_CAP);
         if (sl > 0) http_set_scene(c->scene_json, (size_t)sl);

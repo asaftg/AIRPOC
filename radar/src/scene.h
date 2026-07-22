@@ -32,6 +32,11 @@
 #define SCENE_AZ0    -60.0f
 #define SCENE_ASTEP   1.0f
 #define SCENE_NA      120
+/* Exponential forgetting of old evidence. Time is only a PROXY here: a
+ * stationary sensor's map stays valid indefinitely while a moving one
+ * invalidates at once, so the real driver is platform motion - use that
+ * once the gimbal encoders land. 0 = never forget. */
+#define SCENE_HALFLIFE_DEFAULT 60.0
 #define SCENE_DOP_MAX 0.1f    /* m/s — "not moving" */
 
 typedef struct SceneMap SceneMap;
@@ -40,7 +45,7 @@ SceneMap *scene_new(void);
 void      scene_free(SceneMap *);
 
 /* Fold one frame's points in. Cheap: one pass over the stationary points. */
-void      scene_step(SceneMap *, const RadarPoint *pts, int n);
+void      scene_step(SceneMap *, const RadarPoint *pts, int n, double dt);
 
 /* Clear the accumulation (use on a slew, or from GET /scene?reset=1). */
 void      scene_reset(SceneMap *);
@@ -48,6 +53,10 @@ void      scene_reset(SceneMap *);
 /* Accumulation on/off. Default on. */
 void      scene_set_enabled(SceneMap *, int on);
 int       scene_enabled(const SceneMap *);
+
+/* Evidence half-life in seconds; 0 = never forget. */
+void      scene_set_halflife(SceneMap *, double seconds);
+double    scene_halflife(const SceneMap *);
 
 /* Serialise the lit cells as JSON into buf. Returns bytes written (0 if it
  * would not fit). Sparse: only cells that have ever been occupied. */
