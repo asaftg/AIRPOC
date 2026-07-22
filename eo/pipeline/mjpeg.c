@@ -85,6 +85,15 @@ static volatile int g_res = 2;             /* boot at high (640x480) — light b
  * Y10 tap stay at the full operating fps. g_clients = live /stream HTTP clients (the
  * producer skips the whole display chain when nobody is watching — no frames for nobody).*/
 static volatile int g_disp_fps = 30;       /* default 30, range 12..60 */
+/* JPEG quality, runtime-settable via /ctl?q=. The operator link (open AP) is the binding
+ * constraint, and the res ladder is a coarse 4-step cliff — quality is the FINE bandwidth
+ * axis that degrades gracefully. Clamped 30..95: below ~30 the 8x8 blocking starts eating
+ * the small far-target signatures the detector exists to find; above 95 costs bits for
+ * nothing. DISPLAY PATH ONLY — the detector reads raw Y10 off airpoc.eo_y10 and the
+ * recorder's native channel records the same raw frames, so neither is affected. */
+static int g_quality = EO_FEED_QUALITY;    /* atomic: read by the encode workers */
+#define EO_Q_MIN 30
+#define EO_Q_MAX 95
 static int g_clients = 0;                  /* atomic: active /stream clients */
 
 int mjpeg_zoom(void) { return g_zoom; }
@@ -184,7 +193,7 @@ static unsigned char *encode(const uint8_t *gray, int w, int h, unsigned long *l
     c.image_width = w; c.image_height = h;
     c.input_components = 1; c.in_color_space = JCS_GRAYSCALE;
     jpeg_set_defaults(&c);
-    jpeg_set_quality(&c, EO_FEED_QUALITY, TRUE);
+    jpeg_set_quality(&c, __atomic_load_n(&g_quality, __ATOMIC_RELAXED), TRUE);
     jpeg_start_compress(&c, TRUE);
     while (c.next_scanline < (JDIMENSION)h) {
         JSAMPROW row = (JSAMPROW)(gray + (size_t)c.next_scanline * w);
@@ -336,7 +345,7 @@ static void *client(void *arg)
             "\"zoom\":%d,\"hfov\":%.2f,\"vfov\":%.2f,\"sharp\":%.0f,"
             "\"ae\":%d,\"gaincap\":%d,\"median\":%d,"
             "\"denoise\":%d,\"dn_active\":%d,\"dn_ms\":%.2f,\"connected\":%d,"
-            "\"disp_fps\":%d,\"clients\":%d,"
+            "\"disp_fps\":%d,\"clients\":%d,\"q\":%d,"
             "\"spot_ae\":%d,\"spot_active\":%d,\"spot_cx\":%d,\"spot_cy\":%d,"
             "\"res\":\"%s\",\"dw\":%d,\"dh\":%d,\"eff_w\":%d,\"eff_h\":%d,"
             "\"laser\":%d,\"lpower\":%d,\"lfov\":%.1f,\"lpresent\":%d}\n",
@@ -347,6 +356,7 @@ static void *client(void *arg)
             st.ae_on, st.gaincap, st.median,
             tdn_enabled(), tdn_active(), tdn_last_ms(), st.connected,
             g_disp_fps, mjpeg_stream_clients(),
+            __atomic_load_n(&g_quality, __ATOMIC_RELAXED),
             spot_ae, spot_active, spot_cx, spot_cy,
             mjpeg_res_name(), dw, dh, eff_w, eff_h,
             lon, lpw, lfov, lpr);
@@ -382,6 +392,9 @@ static void *client(void *arg)
         if ((q = qparam(req, "spot_ae="))) eo_set_spot_ae(atoi(q));
         if ((q = qparam(req, "disp_fps="))) { int v = atoi(q);
             g_disp_fps = v < 12 ? 12 : v > 60 ? 60 : v; }   /* display-only rate cap */
+        if ((q = qparam(req, "q="))) { int v = atoi(q);     /* JPEG quality, display only */
+            v = v < EO_Q_MIN ? EO_Q_MIN : v > EO_Q_MAX ? EO_Q_MAX : v;
+            __atomic_store_n(&g_quality, v, __ATOMIC_RELAXED); }
         const char *ok = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         ssize_t wr = write(fd, ok, strlen(ok)); (void)wr; close(fd); return NULL;
     }
