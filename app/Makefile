@@ -9,7 +9,7 @@
 CC     ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -pthread
 
-OBJ := main.o gui.o eo_client.o radar_client.o det_client.o trk_client.o
+OBJ := main.o gui.o eo_client.o radar_client.o det_client.o trk_client.o fus_client.o
 
 app: web_assets.h $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ)
@@ -17,9 +17,9 @@ app: web_assets.h $(OBJ)
 web_assets.h: web/index.html web/app.css web/app.js gen_assets.sh
 	sh gen_assets.sh
 
-gui.o: gui.c gui.h eo_client.h radar.h det.h trk.h web_assets.h
+gui.o: gui.c gui.h eo_client.h radar.h det.h trk.h fus.h web_assets.h
 	$(CC) $(CFLAGS) -c -o $@ gui.c
-main.o: main.c eo_client.h radar.h det.h trk.h gui.h
+main.o: main.c eo_client.h radar.h det.h trk.h fus.h gui.h
 	$(CC) $(CFLAGS) -c -o $@ main.c
 eo_client.o: eo_client.c eo_client.h
 	$(CC) $(CFLAGS) -c -o $@ eo_client.c
@@ -29,6 +29,8 @@ det_client.o: det_client.c det.h
 	$(CC) $(CFLAGS) -c -o $@ det_client.c
 trk_client.o: trk_client.c trk.h
 	$(CC) $(CFLAGS) -c -o $@ trk_client.c
+fus_client.o: fus_client.c fus.h
+	$(CC) $(CFLAGS) -c -o $@ fus_client.c
 
 clean:
 	rm -f app *.o web_assets.h

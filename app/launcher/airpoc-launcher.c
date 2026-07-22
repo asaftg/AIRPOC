@@ -207,9 +207,11 @@ static void handle_conn(int fd)
         int eo = port_up(8091), rad = port_up(8092);
         char b[320];
         snprintf(b, sizeof b,
-                 "{\"app\":%s,\"eo\":%s,\"radar\":%s,\"det\":%s,\"eo_rec\":%s,\"radar_rec\":%s}",
+                 "{\"app\":%s,\"eo\":%s,\"radar\":%s,\"det\":%s,\"fus\":%s,"
+                 "\"eo_rec\":%s,\"radar_rec\":%s}",
                  port_up(8080) ? "true" : "false", eo ? "true" : "false", rad ? "true" : "false",
                  port_up(8094) ? "true" : "false",
+                 port_up(8096) ? "true" : "false",
                  (eo && rec_chan_up("eo_y10")) ? "true" : "false",
                  (rad && rec_chan_up("radar_raw")) ? "true" : "false");
         reply(fd, "application/json", b);

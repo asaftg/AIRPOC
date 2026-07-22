@@ -13,6 +13,7 @@
 #include "radar.h"
 #include "det.h"
 #include "trk.h"
+#include "fus.h"
 #include "gui.h"
 #include <getopt.h>
 #include <signal.h>
@@ -30,14 +31,16 @@ int main(int argc, char **argv)
     const char *rec   = "127.0.0.1:8093";   /* recorder daemon  */
     const char *det   = "127.0.0.1:8094";   /* EO detector daemon */
     const char *trk   = "127.0.0.1:8095";   /* EO tracker daemon — the box source */
+    const char *fus   = "127.0.0.1:8096";   /* fusion daemon — the target LIST source */
     int port = 8080, opt;
-    while ((opt = getopt(argc, argv, "p:e:r:c:d:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "p:e:r:c:d:t:u:")) != -1) {
         if      (opt == 'p') port = atoi(optarg);
         else if (opt == 'e') eo = optarg;
         else if (opt == 'r') rport = optarg;
         else if (opt == 'c') rec = optarg;
         else if (opt == 'd') det = optarg;
         else if (opt == 't') trk = optarg;
+        else if (opt == 'u') fus = optarg;
     }
 
     signal(SIGINT, on_sig);
@@ -48,11 +51,12 @@ int main(int argc, char **argv)
     radar_start(rport);    /* consume the radar daemon; NOT CONNECTED if down */
     det_start(det);        /* consume the EO detector (dev overlay only now) */
     trk_start(trk);        /* consume the EO tracker — the single source of the operator's EO boxes */
+    fus_start(fus);        /* consume fusion — the target list when it is up; optional, never required */
     gui_set_recorder(rec); /* recorder daemon address for the /rec/ pass-through */
 
     if (gui_start(port) != 0) {
         fprintf(stderr, "app: GUI server failed to start\n");
-        trk_stop(); det_stop(); radar_stop(); eo_stop();
+        fus_stop(); trk_stop(); det_stop(); radar_stop(); eo_stop();
         return 1;
     }
     fprintf(stderr, "app: operator console http://0.0.0.0:%d/  (proxy: EO %s, radar %s)\n",
@@ -62,6 +66,7 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "app: shutting down\n");
     gui_stop();
+    fus_stop();
     trk_stop();
     det_stop();
     radar_stop();

@@ -166,22 +166,46 @@ Boxes arrive over **SSE `/det/stream`** (~15/s) from the detection daemon (`:809
 - Heads-up: until the trained mono model lands, the stock COCO placeholder emits false
   "vehicle" boxes on the bench — the rendering is real, today's boxes are not.
 
-## Target list — BOTH sensors, one list
-Radar targets and EO tracks are **independent objects with separate id spaces**. There is no
-fusion yet, so the console does **not** dedup them — guessing at that association would merge
-two different things. Each row is keyed `"<src>:<tid>"` so ids can't collide, and each sensor
-shows what it actually knows:
+## Target list — ONE list, fusion-driven when fusion is up
+When **fusion** (`fusion/`, `fusiond` on `:8096`) is delivering frames the list is drawn
+**exclusively** from its `targets[]` and the panel header shows a **`FUS`** badge. Fusion down,
+stale (>3 s), or replaying → the list falls back to the two per-sensor lists. Either way the
+console **never dedups**: on the fusion wire a per-sensor track that appears as a constituent of
+a fused row is never also published on its own, and without fusion the two sensors are simply
+different objects — guessing at the association is exactly what fusion exists to stop.
 
 | Row | Shows | Doesn't have |
 |---|---|---|
+| **FUS** (fused) | class · confidence · az/el **and** range — the one row type with both | — |
 | **EO** (tracker) | class · confidence · azimuth/elevation | range — a camera has none |
 | **RDR** (radar) | range · speed · azimuth | class — the radar emits class-less boxes |
-| **FUS** | *stub* — fusion will carry range **and** class on one row | — |
 
-Persistence is **each daemon's own**: both run temporal trackers with stable ids, confirm and
-coast, so rows come straight off the wire. A GUI-side hold would double-persist what the
-daemons already did. Ranking pins the **engaged** target first (so the held target can never
+Rows are keyed by their **constituent** — `"eo:<eo_tid>"` when there is an EO half, else
+`"rad:<rad_tid>"` — not by the fusion `gid`. The video overlay and the scope draw off the
+per-sensor wires at their own rate and only know sensor ids, so keying on the constituent is
+what makes a tap on a row, a box and a circle land on the same target. The `gid` still carries
+identity: it picks the row's colour, which therefore survives per-sensor id churn.
+
+Persistence is **each daemon's own**: every producer runs a temporal tracker with stable ids,
+confirm and coast, so rows come straight off the wire. A GUI-side hold would double-persist what
+the daemons already did. Ranking pins the **engaged** target first (so the held target can never
 scroll off), then fused, then confirmed EO tracks, then the rest by confidence/nearness.
+
+## Fusion overlay — one object, one mark
+The video boxes keep coming from the **tracker** at its own rate (a fusion stall must never
+freeze the overlay). Each fusion frame supplies an `eo_tid → fused row` map, and that changes
+two things on the video:
+
+- A tracker box whose `tid` is a **fused constituent** draws **heavier** (in SEEKER mode, a ring
+  around the cross) and its label carries the **range** the radar half brought it — a range next
+  to a classified target is the whole payoff of fusion, so it goes where the operator already
+  looks.
+- The **radar-on-EO circle is suppressed** for any `rad_tid` that is a fused constituent. Two
+  marks for one object is the double display fusion exists to end.
+
+**Fusion angles are rig-frame already** — fusion owns the radar↔EO mount trim now — so the
+console's own display trim (above) is applied only to the raw radar wire, never on top of
+fusion's angles.
 
 ## Tracking — selection and mode (cluster `TRACK`)
 Selecting a target **declares the tracking state**; each module then acts in its own domain off
@@ -339,10 +363,13 @@ rows (`knobs.temporal`).
 | `/trk/stream` | **SSE** push of each EO-tracker message; **the** EO-box path (tracks with identity + engaged lock) |
 | `/trk` | the tracker's latest message verbatim (one-shot poll) |
 | `/tstats` | the tracker's `/stats` (health + `knobs`) |
+| `/fus/stream` | **SSE** push of each fusion message (~41/s with both trackers up); drives the target list |
+| `/fus` | fusion's latest message verbatim (one-shot poll) |
+| `/fstats` | fusion's `/stats` (health, feeds, trim + `knobs`) |
 | `/rstats` | the radar daemon's `/stats` (its control values + fps/drops) for slider init |
 | `/uiprefs` | operator UI prefs stored **on the Jetson** (`/var/lib/airpoc/ui-prefs.json`): plain `GET` reads, `?set=<url-encoded json>` writes. Currently the radar→EO AZ/EL trim — rig-level state that must not depend on which browser or which IP the console was opened from. Deliberately schema-less: the console stores the blob the page hands it, so new prefs need no C change |
 | `/stats` | console state + the EO feed's `/stats` nested under `"eo"` |
-| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/denoise/disp_fps/fps/res`) → the EO feed |
+| `/ctl?…` | routed: `track`/`engage` → local; `radar_*` → radar daemon; `det_*` → detection daemon; `trk_*` → the EO tracker; `fus_*` → fusion (`trim_az/trim_el/gate/confirm/divorce_s/coast_s`); the rest (`zoom/laser/power/fov/ae/gain/expms/gaincap/median/denoise/disp_fps/fps/res`) → the EO feed |
 | `/rec/<path>` | **pass-through** to the recorder daemon (`:8093`): `/rec/ctl`, `/rec/library`, `/rec/thumbs/…`, `/rec/export` (offload `.tar`), `/rec/replay/*` (incl. `/rec/replay/state` with `native_mp4` status, `/rec/replay/{radar,det}/stream` SSE, `/rec/replay/transcode?sid=` HD build) |
 
 The `/rec/*` proxy sets a **180 s** upstream read timeout (a slow `/rec/export` tar build can

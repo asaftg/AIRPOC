@@ -385,8 +385,58 @@
                spd: Math.hypot(t.vx, t.vy), az: t.az, el: t.el, conf: t.conf || 0, raw: t };
     });
   }
-  /* fusion lands here later: { src:"fus", … } rows carrying range AND class together. */
-  function allTargets() { return eoTracks().concat(radarTargets()); }
+  /* ── FUSION (fusiond :8096) — when it is delivering frames it IS the target list ──────────
+   * Fusion joins the two trackers into ONE picture: a fused row carries the radar's range and
+   * the camera's angles + class together, under a global id (gid) that outlives per-sensor id
+   * churn. Its wire guarantees a per-sensor track that appears as a constituent of a fused row
+   * is never also published on its own, so we render targets[] VERBATIM — no client-side dedup
+   * here, ever (guessing at a merge is exactly what fusion exists to stop).
+   *
+   * Rows are keyed by their CONSTITUENT ("eo:<eo_tid>" / "rad:<rad_tid>"), not by gid: the
+   * video overlay and the PPI draw off the per-sensor wires at their own rate and only know
+   * sensor ids, so a tap on a list row, a video box and a radar circle must all land on the
+   * same key. gid still carries identity — it picks the row's colour and rides the FUS badge.
+   *
+   * Fusion angles are RIG FRAME and already include the radar<->EO mount trim (fusion owns that
+   * trim now), so the console's own display trim is NOT added on top of them.
+   *
+   * Fusion is optional: down (or stale, or during replay, where it isn't recorded) the list
+   * falls back to the two per-sensor lists exactly as before. */
+  var lastFus = null, lastFusAt = 0, fusES = null, FUS_STALE_MS = 3000;
+  function fusUp() {
+    return !replaying && !!lastFus && lastFus.connected !== false && !!lastFus.targets
+           && (Date.now() - lastFusAt) < FUS_STALE_MS;
+  }
+  function fusTargets() {
+    var D = 180 / Math.PI;
+    return (lastFus.targets || []).map(function (t) {
+      var a = t.ang || [0, 0, 0, 0];
+      var eo = (typeof t.eo_tid === "number") ? t.eo_tid : -1;
+      var rd = (typeof t.rad_tid === "number") ? t.rad_tid : -1;
+      return { src: t.src || "fus", gid: t.gid, eo_tid: eo, rad_tid: rd,
+               key: eo >= 0 ? ("eo:" + eo) : ("rad:" + rd),
+               cls: t.cls || "unknown", conf: t.conf || 0,
+               az: a[0] * D, el: a[1] * D,
+               rng: (typeof t.r_m === "number" && t.r_m >= 0) ? t.r_m : null,   /* -1 = no range */
+               rdot: (typeof t.rdot_mps === "number") ? t.rdot_mps : null,
+               rstale: t.r_stale === 1, raw: t };
+    });
+  }
+  /* eo_tid / rad_tid -> the fused row it belongs to. The overlays keep drawing from the
+   * per-sensor wires, so this is how a video box learns it is one half of a fused object:
+   * it gets the fused mark (and the range fusion brought it), and the radar's own circle for
+   * the other half is suppressed — one object, one mark on the video. */
+  function fusedMap() {
+    var m = { eo: {}, rad: {} };
+    if (!fusUp()) return m;
+    (lastFus.targets || []).forEach(function (t) {
+      if (t.src !== "fus") return;
+      if (typeof t.eo_tid === "number" && t.eo_tid >= 0) m.eo[t.eo_tid] = t;
+      if (typeof t.rad_tid === "number" && t.rad_tid >= 0) m.rad[t.rad_tid] = t;
+    });
+    return m;
+  }
+  function allTargets() { return fusUp() ? fusTargets() : eoTracks().concat(radarTargets()); }
 
   /* Bearing reads as a SIDE, not a sign: "6R" / "7L" — an operator turning a head thinks
    * left/right, not positive/negative. Elevation keeps the sign, since up/down maps to it
@@ -402,22 +452,35 @@
     if (t.src === "eo" && t.state === "conf") s += 1e6;
     return s + (t.conf || 0) * 1e3 - (t.rng || 0);
   }
+  /* What a row SAYS is what that row's sensors actually know: a fused row is the only one that
+   * can put class and range on the same line — that is the whole point of fusion. */
+  function rowText(t) {
+    if (t.src === "fus")
+      return { mid: String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "% · "
+                    + fmtAz(t.az) + "/" + fmtEl(t.el),
+               rgt: (t.rng != null ? t.rng.toFixed(0) + " m" : "—") };
+    if (t.src === "eo")
+      return { mid: String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%",
+               rgt: fmtAz(t.az) + " / " + fmtEl(t.el) };
+    /* radar: the live wire carries a velocity vector, a fusion passthrough row carries range-rate */
+    var spd = (typeof t.spd === "number") ? t.spd : Math.abs(t.rdot || 0);
+    return { mid: spd.toFixed(1) + " m/s · " + fmtAz(t.az),
+             rgt: (t.rng != null ? t.rng.toFixed(0) + " m" : "—") };
+  }
   var lastTgtHtml = "", TGT_SLOTS = 6;
   function renderTargetList() {
     var rows = allTargets().sort(function (a, b) { return importance(b) - importance(a); }).slice(0, TGT_SLOTS);
     $("v-tgtcount").textContent = rows.length;
+    /* say WHERE the list came from — one fused picture, or the two per-sensor lists. The
+     * operator reads range-next-to-class very differently depending on the answer. */
+    $("v-fusbadge").hidden = !fusUp();
     /* Fixed slots so the panel never resizes as targets come and go. */
     var out = [];
     for (var i = 0; i < TGT_SLOTS; i++) {
       if (i < rows.length) {
-        var t = rows[i], col = tcolor(t.key), mid, rgt;
-        if (t.src === "eo") {
-          mid = String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
-          rgt = fmtAz(t.az) + " / " + fmtEl(t.el);
-        } else {
-          mid = t.spd.toFixed(1) + " m/s · " + fmtAz(t.az);
-          rgt = t.rng.toFixed(0) + " m";
-        }
+        /* colour follows the fusion gid when there is one — it survives the per-sensor id churn
+         * underneath, so a target keeps its colour through a tid change */
+        var t = rows[i], col = tcolor(t.gid != null ? "g" + t.gid : t.key), tx = rowText(t), mid = tx.mid, rgt = tx.rgt;
         out.push('<li class="tgt-row' + (t.key === engagedKey ? ' eng' : '') + '" data-key="' + t.key + '" style="border-left-color:' + col + '">'
           + '<span class="tid"><span class="swatch" style="background:' + col + '"></span></span>'
           + '<span class="meta"><b class="tsrc ' + t.src + '">' + (t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR") + '</b> ' + mid + '</span>'
@@ -698,6 +761,8 @@
      * the detector block below uses z=1 for native. Without this every mark projected far outside
      * the frame, hit the |fx|>1 cull, and the whole radar overlay silently vanished in native
      * replay while the detector boxes kept working. */
+    /* which per-sensor tracks fusion has paired this frame (empty when fusion is down) */
+    var fmap = fusedMap();
     var fovZ = (replaying && replayVideoSrc === "native") ? (es.zoom || 1) : 1;
     var eoHfov = (es.hfov || 0) * fovZ;
     var eoVfov = (es.vfov ? es.vfov : (es.hfov || 0) * 0.75) * fovZ;
@@ -709,6 +774,10 @@
       targets(lastRadar).forEach(function (t) {
         /* locked → the video shows ONLY the held target, radar marks included */
         if (engagedKey && lockLive && ("rad:" + t.tid) !== engagedKey) return;
+        /* FUSED → the camera side already marks this object. Two marks for one thing is the
+         * double-display fusion exists to end, so the radar circle stands down and its range
+         * rides on the EO box instead. */
+        if (fmap.rad[t.tid]) return;
         var az = t.az + radarOv.az, el = t.el + radarOv.el;
         var fx = az / (eoHfov / 2), fy = -el / (eoVfov / 2);   /* -1..1 within frame; +el = up */
         if (Math.abs(fx) > 1 || Math.abs(fy) > 1) return;      /* off-frame → not drawn */
@@ -760,7 +829,7 @@
       else { vw = w; vh = w / ar; vx = 0; vy = (h - vh) / 2; }
       ctx.save(); ctx.beginPath(); ctx.rect(vx, vy, vw, vh); ctx.clip();
       ctx.font = (10 * dpr) + "px ui-monospace, monospace";
-      var drawDet = function (b, dashed, col, label, forceBox, tracked, tbd) {
+      var drawDet = function (b, dashed, col, label, forceBox, tracked, tbd, fused) {
         if (!b.px || b.px.length < 4) return false;
         var bx = vx + (b.px[0] - ox) / cw * vw, by = vy + (b.px[1] - oy) / ch * vh;
         var bw2 = b.px[2] / cw * vw, bh2 = b.px[3] / ch * vh;
@@ -798,10 +867,20 @@
             ctx.moveTo(bx, by - a); ctx.lineTo(bx, by - g); ctx.moveTo(bx, by + g); ctx.lineTo(bx, by + a);
             ctx.stroke();
           });
+          /* FUSED in seeker mode → a ring around the cross. Both sensors hold this one, so it
+           * gets a mark neither sensor alone can draw; the cross inside is still the class. */
+          if (fused) {
+            [["rgba(0,0,0,0.85)", 4.5 * dpr], [col, 2 * dpr]].forEach(function (s) {
+              ctx.strokeStyle = s[0]; ctx.lineWidth = s[1];
+              ctx.beginPath(); ctx.arc(bx, by, a + 3.5 * dpr, 0, 2 * Math.PI); ctx.stroke();
+            });
+          }
           ctx.setLineDash([]); ctx.lineCap = "butt";
           haloText(ctx, label, bx + a + 3 * dpr, by - 4 * dpr, col, dpr);
         } else {
-          ctx.strokeStyle = col; ctx.lineWidth = 1.6 * dpr;
+          /* FUSED in box mode → the same box, drawn heavier. Shape stays the class's; weight
+           * says "two sensors agree on this one". */
+          ctx.strokeStyle = col; ctx.lineWidth = (fused ? 3 : 1.6) * dpr;
           ctx.setLineDash(dashed ? [5 * dpr, 4 * dpr] : []);
           ctx.strokeRect(bx - bw2 / 2, by - bh2 / 2, bw2, bh2);
           ctx.setLineDash([]);
@@ -849,10 +928,16 @@
         var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
         var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
                        : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
+        /* FUSED: the radar half of this object brings a RANGE the camera can never measure —
+         * put it on the box. That number appearing next to a classified target is the whole
+         * payoff of fusion, so it goes where the operator is already looking. */
+        var fu = fmap.eo[t.tid];
+        if (fu && typeof fu.r_m === "number" && fu.r_m >= 0) lab += " " + fu.r_m.toFixed(0) + "m";
         if (eng) lab = "LOCK " + lab;
         var drawn = drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
                 eng,                                     /* corner brackets = LOCKED, nothing else */
-                t.raw && (t.raw.tbd === 1 || t.raw.tbd === true));
+                t.raw && (t.raw.tbd === 1 || t.raw.tbd === true),
+                !!fu);                                   /* heavier box / ringed cross = FUSED */
         /* remember where it landed, in 0..1 panel coords, so a tap can hit-test the drawn
          * box instead of re-deriving the projection (which would drift out of sync).
          * Only boxes we actually DREW are tappable — a target culled for being mostly outside
@@ -1317,6 +1402,24 @@
     draw(true, false);
   }
   function trkConnected() { return !!(lastTrk && lastTrk.connected !== false); }
+
+  /* FUSION — SSE push from /fus/stream (~41/s with both trackers up, 1/s heartbeat otherwise).
+   * It drives the target LIST and tags which video boxes are fused; the boxes themselves keep
+   * coming from the tracker at its own rate, so a fusion stall never freezes the overlay.
+   * Down or stale -> the list falls back to the two per-sensor lists. */
+  function openFusStream() {
+    if (fusES) { fusES.close(); fusES = null; }
+    fusES = new EventSource("/fus/stream");
+    fusES.onmessage = function (e) {
+      if (replaying) return;
+      var m = parseJSONsafe(e.data);
+      if (m && m.connected !== false) { lastFus = m; lastFusAt = Date.now(); } else { lastFus = null; }
+      renderTargetList(); draw(true, false);
+    };
+    fusES.onerror = function () {
+      if (!replaying) { lastFus = null; renderTargetList(); draw(true, false); }   /* auto-reconnects */
+    };
+  }
 
   /* Reflect the EO feed's ISP state into the DEV panel (guarded so a poll never fights a
    * control the operator is actively touching). */
@@ -1997,6 +2100,7 @@
   openRadarStream();   /* live = SSE push; replay opens its own radar SSE (poll fallback) in openReplay */
   openDetStream();                                  /* raw detector boxes — DEV overlay only now */
   openTrkStream();                                  /* EO TRACKER — the operator's EO boxes + engaged lock */
+  openFusStream();                                  /* FUSION — the one target list when it is up */
   initRadarOv();                                    /* overlay toggle (browser) + AZ/EL trim (from the Jetson) */
   initDetStyle();                                   /* detector mark style BOX/SEEKER (persisted) */
   setInterval(pollRstats, 400); pollRstats();

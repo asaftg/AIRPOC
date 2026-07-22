@@ -23,14 +23,18 @@ up. Reachable from any phone/laptop/tablet on the network — no install, no SSH
                                          |- radar_preview :8092
                                          |- detectiond    :8094
                                          |- trackerd      :8095
+                                         |- fusiond       :8096
                                          +- app (console) :8080
 ```
 
 - **Launch order matters.** `trackerd` consumes the detector, so it starts **after**
-  `detectiond`; the console starts last and dials into all of them. The tracker is a pure
+  `detectiond`, and `fusiond` consumes the radar tracker + `trackerd`, so it starts after
+  both; the console starts last and dials into all of them. Fusion reconnects on its own, so
+  its order only decides how fast the fused picture fills in — and the console falls back to
+  the per-sensor lists whenever it is absent. The tracker is a pure
   consumer (no device, no shm tap of its own), so a bound port is its whole health check —
   unlike the producers, which are only healthy when the port **and** their `/dev/shm` tap exist.
-- **Honest status.** `/status` returns `eo`/`radar` (feed ports) **and** `eo_rec`/
+- **Honest status.** `/status` returns `eo`/`radar`/`det`/`fus` (feed ports) **and** `eo_rec`/
   `radar_rec` (does the recorder's `/dev/shm` tap actually flow?). A feed can be up while
   its tap is dead → recordings come out empty; the page then shows **REC BUS DOWN** instead
   of a green ✓, and `start.sh` re-attaches on the next START (it counts a feed healthy only

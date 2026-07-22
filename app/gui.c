@@ -15,6 +15,7 @@
 #include "radar.h"
 #include "det.h"
 #include "trk.h"
+#include "fus.h"
 #include "web_assets.h"
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -409,6 +410,49 @@ static void handle_tstats(int fd)
                 "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
 }
 
+/* Push FUSION messages to the browser as SSE. When this feed is up it is the authority for the
+ * target LIST (one row per object, fused rows carrying range AND class); when it is down the
+ * console falls back to the per-sensor lists — fusion is never a single point of failure. */
+static void handle_fus_stream(int fd)
+{
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\nConnection: close\r\n\r\n");
+    int cap = 262144;
+    char *b = malloc(cap);
+    if (!b) return;
+    unsigned seq = 0;
+    for (;;) {
+        int n = fus_wait_frame(&seq, b, cap, 1500);
+        const char *payload = (n > 0) ? b : "{\"connected\":false}";
+        if (dprintf(fd, "data: %s\n\n", payload) < 0) break;
+    }
+    free(b);
+}
+
+/* latest fusion message verbatim (one-shot poll) */
+static void handle_fus(int fd)
+{
+    int cap = 262144;
+    char *b = malloc(cap);
+    if (!b) return;                     /* client() owns the single close(fd) — don't double-close */
+    int n = fus_get_frame_json(b, cap);
+    if (n <= 0 || !fus_connected())
+        n = snprintf(b, cap, "{\"connected\":false,\"targets\":[]}\n");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n", n);
+    ssize_t w = write(fd, b, n); (void)w;
+    free(b);
+}
+
+/* fusion's /stats (health + knobs incl. the radar<->EO mount trim), for readback */
+static void handle_fstats(int fd)
+{
+    char s[8192]; int n = fus_get_stats(s, sizeof s);
+    if (n <= 0) n = snprintf(s, sizeof s, "{}");
+    dprintf(fd, "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n%s", n, s);
+}
+
 /* the daemon's /stats (its 6 control values + fps/drops), for slider init + readback */
 static void handle_rstats(int fd)
 {
@@ -487,6 +531,10 @@ static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "ga
                                  "expms=", "gaincap=", "median=", "denoise=", "disp_fps=", "fps=", "res=" };
 /* the tracker's knobs (eotrack/docs/INTEGRATION.md); GUI sends them as trk_<key>= */
 static const char *TRK_KEYS[] = { "engage", "lock", "gate_base", "confirm", "coast_s", "clutter_s" };
+/* fusion's knobs (fusion/docs/INTEGRATION.md); GUI sends them as fus_<key>=. trim_az/trim_el are
+ * the radar<->EO MOUNT trim and live in fusion, not in the console — the console's own display
+ * trim must never be applied on top of fusion angles, which are already rig-frame. */
+static const char *FUS_KEYS[] = { "trim_az", "trim_el", "gate", "confirm", "divorce_s", "coast_s" };
 /* the daemon's nine live controls; the GUI sends them namespaced as radar_<key>= */
 static const char *RADAR_KEYS[] = { "eps", "minpts", "speed", "snrmin", "fov", "elmax", "doppler",
                                     "confirm", "coast", "park" };
@@ -541,6 +589,23 @@ static void handle_ctl(const char *req)
         tn += w;
     }
     if (tn > 0) { if (tn >= (int)sizeof(tq)) tn = (int)sizeof(tq) - 1; tq[tn] = 0; trk_ctl(tq); return; }
+
+    /* fusion controls: strip the fus_ namespace and forward to fusiond's /ctl */
+    char fq[256]; int fn = 0;
+    for (unsigned k = 0; k < sizeof(FUS_KEYS) / sizeof(FUS_KEYS[0]); k++) {
+        char pref[24]; int pl = snprintf(pref, sizeof pref, "fus_%s=", FUS_KEYS[k]);
+        char *rp = strstr(query, pref);
+        if (!rp) continue;
+        rp += pl;
+        char val[24]; int vi = 0;
+        while (rp[vi] && rp[vi] != '&' && vi < (int)sizeof(val) - 1) { val[vi] = rp[vi]; vi++; }
+        val[vi] = 0;
+        if (fn >= (int)sizeof(fq) - 1) break;
+        int w = snprintf(fq + fn, sizeof(fq) - (size_t)fn, "%s%s=%s", fn ? "&" : "", FUS_KEYS[k], val);
+        if (w < 0) break;
+        fn += w;
+    }
+    if (fn > 0) { if (fn >= (int)sizeof(fq)) fn = (int)sizeof(fq) - 1; fq[fn] = 0; fus_ctl(fq); return; }
 
     /* radar controls: strip the radar_ namespace and forward to the daemon's /ctl */
     char dq[512]; int dn = 0;
@@ -697,6 +762,9 @@ static void *client(void *arg)
     else if (has(req, "/trk/stream")) handle_trk_stream(fd);
     else if (has(req, "/tstats"))    handle_tstats(fd);
     else if (has(req, "/trk"))       handle_trk(fd);
+    else if (has(req, "/fus/stream")) handle_fus_stream(fd);
+    else if (has(req, "/fstats"))    handle_fstats(fd);
+    else if (has(req, "/fus"))       handle_fus(fd);
     else if (has(req, "/uiprefs"))   handle_uiprefs(fd, req);
     else if (has(req, "/det"))       handle_det(fd);
     else if (has(req, "/ctl")) {

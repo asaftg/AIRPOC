@@ -104,11 +104,24 @@ else
   launch 8095 "$BASE/eotrack" ./trackerd -p 8095 -d 127.0.0.1:8094 && restarted=1
 fi
 
+# --- Fusion (consumes the radar tracker :8092 and the EO tracker :8095, serves :8096, shm
+# tap: airpoc.fus_wire). Joins the two into ONE target picture — a fused row carries radar
+# range plus EO angles and class under a global id. Comes up after both trackers; it
+# reconnects on its own, so order only decides how fast the picture fills in. Optional by
+# design: with it down the console falls back to the per-sensor lists and the radar -> gimbal
+# EO-blind chain is untouched. ---
+if healthy 8096 /dev/shm/airpoc.fus_wire; then
+  echo ":8096 healthy — skip"
+else
+  ensure_gone "fusiond"
+  launch 8096 "$BASE/fusion" ./fusiond -p 8096 -r 127.0.0.1:8092 -t 127.0.0.1:8095 && restarted=1
+fi
+
 sleep 2   # let the feeds bind before the console dials into them
 
 # --- Operator console (consumer; no shm tap) ---
 if up 8080; then echo ":8080 already up — skip"
-else launch 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094 -t 127.0.0.1:8095; fi
+else launch 8080 "$BASE/app" ./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094 -t 127.0.0.1:8095 -u 127.0.0.1:8096; fi
 
 # Recorder re-attach: if we (re)started a producer, its shm is fresh; bounce the always-on
 # recorder so its taps bind to the live feeds (else it records 0 bytes). Only on a real

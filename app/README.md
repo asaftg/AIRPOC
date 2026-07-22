@@ -15,11 +15,13 @@ domain; the app proxies and overlays.
    owns the model + per-frame boxes                             │ │
                                     (input)                     ▼ │
  EO tracker (trackerd, :8095) ────SSE /stream + /stats + /ctl─────┤
-   owns EO identity: stable ids, confirm/coast, engaged lock      ▼
+   owns EO identity: stable ids, confirm/coast, engaged lock      │
+ fusion (fusiond, :8096)  ───────SSE /stream + /stats + /ctl──────┤
+   owns radar<->EO association: ONE target list, gids, mount trim ▼
                                               app/  (this module) ──► operator browser
-                                              relay video + radar + tracks, forward controls,
-                                              draw the radar scope + EO overlays +
-                                              target list + tracking selection
+                                              relay video + radar + tracks + fused targets,
+                                              forward controls, draw the radar scope +
+                                              EO overlays + target list + selection
 ```
 
 **The EO tracker is the single source of the EO boxes** the operator sees. The detector feeds
@@ -34,24 +36,26 @@ CONNECTED** — there is no synthetic data.
 | File | Role |
 |---|---|
 | `main.c` | supervisor: start the EO + radar consumers + the GUI server, wait for a signal |
-| `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar`+`/radar/stream` · `/det`+`/det/stream` · `/trk`+`/trk/stream` · `/stats`/`/rstats`/`/dstats`/`/tstats` · `/ctl` (routed) · `/rec/<path>` (recorder pass-through) |
+| `gui.c` / `gui.h` | proxy HTTP server: `/stream` (relay EO JPEG) · `/radar`+`/radar/stream` · `/det`+`/det/stream` · `/trk`+`/trk/stream` · `/fus`+`/fus/stream` · `/stats`/`/rstats`/`/dstats`/`/tstats`/`/fstats` · `/ctl` (routed) · `/rec/<path>` (recorder pass-through) |
 | `eo_client.c` / `eo_client.h` | consumes the EO module's MJPEG feed (latest JPEG + its `/stats`); forwards controls to its `/ctl` |
 | `radar_client.c` / `radar.h` | consumes the radar daemon's SSE (latest frame + tracks); re-broadcasts each frame to the browser (`/radar/stream`); forwards the ten controls to its `/ctl` |
 | `trk_client.c` / `trk.h` | consumes the EO tracker's SSE (:8095) — the operator's EO boxes + engaged lock; re-broadcasts on `/trk/stream`; forwards `trk_*` knobs to its `/ctl` |
+| `fus_client.c` / `fus.h` | consumes fusion's SSE (`:8096`) — the ONE target list (fused rows carry range **and** class); re-broadcasts on `/fus/stream`; forwards `fus_*` knobs to its `/ctl` |
 | `det_client.c` / `det.h` | consumes the detection daemon's SSE (`:8094`, per-frame boxes + `/stats`); re-broadcasts to the browser (`/det/stream`); forwards `det_*` controls |
 | `web/` | front-end (`index.html`, `app.css`, `app.js`) — embedded at build |
 | `gen_assets.sh` | `xxd`-embeds `web/` into `web_assets.h` (single self-contained binary) |
 | `systemd/` | `airpoc-app.service.in` + `install.sh` |
 | `launcher/` | always-on web START/STOP control (`:8088`) — bring the whole stack up/down from any device's browser ([README](launcher/README.md)) |
+| `docs/` | [`GUI.md`](docs/GUI.md) (UI + endpoint reference) · [`DEPLOY.md`](docs/DEPLOY.md) (push → pull → rebuild → verify, and the three traps) |
 
 ## Build & run (on the Jetson)
 ```bash
 sudo apt-get install -y xxd            # self-contained C — no libjpeg/eo-pipeline/illuminator link
 cd app && make
-./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094 -t 127.0.0.1:8095
+./app -p 8080 -e 127.0.0.1:8091 -r 127.0.0.1:8092 -c 127.0.0.1:8093 -d 127.0.0.1:8094 -t 127.0.0.1:8095 -u 127.0.0.1:8096
 ```
 `-e` EO feed · `-r` radar daemon · `-c` recorder daemon (`/rec/*` pass-through) · `-d` detector ·
-`-t` EO tracker.
+`-t` EO tracker · `-u` fusion.
 Open **`http://<jetson>:8080/`** (or `192.168.55.1:8080` over USB-C). In practice the
 [launcher](launcher/README.md) (`:8088`) starts/stops the whole stack for you.
 
@@ -79,10 +83,21 @@ daemon with `-s` (simulation) in front of an operator.
   **the** EO boxes: class colour, corner brackets once a track is confirmed/held, green **LOCK**
   on the engaged one, a small `t` where the detector integrated faint evidence. Tracker down →
   **EO TRACK · NOT CONNECTED**; it never falls back to raw detections.
-- **Target list** — **both sensors, no dedup** (there is no fusion yet, and guessing at the
-  association would merge two different things). EO rows carry class · confidence · az/el;
-  radar rows carry range · speed. Rows are keyed `"<src>:<tid>"` so the two id spaces can't
-  collide, with a `FUS` row type stubbed for fusion. The engaged target is pinned first.
+- **Target list** — **fusion drives it when fusion is up** (`FUS` badge in the panel header),
+  otherwise it falls back to the two per-sensor lists. Either way there is **no client-side
+  dedup**: on the fusion wire a track that is a constituent of a fused row is never also
+  published on its own, and without fusion the two sensors are simply different objects.
+  `FUS` rows carry class **and** range on one line; EO rows carry class · confidence · az/el;
+  radar rows carry range · speed. Rows are keyed by their **constituent** (`"eo:<eo_tid>"` /
+  `"rad:<rad_tid>"`), so a tap on a row, a video box or a scope circle all land on the same
+  target; the fusion `gid` picks the row colour, so it survives per-sensor id churn. The
+  engaged target is pinned first.
+- **Fusion** — proxies `fusiond` (`:8096`, `/fus/stream`, `/fstats`, `fus_*` knobs). On the
+  video, a track fusion has paired draws **heavier** (a ring around the cross in seeker mode)
+  and carries the **range** fusion brought it; the radar's own circle for the other half is
+  **suppressed** — one object, one mark. Fusion angles are already rig-frame (fusion owns the
+  radar↔EO mount trim), so the console's display trim is never added on top of them. Fusion
+  down, stale, or in replay → straight back to the per-sensor picture.
 - **Tracking / selection** — tap a **list row**, an **EO box**, or a **radar scope circle**:
   all three declare the tracking state. An EO pick sends `trk_engage=<tid>` (the only thing the
   EO tracker can lock); any pick also publishes the console's own `engage=<tid>`, so a
