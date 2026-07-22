@@ -429,6 +429,16 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         if (replay_det_json(big, sizeof big) == 0) send_json(fd, 200, big);
         else send_json(fd, 404, "{\"connected\":false,\"replay\":true}");
         pthread_mutex_unlock(&g_big_lk);
+    } else if (!strcmp(path, "/replay/trk")) {
+        pthread_mutex_lock(&g_big_lk);
+        if (replay_trk_json(big, sizeof big) == 0) send_json(fd, 200, big);
+        else send_json(fd, 404, "{\"connected\":false,\"replay\":true}");
+        pthread_mutex_unlock(&g_big_lk);
+    } else if (!strcmp(path, "/replay/fus")) {
+        pthread_mutex_lock(&g_big_lk);
+        if (replay_fus_json(big, sizeof big) == 0) send_json(fd, 200, big);
+        else send_json(fd, 404, "{\"connected\":false,\"replay\":true}");
+        pthread_mutex_unlock(&g_big_lk);
     } else if (!strcmp(path, "/replay/rstats")) {
         pthread_mutex_lock(&g_big_lk);
         if (replay_rstats_json(big, sizeof big) == 0) send_json(fd, 200, big);
@@ -488,6 +498,10 @@ static void handle(int fd, const char *path, const char *qs, const char *range)
         replay_radar_stream(fd);                          /* SSE, blocks; matches live /radar/stream */
     } else if (!strcmp(path, "/replay/det/stream")) {
         replay_det_stream(fd);                            /* SSE, blocks; matches live /det/stream */
+    } else if (!strcmp(path, "/replay/trk/stream")) {
+        replay_trk_stream(fd);                            /* SSE, blocks; matches live /trk/stream */
+    } else if (!strcmp(path, "/replay/fus/stream")) {
+        replay_fus_stream(fd);                            /* SSE, blocks; matches live /fus/stream */
     } else {
         send_json(fd, 404, "{\"err\":\"no route\"}");
     }

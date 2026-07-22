@@ -50,7 +50,7 @@ static struct {
     int playing;
     uint64_t anchor_ns;
     /* data */
-    RChan jpeg, radar, y10, det;
+    RChan jpeg, radar, y10, det, trk, fus;
     int has_native, has_display, video_native;    /* video source selection */
     int nat_w, nat_h, nat_mode;                    /* native geometry + encoding */
     int tonemap_match;                             /* replay tone map == record-time tone map */
@@ -446,6 +446,8 @@ static void rp_unload(void)
     rchan_free(&g_rp.radar);
     rchan_free(&g_rp.y10);
     rchan_free(&g_rp.det);
+    rchan_free(&g_rp.trk);
+    rchan_free(&g_rp.fus);
     nat_cache_drop();
     free(g_rp.evbuf);
     g_rp.evbuf = NULL;
@@ -482,6 +484,12 @@ static int rp_open(const char *sid)
     int has_y10 = rchan_load(dir, "eo_y10", &g_rp.y10, &t0_y10) == 0;
     int has_radar = rchan_load(dir, "radar_wire", &g_rp.radar, &t0_rd) == 0;
     int has_det = rchan_load(dir, "det_wire", &g_rp.det, &t0_det) == 0;
+    /* Tracker + fusion wires. Optional like every other channel: sessions
+     * recorded before these existed simply replay without them. Neither is
+     * allowed to define the timeline -- they are derived from EO/radar, so
+     * t0 stays anchored to the sensor channels below. */
+    rchan_load(dir, "trk_wire", &g_rp.trk, NULL);
+    rchan_load(dir, "fus_wire", &g_rp.fus, NULL);
     if (!has_jpeg && has_y10) g_rp.t0_mono = t0_y10;
     else if (!has_jpeg && has_radar) g_rp.t0_mono = t0_rd;
     else if (!has_jpeg && !has_y10 && !has_radar && has_det) g_rp.t0_mono = t0_det;
@@ -666,7 +674,8 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         "\"video_src\":\"%s\",\"has_native\":%d,\"has_display\":%d,\"native_w\":%d,\"native_h\":%d,"
         "\"play_q\":%d,\"play_fps\":%.0f,\"tonemap_match\":%d,"
         "\"tonemap_vs_eo\":\"%s\",\"tonemap_vs_eo_diff\":%.1f,"
-        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d,\"crc_bad\":%lu%s}",
+        "\"native_mp4\":\"%s\",\"native_mp4_pct\":%d,\"crc_bad\":%lu,"
+        "\"has_radar\":%d,\"has_det\":%d,\"has_trk\":%d,\"has_fus\":%d%s}",
         g_rp.sid, g_rp.name, (long long)t, (long long)g_rp.dur_ms,
         g_rp.playing, g_rp.rate,
         (unsigned long long)((g_rp.t0_real + (uint64_t)t * 1000000ull) / 1000000ull),
@@ -676,7 +685,8 @@ static size_t rp_state_obj(char *buf, size_t len, int64_t t)
         g_rp.play_q, g_rp.play_fps, g_rp.tonemap_match,
         g_rp.tm_vs_eo == 1 ? "ok" : g_rp.tm_vs_eo < 0 ? "drift" : "unchecked",
         g_rp.tm_vs_eo_diff, mp4_state, mp4_pct,
-        __atomic_load_n(&g_rp_crc_bad, __ATOMIC_RELAXED), illum);
+        __atomic_load_n(&g_rp_crc_bad, __ATOMIC_RELAXED),
+        g_rp.radar.n > 0, g_rp.det.n > 0, g_rp.trk.n > 0, g_rp.fus.n > 0, illum);
 }
 
 void replay_state_json(char *buf, size_t len)
@@ -715,21 +725,23 @@ void replay_stats_json(char *buf, size_t len)
     pthread_mutex_unlock(&g_rp.lk);
 }
 
-int replay_radar_json(char *buf, size_t len)
+/* Recorded wire frame at <= clock, byte-verbatim apart from an injected
+ * "replay":true. Radar, detections, tracks and fusion are all the same shape,
+ * so they share one implementation rather than four copies of it. */
+static int replay_wire_json(RChan *chan, char *buf, size_t len)
 {
     pthread_mutex_lock(&g_rp.lk);
     if (!g_rp.open) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     int64_t t = clock_now();
-    long i = rchan_at(&g_rp.radar, t);
-    if (i < 0) i = g_rp.radar.n ? 0 : -1;   /* before first frame: hold the first */
+    long i = rchan_at(chan, t);
+    if (i < 0) i = chan->n ? 0 : -1;        /* before first frame: hold the first */
     if (i < 0) { pthread_mutex_unlock(&g_rp.lk); return -1; }
     uint32_t plen;
-    const uint8_t *p = rchan_payload(&g_rp.radar, i, &plen, NULL);
+    const uint8_t *p = rchan_payload(chan, i, &plen, NULL);
     if (!p || plen < 2 || p[0] != '{' || plen + 20 > len) {
         pthread_mutex_unlock(&g_rp.lk);
         return -1;
     }
-    /* inject "replay":true, keep the recorded frame byte-verbatim otherwise */
     size_t o = (size_t)snprintf(buf, len, "{\"replay\":true,");
     memcpy(buf + o, p + 1, plen - 1);
     buf[o + plen - 1] = 0;
@@ -737,27 +749,12 @@ int replay_radar_json(char *buf, size_t len)
     return 0;
 }
 
+int replay_radar_json(char *buf, size_t len) { return replay_wire_json(&g_rp.radar, buf, len); }
+
 /* recorded EO detections at <= clock, byte-verbatim (same shape as live det). */
-int replay_det_json(char *buf, size_t len)
-{
-    pthread_mutex_lock(&g_rp.lk);
-    if (!g_rp.open) { pthread_mutex_unlock(&g_rp.lk); return -1; }
-    int64_t t = clock_now();
-    long i = rchan_at(&g_rp.det, t);
-    if (i < 0) i = g_rp.det.n ? 0 : -1;
-    if (i < 0) { pthread_mutex_unlock(&g_rp.lk); return -1; }
-    uint32_t plen;
-    const uint8_t *p = rchan_payload(&g_rp.det, i, &plen, NULL);
-    if (!p || plen < 2 || p[0] != '{' || plen + 20 > len) {
-        pthread_mutex_unlock(&g_rp.lk);
-        return -1;
-    }
-    size_t o = (size_t)snprintf(buf, len, "{\"replay\":true,");
-    memcpy(buf + o, p + 1, plen - 1);
-    buf[o + plen - 1] = 0;
-    pthread_mutex_unlock(&g_rp.lk);
-    return 0;
-}
+int replay_det_json(char *buf, size_t len)   { return replay_wire_json(&g_rp.det, buf, len); }
+int replay_trk_json(char *buf, size_t len)   { return replay_wire_json(&g_rp.trk, buf, len); }
+int replay_fus_json(char *buf, size_t len)   { return replay_wire_json(&g_rp.fus, buf, len); }
 
 int replay_rstats_json(char *buf, size_t len)
 {
@@ -942,3 +939,5 @@ static void replay_sse_stream(int fd, RChan *chan)
 
 void replay_radar_stream(int fd) { replay_sse_stream(fd, &g_rp.radar); }
 void replay_det_stream(int fd)   { replay_sse_stream(fd, &g_rp.det); }
+void replay_trk_stream(int fd)   { replay_sse_stream(fd, &g_rp.trk); }
+void replay_fus_stream(int fd)   { replay_sse_stream(fd, &g_rp.fus); }

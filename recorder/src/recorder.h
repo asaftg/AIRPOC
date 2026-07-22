@@ -250,6 +250,10 @@ int  replay_radar_json(char *buf, size_t len);   /* frame at <= clock (poll fall
 void replay_radar_stream(int fd);                /* SSE push at sensor rate, paced to clock */
 int  replay_det_json(char *buf, size_t len);     /* EO detections at <= clock (poll fallback) */
 void replay_det_stream(int fd);                  /* SSE push at detector rate, paced to clock */
+int  replay_trk_json(char *buf, size_t len);     /* EO tracker wire at <= clock (poll fallback) */
+void replay_trk_stream(int fd);                  /* SSE push at tracker rate, paced to clock */
+int  replay_fus_json(char *buf, size_t len);     /* fusion wire at <= clock (poll fallback) */
+void replay_fus_stream(int fd);                  /* SSE push at fusion rate, paced to clock */
 int  replay_rstats_json(char *buf, size_t len);
 void replay_stream(int fd);                      /* blocks: MJPEG pusher */
 int  replay_frame_copy(int64_t t_ms, uint8_t *buf, uint32_t cap, uint32_t *len);
