@@ -22,6 +22,11 @@
 #define TRK_LOCK_H
 
 #include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct Lock Lock;
 
@@ -46,5 +51,19 @@ void  lock_anchor(Lock *l, const uint16_t *frame, int w, int h,
 int   lock_track(Lock *l, const uint16_t *frame, int w, int h,
                  double ego_dx, double ego_dy,
                  double *ox, double *oy, double *score);
+
+/* eo_jpeg frame source: the NN lock needs the ISP 8-bit frames (raw eo_y10 fails). Reads the
+ * airpoc.eo_jpeg tap and JPEG-decodes to gray, widened to uint16 (0-255), so the lock loop
+ * feeds the same uint16 buffer it used for eo_y10. */
+typedef struct JpegSrc JpegSrc;
+JpegSrc *jpeg_src_open(const char *tap);
+void     jpeg_src_close(JpegSrc *s);
+int      jpeg_src_connected(const JpegSrc *s);
+int      jpeg_src_latest(JpegSrc *s, uint16_t *out, size_t cap,
+                         int *w, int *h, uint64_t *seq, uint64_t *t_src_ns, uint32_t meta[6]);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* TRK_LOCK_H */

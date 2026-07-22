@@ -1,41 +1,42 @@
 # eotrack - EO tracker daemon (trackerd) + offline replay bench.
-# Pure C11, no external libs beyond pthreads/libm. Same flags as the other AIRPOC
-# on-device modules. Builds and runs standalone (guideline 7).
+# C11 core + a C++/TensorRT engaged-target lock (lock_nn.cpp, ViTTrack on the GPU). Links
+# TensorRT/CUDA + libjpeg (the NN reads the ISP eo_jpeg frames). Builds standalone.
 
-CC      ?= cc
-CFLAGS  ?= -O3 -Wall -Wextra -std=c11 -pthread -Isrc -Itap
-LDFLAGS ?= -pthread -lm -lrt
+CC       ?= cc
+CXX      ?= g++
+CFLAGS   ?= -O3 -Wall -Wextra -std=c11 -pthread -Isrc -Itap
+CXXFLAGS ?= -O3 -std=c++17 -pthread -Isrc -Itap -I/usr/local/cuda/include
+LDFLAGS  ?= -pthread -lm -lrt -L/usr/local/cuda/lib64 -lnvinfer -lcudart -ljpeg -lstdc++
 
-SRC := src/main.c src/core.c src/emit.c src/http.c src/det_feed.c \
-       src/eo_reader.c src/ego.c src/lock.c
-OBJ := $(SRC:.c=.o)
+CSRC := src/main.c src/core.c src/emit.c src/http.c src/det_feed.c \
+        src/eo_reader.c src/ego.c
+OBJ  := $(CSRC:.c=.o) src/lock_nn.o
 
 all: trackerd
 
 trackerd: $(OBJ)
-	$(CC) $(OBJ) -o $@ $(LDFLAGS)
+	$(CXX) $(OBJ) -o $@ $(LDFLAGS)
 
-# Offline benches + unit tests (no camera/detector/GPU needed).
-tools: tools/replay tools/lock_test tools/fake_det
+src/lock_nn.o: src/lock_nn.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Offline benches + unit tests (the core replay needs no GPU; lock_test covers the legacy
+# optical-flow lock which lock.c still provides for reference).
+tools: tools/replay tools/fake_det
 
 tools/replay: tools/replay.c src/core.c src/emit.c
-	$(CC) $(CFLAGS) $^ -o $@ -lm
-
-tools/lock_test: tools/lock_test.c src/lock.c src/ego.c
 	$(CC) $(CFLAGS) $^ -o $@ -lm
 
 tools/fake_det: tools/fake_det.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
-# Run the offline validation gates (exits nonzero on any failure).
-check: tools/replay tools/lock_test
+check: tools/replay
 	./tools/replay
-	./tools/lock_test
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJ) trackerd tools/replay tools/lock_test tools/fake_det
+	rm -f $(OBJ) trackerd tools/replay tools/fake_det
 
 .PHONY: all tools check clean

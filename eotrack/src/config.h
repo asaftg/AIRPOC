@@ -81,6 +81,9 @@
 #define TRK_ASSOC_VMIN          15.0    /* px/s; below this a track has no "direction" yet */
 #define TRK_ASSOC_REV_K         1.5     /* cost per (backward px)^2 for a detection opposite
                                            the track's motion (comparable to distance^2) */
+#define TRK_SIZE_RATIO_MAX      1.8     /* a confirmed track won't associate to a detection this
+                                           many x bigger/smaller than itself (identity-swap onto
+                                           a differently-sized object); it coasts instead */
 
 /* Confirmation: a track emits once its evidence score crosses `confirm`. Model
  * detections add ~1.0 (a strong direct det) down to a floor for weak/tbd boxes;
@@ -185,6 +188,13 @@
  * the actual target texture WENT, is sub-pixel, pyramid-handles large shake, and the
  * forward-backward check discards points that don't track consistently. Cost ~0.15 core.
  */
+/* Learned SOT lock (lock_nn.cpp, ViTTrack via TensorRT). The NN reports a confidence in
+ * [0,1] (~0.9 on a solid hold, dips to ~0.5 under motion). Above HOLD_MIN we trust + publish
+ * it; below, we HOLD (coast). If it stays below for LOST_FRAMES (target occluded / left FOV)
+ * we re-acquire on the detector's box instead of drifting on empty space. */
+#define TRK_NN_HOLD_MIN         0.30
+#define TRK_NN_LOST_FRAMES      20      /* ~0.3 s at 60 fps below HOLD_MIN -> re-acquire */
+
 #define TRK_LOCK_ROI_MAX        192     /* max box side used for corner detection (px) */
 #define TRK_LOCK_SCORE_MIN      0.50    /* min surviving-point fraction = a good track
                                            (below this: HOLD, likely lost/occluded) */
