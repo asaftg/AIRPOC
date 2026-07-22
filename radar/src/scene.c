@@ -74,10 +74,15 @@ void scene_step(SceneMap *s, const RadarPoint *pts, int n, double dt) {
     for (int i = 0; i < n; i++) {
         const RadarPoint *p = &pts[i];
         if (fabsf(p->doppler) >= SCENE_DOP_MAX) continue;       /* it is moving */
-        if (!(p->range > 8.0f) || p->range >= SCENE_NR * SCENE_RSTEP) continue;
+        /* Bin by GROUND range, not slant: the PPI is a ground-plane view and
+         * draws live points/targets at r*cos(el) - a slant-binned backdrop
+         * would sit systematically beyond the live returns off the same
+         * object (0.06% at el 2 deg, 24% at 36 deg) and read as misalignment. */
+        float ground = p->range * cosf(p->el * 0.0174532925f);
+        if (!(ground > 8.0f) || ground >= SCENE_NR * SCENE_RSTEP) continue;
         float azrel = p->az - SCENE_AZ0;
         if (azrel < 0.0f || azrel >= SCENE_NA * SCENE_ASTEP) continue;
-        int ir = (int)(p->range / SCENE_RSTEP);
+        int ir = (int)(ground / SCENE_RSTEP);
         int ia = (int)(azrel / SCENE_ASTEP);
         if (ir < 0 || ir >= SCENE_NR || ia < 0 || ia >= SCENE_NA) continue;
         int c = ir * SCENE_NA + ia;

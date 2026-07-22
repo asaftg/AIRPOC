@@ -56,7 +56,9 @@ Per cell:
 
 Cell centre:
 ```
-range_m  = (ri + 0.5) * r_step            // 2.61 m bins, native to the radar
+range_m  = (ri + 0.5) * r_step            // GROUND range (r*cos(el) was applied
+                                          // at accumulation, 2026-07-22) - draw
+                                          // it directly on the ground-plane PPI
 az_deg   = az0 + (ai + 0.5) * az_step     // -60 .. +60
 x = range_m * sin(az_deg)    // right
 y = range_m * cos(az_deg)    // forward
