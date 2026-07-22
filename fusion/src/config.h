@@ -63,15 +63,19 @@
  * counts against a pair. Radar near-field boxes smear fat (a person at 30 m
  * came back 5-7 m wide), so radar-bigger-than-camera proves nothing. */
 
-/* A camera track that has PROVABLY not moved for seconds is parked scenery -
- * a moving radar target may not marry it. Scoped to close/mid range: a far
- * radial walker genuinely looks angle-static to the camera and must not be
- * vetoed (radar owns radial at range; drift-divorce covers wrong pairs there). */
-#define FUS_PARKED_VETO_RMAX   200.0   /* apply below this radar range, m */
-#define FUS_PARKED_VETO_SPEED  3.0     /* radar speed above this, m/s */
-#define FUS_PARKED_MIN_AGE_S   3.0     /* EO history needed to call it parked */
-#define FUS_PARKED_AZ_RAD      0.0017  /* < 0.1 deg net drift ... */
+/* Parked veto, self-scaling: the radar's claimed radial speed predicts how
+ * much the camera box must have grown/shrunk over the time the camera has
+ * watched this track (|rdot| * watched / r). If the prediction is at least
+ * TWICE the parked thresholds and the camera saw NOTHING move - no sideways
+ * drift, no vertical drift, no size change - they cannot be the same object,
+ * at any range. A crosser drifts sideways, a drone drifts vertically, an
+ * approacher grows; only parked scenery shows none of the three. */
+#define FUS_PARKED_MIN_AGE_S   3.0     /* minimum camera history to judge */
+#define FUS_PARKED_MIN_RDOT    2.0     /* radar radial speed to arm, m/s */
+#define FUS_PARKED_AZ_RAD      0.0017  /* < 0.1 deg net sideways drift ... */
+#define FUS_PARKED_EL_RAD      0.0017  /* ... < 0.1 deg net vertical drift ... */
 #define FUS_PARKED_LNSZ        0.03    /* ... and < 3% net size change */
+#define FUS_PARKED_MARGIN      2.0     /* predicted motion must be 2x thresholds */
 
 /* courtship tolerates brief EO coasting (close range coasts a lot) */
 #define FUS_EO_COURT_COAST_S   0.5

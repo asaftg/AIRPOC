@@ -75,7 +75,7 @@ struct FusCore {
     double est_az[FUS_TRIM_EST_RING], est_el[FUS_TRIM_EST_RING];
     int est_n, est_head;
     /* per-EO-tid motion memory: has this camera track EVER moved? */
-    struct { int tid; double az0, aw0; uint64_t t0, seen_ns; int moved; }
+    struct { int tid; double az0, el0, aw0; uint64_t t0, seen_ns; int moved; }
         emot[FUS_MAX_EO]; int nemot;
     /* counters for /stats */
     int n_fused, n_eo_only, n_rad_only;
@@ -85,7 +85,7 @@ struct FusCore {
 
 static double clampd(double v, double lo, double hi){ return v<lo?lo:v>hi?hi:v; }
 static double sq(double v){ return v*v; }
-static int eo_parked(const FusCore *c, int tid, uint64_t t);
+static int eo_parked(const FusCore *c, int tid, uint64_t t, double rdot, double r);
 
 /* Signed seconds since `a`. The two sensor wires are stamped by different
  * pipelines with different latencies, so the tick time is NOT monotonic
@@ -575,14 +575,12 @@ static void candidates(FusCore *c, uint64_t t)
             if (fe && fe->fused) continue;
             if (e->state != 1 || e->coast_s > FUS_EO_COURT_COAST_S) continue;
             if (barred(c, r->t.tid, e->tid, t)) continue;
-            /* parked veto: a MOVING radar target at close/mid range may not
-             * marry a camera track that has provably never moved (a row of
-             * parked cars stops being marriage material entirely). Far
-             * ranges exempt - a far radial walker looks static to the
-             * camera and radar owns radial out there. */
-            if (r->t.mv == 1 && r->r < FUS_PARKED_VETO_RMAX &&
-                hypot(r->t.vx, r->t.vy) > FUS_PARKED_VETO_SPEED &&
-                eo_parked(c, e->tid, t)) continue;
+            /* parked veto: a radar target claiming real radial motion may
+             * not marry a camera track that was watched long enough for that
+             * motion to have shown and provably never moved. Self-scaling -
+             * no range constant (a slow far approacher simply needs a longer
+             * watch before the veto can arm). */
+            if (r->t.mv == 1 && eo_parked(c, e->tid, t, r->rdot, r->r)) continue;
             /* an in-progress candidate is judged like a married pair (position
              * + size, wider gate) so radar jitter cannot starve its courtship;
              * only a BRAND NEW candidate faces the strict full test */
@@ -894,25 +892,35 @@ static void emot_update(FusCore *c, uint64_t t)
             if (found < 0 && c->nemot < FUS_MAX_EO) found = c->nemot++;
             if (found < 0) continue;
             c->emot[found].tid = e->tid; c->emot[found].az0 = e->az;
+            c->emot[found].el0 = e->el;
             c->emot[found].aw0 = e->aw > 0 ? e->aw : 1e-4;
             c->emot[found].t0 = t; c->emot[found].moved = 0;
         }
         c->emot[found].seen_ns = t;
         if (!c->emot[found].moved &&
             (fabs(e->az - c->emot[found].az0) > FUS_PARKED_AZ_RAD * 3 ||
+             fabs(e->el - c->emot[found].el0) > FUS_PARKED_EL_RAD * 3 ||
              fabs(log(fmax(e->aw, 1e-4) / c->emot[found].aw0)) > FUS_PARKED_LNSZ))
             c->emot[found].moved = 1;
     }
 }
 
-/* parked verdict: 1 = this EO track has been watched long enough and has
- * provably never moved. Unknown/young/moving -> 0. */
-static int eo_parked(const FusCore *c, int tid, uint64_t t)
+/* parked verdict vs a SPECIFIC radar claim: 1 = the camera has watched this
+ * track long enough that the radar's claimed radial speed would have shown
+ * (as size change), and the camera saw nothing move at all. Range cancels
+ * out of the physics - this scales from 30 m to the far field. */
+static int eo_parked(const FusCore *c, int tid, uint64_t t,
+                     double rdot, double r)
 {
+    if (fabs(rdot) < FUS_PARKED_MIN_RDOT) return 0;
     for (int j = 0; j < c->nemot; j++)
-        if (c->emot[j].tid == tid)
-            return !c->emot[j].moved &&
-                   since_s(t, c->emot[j].t0) > FUS_PARKED_MIN_AGE_S;
+        if (c->emot[j].tid == tid) {
+            if (c->emot[j].moved) return 0;
+            double watched = since_s(t, c->emot[j].t0);
+            if (watched < FUS_PARKED_MIN_AGE_S) return 0;
+            double predicted_lnsz = fabs(rdot) * watched / fmax(r, 1.0);
+            return predicted_lnsz > FUS_PARKED_MARGIN * FUS_PARKED_LNSZ;
+        }
     return 0;
 }
 
