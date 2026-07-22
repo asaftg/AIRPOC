@@ -254,6 +254,12 @@
    * be a LINK MANUAL/AUTO toggle that stepped QUALITY down on a saturated link and probed back
    * up; removed at the operator's request — unused, and silently moving their setting is worse
    * than a visibly degraded picture.) */
+  /* JPEG compression, forwarded to the EO module (it owns the encoder). The fine lever for a
+   * weak link: measured on the wire, q85 -> 6.9 Mb/s, q60 -> 3.65, q40 -> 2.61. Only the operator
+   * picture changes — the detector and the master recording read the raw sensor frame, never
+   * this JPEG. Same touch-guard as the other sliders so a readback can't fight a drag. */
+  var qTouch = 0;
+  $("s-q").oninput = function () { $("o-q").textContent = this.value; qTouch = Date.now(); ctl("q=" + this.value); };
   document.querySelectorAll("#res-btns [data-res]").forEach(function (b) {
     b.onclick = function () { setSeg("res-btns", b); ctl("res=" + b.dataset.res); };
   });
@@ -1898,6 +1904,7 @@
     var settled = Date.now() - ispTouch > 1500;
     if (typeof eo.res === "string") { var rb = document.querySelector('#res-btns [data-res="' + eo.res + '"]'); if (rb) setSeg("res-btns", rb); }
     if (typeof eo.fps_cap === "number" && idle($("s-fps")) && Date.now() - fpsTouch > 1500) { $("s-fps").value = eo.fps_cap; $("o-fps").textContent = eo.fps_cap; }
+    if (typeof eo.q === "number" && idle($("s-q")) && Date.now() - qTouch > 1500) { $("s-q").value = eo.q; $("o-q").textContent = eo.q; }
     if (typeof eo.ae === "number" && settled) {
       var b = document.querySelector('#ae-btns [data-ae="' + (eo.ae ? 1 : 0) + '"]'); if (b) setSeg("ae-btns", b);
       setExpMode(!!eo.ae);

@@ -554,7 +554,8 @@ static void handle_rec(int cfd, const char *req)
 }
 
 static const char *EO_KEYS[] = { "zoom=", "laser=", "power=", "fov=", "ae=", "gain=",
-                                 "expms=", "gaincap=", "median=", "denoise=", "disp_fps=", "fps=", "res=" };
+                                 "expms=", "gaincap=", "median=", "denoise=", "disp_fps=", "fps=", "res=",
+                                 "q=" };   /* JPEG quality 30..95, clamped by the EO module */
 /* the tracker's knobs (eotrack/docs/INTEGRATION.md); GUI sends them as trk_<key>= */
 static const char *TRK_KEYS[] = { "engage", "lock", "gate_base", "confirm", "coast_s", "clutter_s" };
 /* fusion's knobs (fusion/docs/INTEGRATION.md); GUI sends them as fus_<key>=. trim_az/trim_el are
@@ -669,8 +670,10 @@ static void handle_ctl(const char *req)
     }
     if (xn > 0) { if (xn >= (int)sizeof(xq)) xn = (int)sizeof(xq) - 1; xq[xn] = 0; det_ctl(xq); return; }
 
+    /* TOKEN BOUNDARY, not strstr — "q=" is one character and would otherwise match inside any
+     * key ending in q. This is the same trap that made a bare "engage=" swallow "trk_engage=". */
     for (unsigned k = 0; k < sizeof(EO_KEYS) / sizeof(EO_KEYS[0]); k++)
-        if (strstr(query, EO_KEYS[k])) { eo_ctl(query); break; }   /* forward EO controls */
+        if (qparam(query, EO_KEYS[k])) { eo_ctl(query); break; }   /* forward EO controls */
 }
 
 /* ── operator UI preferences, stored ON THE JETSON ──────────────────────────────────────

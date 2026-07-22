@@ -119,9 +119,10 @@
       <div class="dev-head"><b>DEV</b><button id="devclose">✕</button></div>
 
       <div class="sec">STREAM</div>
-      <div class="srow" title="Video size sent to this screen. Smaller = smoother on a weak link. Recording and detection are not affected."><label>QUALITY</label><div class="btns" id="res-btns">
+      <div class="srow" title="How BIG a picture is sent to this screen. Smaller = smoother on a weak link. Detection and the master recording are never affected — they read the full sensor frame."><label>SIZE</label><div class="btns" id="res-btns">
         <button data-res="low">PANIC</button><button data-res="med">FAST</button><button data-res="high" class="on">DEFAULT</button><button data-res="native">NATIVE</button>
       </div></div>
+      <div class="srow" title="How hard the picture is compressed before it is sent. Lower = far fewer bytes on the link for a softer picture; 85 is the default. This is the FINE lever for a weak link — SIZE is the coarse one, and a bigger soft picture usually beats a small sharp one. Detection and the master recording are never affected."><label>QUALITY</label><input type="range" id="s-q" min="30" max="95" step="1" value="85"><span class="val" id="o-q">85</span></div>
       <div class="srow" title="Most video frames per second sent to this screen. Lower it to ease a weak link."><label>FPS CAP</label><input type="range" id="s-fps" min="12" max="60" step="1" value="60"><span class="val" id="o-fps">60</span></div>
       <div class="srow" id="dispfps-row" style="display:none" title="Preview smoothness only — how many frames per second reach THIS screen. The detector, tracker and recorder always run on the full sensor rate, so this never touches detection, targeting, or recording. 30 looks smooth; 60 for when you want it."><label>DISPLAY</label><div class="btns" id="disp-btns"><button data-disp="30" class="on">30</button><button data-disp="60">60</button></div></div>
 
