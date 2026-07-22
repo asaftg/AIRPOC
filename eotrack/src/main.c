@@ -164,6 +164,7 @@ static void *lock_thread(void *arg)
     if (S.no_eo) return NULL;
     EoReader *eo = eo_open(EO_TAP_NAME);
     Lock *lk = lock_new();
+    Ego *lego = ego_new();   /* per-frame (60 fps) camera-motion, to centre the search */
     static uint16_t frame[EO_IMG_W * EO_IMG_H];
     int cur_engaged = -1, meta_hold = 0;
     uint32_t prev_illum = 0, prev_exp = 0, prev_gain = 0;
@@ -183,6 +184,12 @@ static void *lock_thread(void *arg)
         int w, h; uint64_t seq, ts; uint32_t meta[6];
         if (!eo_latest(eo, frame, sizeof frame, &w, &h, &seq, &ts, meta)) { usleep(2000); continue; }
 
+        /* per-frame camera motion: the target moves with the scene when you shake the
+         * sensor, so shift the search centre by it - otherwise a fast frame moves the
+         * target out of the +/-search window and the correlator latches onto background. */
+        double fdx = 0, fdy = 0;
+        ego_update(lego, frame, w, h, &fdx, &fdy);
+
         /* freeze template refresh across an AE / illuminator step */
         uint32_t illum = meta[EO_META_ILLUM], exp = meta[EO_META_EXPLINES], gain = meta[EO_META_GAIN];
         int step = (illum != prev_illum) || (exp != prev_exp) || (gain != prev_gain);
@@ -200,9 +207,11 @@ static void *lock_thread(void *arg)
         if (!lock_has_template(lk) && meta_hold == 0)
             lock_set_template(lk, frame, w, h, cx, cy, bw, bh);
 
-        double ox = cx, oy = cy, score = 0;
+        /* predict where the camera moved the target, then correlate around that */
+        double pcx = cx + fdx, pcy = cy + fdy;
+        double ox = pcx, oy = pcy, score = 0;
         if (lock_has_template(lk))
-            lock_track(lk, frame, w, h, cx, cy, &ox, &oy, &score);
+            lock_track(lk, frame, w, h, pcx, pcy, &ox, &oy, &score);
 
         if (score >= TRK_LOCK_SCORE_MIN) {
             /* good match: nudge the engaged track and, if not frozen, refresh the
@@ -221,7 +230,7 @@ static void *lock_thread(void *arg)
         /* pace to ~camera rate; eo_latest already drains to newest so we never lag */
         usleep(3000);
     }
-    lock_free(lk); eo_close(eo);
+    lock_free(lk); ego_free(lego); eo_close(eo);
     return NULL;
 }
 
