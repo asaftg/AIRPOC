@@ -118,12 +118,26 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 
 /* ── target list ── */
 #tgt-list{list-style:none;margin:0;padding:5px;flex:0 0 auto}
-.tgt-row{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:8px;height:34px;
+/* swatch | id | class+conf | range — the id column exists so the operator can name the target
+ * they are switching to instead of pointing at "the pink one" */
+.tgt-row{display:grid;grid-template-columns:14px auto 1fr auto;align-items:center;gap:8px;height:34px;
   padding:0 8px;margin:4px 0;border:1px solid var(--bd);border-left:3px solid var(--dim);
   border-radius:3px;background:var(--sub);cursor:pointer}
 .tgt-row:hover{border-color:var(--amber)}
 .tgt-row.eng{border-color:var(--on);border-left-color:var(--on);background:#13251a}
 
+/* THE HELD TARGET — its own strip above the list, so locking something never reorders the list
+ * underneath the operator's eyes. Green like every other "we are holding this" mark. */
+#locktgt{border:1px solid var(--on);border-left:3px solid var(--on);border-radius:3px;
+  background:#13251a;padding:5px 8px 6px;margin:2px 0 8px;cursor:pointer}
+#locktgt:hover{background:#173020}
+.lk-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px}
+.lk-title{font-size:10px;letter-spacing:1.5px;color:var(--on);font-weight:700}
+.lk-rel{font-size:9px;letter-spacing:.5px;color:var(--muted)}
+.lk-row{display:grid;grid-template-columns:14px auto 1fr auto;align-items:center;gap:8px}
+.lk-row .tid{font-size:11px;color:var(--muted);font-weight:600}
+.lk-row .meta{font-size:11px;color:var(--fg);letter-spacing:.3px}
+.lk-row .rng{font-size:13px;color:var(--fg);font-weight:600;text-align:right}
 /* Held: the target is not on the current frame but left less than a second ago. The row keeps
  * its place, dimmed, so one skipped frame does not collapse it and shift everything below. It
  * is showing the last real values — nothing here is extrapolated. */

@@ -445,6 +445,19 @@
   }
   function allTargets() { return fusUp() ? fusTargets() : eoTracks().concat(radarTargets()); }
 
+  /* CLASS COLOUR — one source of truth for the video boxes AND the list rows. The list swatch
+   * used to be a hash of the target id, so a vehicle could be pink in the list and amber on the
+   * video: two different colours for one object, and the swatch answered a question nobody asked.
+   * An EO/fused row now carries the same colour its box carries. (Radar rows are different — see
+   * the row builder: a radar blob has no class, so its colour is its identity and must match the
+   * ring the scope draws for that same track.) */
+  function classColor(cls) {
+    return cls === "human"   ? "#40c4ff"          /* cyan   */
+         : cls === "vehicle" ? css("--amber")     /* amber  */
+         : cls === "drone"   ? "#c86dff"          /* violet */
+         :                     css("--muted");    /* unclassified */
+  }
+
   /* Bearing reads as a SIDE, not a sign: "6R" / "7L" — an operator turning a head thinks
    * left/right, not positive/negative. Elevation keeps the sign, since up/down maps to it
    * naturally. Convention (both wires): azimuth + is right, elevation + is up. */
@@ -486,6 +499,24 @@
     s += (t.conf || 0) * 30;                      /* 0..30: a 0.1 confidence gap is worth 3 */
     s -= Math.min(t.rng || 0, 5000) / 2000;       /* 0..-2.5: nearer wins ties only */
     return s;
+  }
+  /* ROW COLOUR — the swatch answers a different question per source, so it is not one rule:
+   *   EO / fused  -> the CLASS colour, identical to the box drawn on the video. You look at a
+   *                  cyan box on the video and find a cyan row here.
+   *   radar       -> the TRACK colour, identical to the ring the scope draws for that same
+   *                  track id. A radar blob has no class, so colour is all the identity it has,
+   *                  and it must be the SAME hash the scope uses (raw tid) or the two displays
+   *                  disagree about which blob is which — which is what they used to do.
+   * Twenty maximally distinct colours, so neighbouring radar tracks never read as the same one. */
+  function rowColor(t) {
+    if (t.src === "rad") return tcolor(t.rad_tid != null && t.rad_tid >= 0 ? t.rad_tid : t.tid);
+    return classColor(t.cls);
+  }
+  /* The target's PUBLISHED id — say which one you are switching to instead of "the pink one".
+   * G = fusion's global id (stable across per-sensor id churn), E = EO track, R = radar track. */
+  function rowId(t) {
+    if (t.gid != null) return "G" + t.gid;
+    return (t.src === "rad" ? "R" : "E") + t.tid;
   }
   /* What a row SAYS is what that row's sensors actually know: a fused row is the only one that
    * can put class and range on the same line — that is the whole point of fusion. */
@@ -531,18 +562,16 @@
     tgtSlots = [];
     for (var i = 0; i < TGT_SLOTS; i++) {
       var li = document.createElement("li"); li.className = "tgt-row empty";
-      var tid = document.createElement("span"); tid.className = "tid";
-      var dash = document.createTextNode("—");
-      var sw = document.createElement("span"); sw.className = "swatch"; sw.style.display = "none";
-      tid.appendChild(dash); tid.appendChild(sw);
+      var sw = document.createElement("span"); sw.className = "swatch"; sw.style.visibility = "hidden";
+      var tid = document.createElement("span"); tid.className = "tid"; tid.textContent = "—";
       var meta = document.createElement("span"); meta.className = "meta";
       var badge = document.createElement("b"); badge.className = "tsrc";
       var txt = document.createTextNode("");
       meta.appendChild(badge); meta.appendChild(txt);
       var rng = document.createElement("span"); rng.className = "rng";
-      li.appendChild(tid); li.appendChild(meta); li.appendChild(rng);
+      li.appendChild(sw); li.appendChild(tid); li.appendChild(meta); li.appendChild(rng);
       ul.appendChild(li);
-      tgtSlots.push({ li: li, dash: dash, sw: sw, badge: badge, txt: txt, rng: rng, key: null, sig: "" });
+      tgtSlots.push({ li: li, tid: tid, sw: sw, badge: badge, txt: txt, rng: rng, key: null, sig: "" });
     }
   }
 
@@ -579,6 +608,29 @@
     return best;
   }
 
+  /* The strip above the list: what we are HOLDING, in full, in one fixed place. It never moves,
+   * so the operator's eye has somewhere stable to return to while the list underneath keeps
+   * doing its job of showing everything else. It survives the target dropping off the wire for a
+   * moment (same one-second hold as a row) because losing the held target's readout mid-lock is
+   * worse than showing values that are a fraction of a second old. */
+  function renderLockStrip() {
+    var box = $("locktgt");
+    if (!box) return;
+    var e = engagedKey ? tgtSeen[engagedKey] : null;
+    if (!engagedKey || !e) { box.hidden = true; return; }
+    var t = e.t, col = rowColor(t), tx = rowText(t);
+    box.hidden = false;
+    box.classList.toggle("stale", !e.live);
+    $("lk-sw").style.background = col;
+    $("lk-id").textContent = rowId(t);
+    $("lk-src").className = "tsrc " + t.src;
+    $("lk-src").textContent = t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR";
+    $("lk-mid").textContent = tx.mid;
+    $("lk-rng").textContent = tx.rgt;
+  }
+  /* Tap the strip to let the target go — the same act as tapping the held target again. */
+  $("locktgt").addEventListener("pointerdown", function (e) { e.preventDefault(); engage(null); });
+
   function renderTargetList() {
     if (!tgtSlots) buildTgtSlots();
     var now = Date.now(), live = allTargets(), seenNow = {};
@@ -598,14 +650,15 @@
      * the operator is reading out from under them */
     Object.keys(tgtSeen).forEach(function (k) { if (tgtOrder.indexOf(k) < 0) tgtOrder.push(k); });
     if (now - lastRerank >= RERANK_MS) { lastRerank = now; rerankTargets(); }
-    /* the held target is always row 1 — it must never scroll off or move */
-    var ei = engagedKey ? tgtOrder.indexOf(engagedKey) : -1;
-    if (ei > 0) { tgtOrder.splice(ei, 1); tgtOrder.unshift(engagedKey); }
+    /* The held target is NOT pulled to row 1 any more. Pinning it meant that locking something
+     * ripped it out of its place and pushed every other row down — the list moved precisely when
+     * the operator was concentrating on one target. It keeps its rank here (marked green) and is
+     * shown in full in its own strip above the list. */
+    renderLockStrip();
 
     $("v-tgtcount").textContent = live.length;
-    /* say WHERE the list came from — one fused picture, or the two per-sensor lists. The
-     * operator reads range-next-to-class very differently depending on the answer. */
-    $("v-fusbadge").hidden = !fusUp();
+    /* (There is no "FUS" badge on the panel title any more: it read as if the TARGETS were
+     * called FUS. Each row already names its own source, which is the honest place for it.) */
 
     for (var i = 0; i < TGT_SLOTS; i++) {
       var s = tgtSlots[i], k = tgtOrder[i], e = k ? tgtSeen[k] : null;
@@ -613,22 +666,21 @@
         if (s.key !== null) {
           s.key = null; s.sig = "";
           s.li.className = "tgt-row empty"; s.li.removeAttribute("data-key");
-          s.li.style.borderLeftColor = ""; s.dash.nodeValue = "—"; s.sw.style.display = "none";
+          s.li.style.borderLeftColor = ""; s.tid.textContent = "—"; s.sw.style.visibility = "hidden";
           s.badge.textContent = ""; s.badge.className = "tsrc"; s.txt.nodeValue = ""; s.rng.textContent = "";
         }
         continue;
       }
-      /* colour follows the fusion gid when there is one — it survives the per-sensor id churn
-       * underneath, so a target keeps its colour through a tid change */
-      var t = e.t, col = tcolor(t.gid != null ? "g" + t.gid : t.key), tx = rowText(t);
+      var t = e.t, col = rowColor(t), id = rowId(t), tx = rowText(t);
       var cls = "tgt-row" + (t.key === engagedKey ? " eng" : "") + (e.live ? "" : " stale");
-      var sig = cls + "|" + col + "|" + t.src + "|" + tx.mid + "|" + tx.rgt;
+      var sig = cls + "|" + col + "|" + id + "|" + t.src + "|" + tx.mid + "|" + tx.rgt;
       if (s.key === k && s.sig === sig) continue;             /* nothing about this row changed */
       s.key = k; s.sig = sig;
       s.li.className = cls;
       s.li.dataset.key = t.key;
       s.li.style.borderLeftColor = col;
-      s.dash.nodeValue = ""; s.sw.style.display = ""; s.sw.style.background = col;
+      s.sw.style.visibility = ""; s.sw.style.background = col;
+      s.tid.textContent = id;
       s.badge.className = "tsrc " + t.src;
       s.badge.textContent = t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR";
       s.txt.nodeValue = " " + tx.mid;
@@ -1067,7 +1119,7 @@
       trkTracks.forEach(function (t) {
         var eng = (t.key === engagedKey);
         if (engagedKey && lockLive && !eng) return;      /* locked AND drawable → show only it */
-        var col = t.cls === "human" ? "#40c4ff" : amber;
+        var col = classColor(t.cls);          /* same colour this target gets in the list */
         var cl = String(t.cls || "?");                   /* coerce: a non-string cls would throw on [0]/.toUpperCase() and blank every overlay */
         var lab = seek ? cl[0].toUpperCase() + Math.round((t.conf || 0) * 100)
                        : cl.toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%";
