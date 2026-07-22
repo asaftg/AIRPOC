@@ -32,6 +32,9 @@ typedef struct {
     /* smoothed output state (firm position EMA; velocity is coast/wire only) */
     double   ocx, ocy, ovx, ovy;
     double   meas_cx, meas_cy;   /* last matched detection centre (output EMA target) */
+    uint64_t det_seq;            /* bumps ONLY on a real matched detection - the lock's
+                                    re-anchor signal (NOT bumped by the 60 fps lock feedback,
+                                    so the lock can tell a fresh detector fix from its own) */
     int      lock_hold;          /* >0: the 60 fps lock owns the output this many det ticks */
     /* evidence / lifecycle */
     double   score;
@@ -288,6 +291,7 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
             t->misses = 0;
             t->t_meas_ns = t_src_ns;
             t->meas_cx = d->cx; t->meas_cy = d->cy;   /* firm output EMA targets this */
+            t->det_seq++;                              /* fresh detector fix (lock re-anchor) */
             if (d->tbd) t->tbd = 1;                    /* sticky provenance flag */
             hist_push(t, clk, t->cx, t->cy);
             det_taken[di] = 1; trk_taken[i] = 1;
@@ -304,6 +308,7 @@ int trk_core_step(TrkCore *c, const TrkDet *dets, int n,
         t->tid = c->next_tid++;
         t->cx = d->cx; t->cy = d->cy; t->w = d->w; t->h = d->h;
         t->meas_cx = d->cx; t->meas_cy = d->cy;
+        t->det_seq = 1;              /* first fix (lock re-anchor) */
         t->vx = t->vy = 0;
         t->tbd = d->tbd;
         t->conf = d->conf;
@@ -501,6 +506,25 @@ int trk_core_engaged_box(const TrkCore *c, int engaged_tid,
             if (w) *w = t->w;
             if (h) *h = t->h;
             if (cls) *cls = t->cls;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int trk_core_engaged_meas(const TrkCore *c, int engaged_tid,
+                          double *mcx, double *mcy, double *w, double *h,
+                          int *cls, uint64_t *det_seq)
+{
+    for (int i = 0; i < TRK_MAX_TRACKS; i++) {
+        const Track *t = &c->tr[i];
+        if (t->used && t->tid == engaged_tid) {
+            if (mcx) *mcx = t->meas_cx;
+            if (mcy) *mcy = t->meas_cy;
+            if (w) *w = t->w;
+            if (h) *h = t->h;
+            if (cls) *cls = t->cls;
+            if (det_seq) *det_seq = t->det_seq;
             return 1;
         }
     }

@@ -91,6 +91,14 @@ int trk_core_has_track(const TrkCore *c, int tid);
 int trk_core_engaged_box(const TrkCore *c, int engaged_tid,
                          double *cx, double *cy, double *w, double *h, int *cls);
 
+/* The engaged track's last real DETECTION centre/size + a detection sequence counter that
+ * bumps only on a fresh matched detection (never on the 60 fps lock's own feedback). The
+ * lock re-anchors its optical flow whenever *det_seq changes. Returns 1 if the engaged
+ * track exists, else 0. */
+int trk_core_engaged_meas(const TrkCore *c, int engaged_tid,
+                          double *mcx, double *mcy, double *w, double *h,
+                          int *cls, uint64_t *det_seq);
+
 /* Feed the lock loop's sub-pixel result back as the engaged track's measurement
  * for a frame with no detection (keeps the wire at camera rate between NN ticks). */
 void trk_core_lock_update(TrkCore *c, int engaged_tid,

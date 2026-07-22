@@ -164,9 +164,10 @@ static void *lock_thread(void *arg)
     if (S.no_eo) return NULL;
     EoReader *eo = eo_open(EO_TAP_NAME);
     Lock *lk = lock_new();
-    Ego *lego = ego_new();   /* per-frame (60 fps) camera-motion, to centre the search */
+    Ego *lego = ego_new();   /* per-frame (60 fps) scene shift = the LK initial guess */
     static uint16_t frame[EO_IMG_W * EO_IMG_H];
     int cur_engaged = -1, meta_hold = 0;
+    uint64_t last_dseq = 0;
     uint32_t prev_illum = 0, prev_exp = 0, prev_gain = 0;
 
     for (;;) {
@@ -175,47 +176,55 @@ static void *lock_thread(void *arg)
         pthread_mutex_unlock(&S.lk);
 
         if (engage < 0 || !en) {
-            if (cur_engaged != -1) { lock_reset(lk); cur_engaged = -1; }
+            if (cur_engaged != -1) { lock_reset(lk); cur_engaged = -1; last_dseq = 0; }
             usleep(10000);
             continue;
         }
-        if (engage != cur_engaged) { lock_reset(lk); cur_engaged = engage; }
+        if (engage != cur_engaged) { lock_reset(lk); cur_engaged = engage; last_dseq = 0; }
 
         int w, h; uint64_t seq, ts; uint32_t meta[6];
         if (!eo_latest(eo, frame, sizeof frame, &w, &h, &seq, &ts, meta)) { usleep(2000); continue; }
 
-        /* per-frame camera motion: the target moves with the scene when you shake the
-         * sensor, so shift the search centre by it - otherwise a fast frame moves the
-         * target out of the +/-search window and the correlator latches onto background. */
+        /* whole-scene camera shift this frame - the initial guess for the optical flow (the
+         * target moves with the scene under a shake, so the flow search starts there). */
         double fdx = 0, fdy = 0;
         ego_update(lego, frame, w, h, &fdx, &fdy);
 
-        /* freeze template refresh across an AE / illuminator step */
+        /* AE / illuminator step: brightness-constancy (the assumption optical flow rests on)
+         * is violated across the step, so HOLD and re-anchor to the detector afterwards. */
         uint32_t illum = meta[EO_META_ILLUM], exp = meta[EO_META_EXPLINES], gain = meta[EO_META_GAIN];
         int step = (illum != prev_illum) || (exp != prev_exp) || (gain != prev_gain);
         prev_illum = illum; prev_exp = exp; prev_gain = gain;
         if (step) meta_hold = TRK_LOCK_META_HOLD;
 
+        if (meta_hold > 0) {
+            lock_reset(lk); last_dseq = 0;         /* force a fresh anchor once the step settles */
+            http_set_lock(engage, 0, 0.0);         /* HOLD, not loss */
+            meta_hold--;
+            usleep(3000);
+            continue;
+        }
+
+        /* the detector's last real fix for the engaged target + its sequence counter */
         pthread_mutex_lock(&S.lk);
-        double cx, cy, bw, bh; int cls;
-        int have = trk_core_engaged_box(S.core, engage, &cx, &cy, &bw, &bh, &cls);
+        double mcx, mcy, bw, bh; int cls; uint64_t dseq = 0;
+        int have = trk_core_engaged_meas(S.core, engage, &mcx, &mcy, &bw, &bh, &cls, &dseq);
         pthread_mutex_unlock(&S.lk);
         if (!have) { usleep(2000); continue; }
 
-        /* seed template from the NN box if we have none (or after a reset) and not
-         * in a metadata-step freeze */
-        if (!lock_has_template(lk) && meta_hold == 0)
-            lock_set_template(lk, frame, w, h, cx, cy, bw, bh);
-
-        /* predict where the camera moved the target, then correlate around that */
-        double pcx = cx + fdx, pcy = cy + fdy;
-        double ox = pcx, oy = pcy, score = 0;
-        if (lock_has_template(lk))
-            lock_track(lk, frame, w, h, pcx, pcy, &ox, &oy, &score);
+        double ox = mcx, oy = mcy, score = 0;
+        if (!lock_has_template(lk) || dseq != last_dseq) {
+            /* fresh detector fix (or first frame): the detector is ground truth - snap the
+             * flow to it, re-detect corners, and report the detection centre. This is the
+             * drift reset; between fixes the flow fills the ~4 frames at 60 fps. */
+            lock_anchor(lk, frame, w, h, mcx, mcy, bw, bh);
+            last_dseq = dseq;
+            ox = mcx; oy = mcy; score = 1.0;
+        } else {
+            lock_track(lk, frame, w, h, fdx, fdy, &ox, &oy, &score);
+        }
 
         if (score >= TRK_LOCK_SCORE_MIN) {
-            /* good match: nudge the engaged track and, if not frozen, refresh the
-             * template from the detector-anchored box (drift control) */
             pthread_mutex_lock(&S.lk);
             trk_core_lock_update(S.core, engage, ox, oy, score, ts);
             TrkOut out[TRK_MAX_TRACKS];
@@ -224,9 +233,8 @@ static void *lock_thread(void *arg)
             pthread_mutex_unlock(&S.lk);
             http_set_lock(engage, 1, score);
         } else {
-            http_set_lock(engage, 0, score);   /* low score = HOLD, not loss */
+            http_set_lock(engage, 0, score);   /* low fraction = HOLD, not loss */
         }
-        if (meta_hold > 0) meta_hold--;
         /* pace to ~camera rate; eo_latest already drains to newest so we never lag */
         usleep(3000);
     }

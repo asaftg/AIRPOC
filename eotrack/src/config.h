@@ -158,12 +158,39 @@
  * applies only to the engaged track. */
 #define TRK_CLASS_PENALTY       0.4     /* fraction of gate charged for a class mismatch */
 
-/* Engaged-target 60 fps lock loop (lock.c). Multi-scale NCC on a small ROI of the
- * raw Y10 frame; template rebuilt only from class-consistent NN detections. */
-#define TRK_LOCK_ROI_MAX        192     /* max ROI side (px); template is <= this */
-#define TRK_LOCK_SEARCH         24      /* +/- search radius around the prediction (px) */
-#define TRK_LOCK_SCORE_MIN      0.50    /* NCC below this = no match (avoid latching onto
-                                           low-texture background as the target leaves) */
-#define TRK_LOCK_META_HOLD      4       /* frames to freeze template after an AE/illum step */
+/* Engaged-target 60 fps lock loop (lock.c). Sparse pyramidal Lucas-Kanade optical
+ * flow: it detects corner points inside the target box and tracks them frame-to-frame,
+ * taking the robust MEDIAN translation. The DETECTOR re-anchors it every tick (snaps the
+ * centre and re-detects corners), so LK never integrates drift for more than the ~4
+ * frames between detections - which is exactly where a learned NN tracker's extra
+ * robustness would be wasted. Pure C, no OpenCV, no GPU (the GPU is the detector's, and
+ * reserved for future terrain-nav). Replaces the earlier NCC template matcher, which had
+ * no notion of the target's texture motion and drifted/latched onto background on a shake.
+ *
+ * Why LK over NCC here: NCC re-searches a fixed template near a predicted spot (no motion
+ * model, drifts on appearance change, latches low-texture background). LK measures where
+ * the actual target texture WENT, is sub-pixel, pyramid-handles large shake, and the
+ * forward-backward check discards points that don't track consistently. Cost ~0.15 core.
+ */
+#define TRK_LOCK_ROI_MAX        192     /* max box side used for corner detection (px) */
+#define TRK_LOCK_SCORE_MIN      0.50    /* min surviving-point fraction = a good track
+                                           (below this: HOLD, likely lost/occluded) */
+#define TRK_LOCK_META_HOLD      4       /* frames to HOLD (no flow) after an AE/illum step -
+                                           brightness-constancy is violated across the step */
+#define TRK_LK_MAX_PTS          48      /* corner points tracked inside the box (a robust
+                                           median needs a few dozen, not hundreds - the cost
+                                           is per-point, so this is the main perf lever) */
+#define TRK_LK_MIN_PTS          6       /* below this many survivors: re-detect corners */
+#define TRK_LK_GRID             10      /* corner-candidate grid side across the box */
+#define TRK_LK_WIN              5       /* LK integration half-window (px, per level -> 11x11) */
+#define TRK_LK_LEVELS           3       /* pyramid levels (handles ~+/-60 px inter-frame motion) */
+#define TRK_LK_ITERS            5       /* LK iterations per level (converges fast with the
+                                           coarse-to-fine + ego initial guess) */
+#define TRK_LK_FB_MAX           2.0     /* forward-backward consistency threshold (px) */
+#define TRK_LK_EIG_FLOOR        1.0     /* absolute Shi-Tomasi min-eigenvalue floor */
+#define TRK_LK_INLIER           1.5     /* a survivor within this of the median flow = inlier;
+                                           the score is the inlier CONSENSUS (agreement),
+                                           not the survivor fraction - position can be exact
+                                           with few survivors as long as they agree */
 
 #endif /* TRK_CONFIG_H */
