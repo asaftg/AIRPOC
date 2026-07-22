@@ -320,9 +320,14 @@
   });
   function pollDstats() {
     if (replaying) return;
-    if (!$("dev").classList.contains("open")) return;   /* only the DEV panel shows these — don't poll when it's closed */
+    /* Polled even with DEV closed (it's ~1 small request/s): the OVERLAY needs to know whether
+     * temporal integration is actually running, so it can decide whether the "t" provenance
+     * marker means anything at all. */
+    var devOpen = $("dev").classList.contains("open");
     fetch("/dstats").then(function (r) { return r.json(); }).then(function (d) {
       var k = d.knobs || {};
+      if (typeof k.temporal === "number") detTemporalOn = (k.temporal === 1);
+      if (!devOpen) return;                     /* everything below is DEV-panel UI */
       /* measured model rate beside CADENCE (not 60/N — shows the truth when the GPU
        * saturates at low cadence). Updated regardless of the drag guard below. */
       var df = (d.det && typeof d.det.fps === "number") ? d.det.fps : null;
@@ -517,6 +522,7 @@
   var eoBoxes = [];
   var lockLive = false;   /* is the locked target actually on THIS frame? gates hide-the-rest */
   var showRawDet = false;          /* raw detector boxes: DEV overlay, off by default */
+  var detTemporalOn = false;       /* is the detector actually running temporal integration? */
   function eoBoxHit(xf, yf) {
     var best = null, bestA = 1e9;
     eoBoxes.forEach(function (b) {
@@ -692,7 +698,7 @@
          * one was promoted from collected evidence, not an alarm.
          * BOX SHAPES ONLY. The seeker cross draws no box, so a corner-anchored "t" floated in
          * empty space away from the mark and just read as a stray character. */
-        if (tbd && !(detStyle === "seeker" && !forceBox && !tracked)) {
+        if (tbd && detTemporalOn && !(detStyle === "seeker" && !forceBox && !tracked)) {
           ctx.save();
           ctx.font = "bold " + (9 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "left";
           var tx = bx + bw2 / 2 - 6 * dpr, ty = by - bh2 / 2 + 9 * dpr;
