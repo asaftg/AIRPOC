@@ -122,10 +122,17 @@ class RadarView {
       const p = this.toCanvas(r * Math.sin(az), r * Math.cos(az));
       if (p.px < -50 || p.px > w + 50 || p.py < -50 || p.py > h + 50) continue;
       c.fillStyle = this.sceneColour(cells[i + 3], Math.max(0.06, occ / 255));
-      /* oversize slightly so adjacent cells overlap and blend; the blur on
-         composite then removes the tiling without inventing resolution */
-      const sz = Math.max(2 * dpr, s.r_step * p.pxPerM * 1.6);
-      c.fillRect(p.px - sz / 2, p.py - sz / 2, sz, sz);
+      /* True cell footprint: r_step deep in RANGE, r*az_step wide in AZIMUTH,
+         oriented along its own bearing. A square of r_step would be ~3x too
+         wide close in and would leave range under-covered relative to azimuth,
+         which is what made the range banding survive the blur. */
+      const depth = Math.max(1.5 * dpr, s.r_step * p.pxPerM * 1.25);
+      const width = Math.max(1.5 * dpr, r * (s.az_step * D2R) * p.pxPerM * 1.25);
+      c.save();
+      c.translate(p.px, p.py);
+      c.rotate(az);                       /* +az swings clockwise on screen */
+      c.fillRect(-width / 2, -depth / 2, width, depth);
+      c.restore();
     }
     this._sceneCanvas = off;
   }
@@ -136,7 +143,7 @@ class RadarView {
        azimuth cell, so hard cell edges imply precision the sensor does not
        have; this is honest smoothing, not upsampling. */
     const prev = ctx.filter;
-    ctx.filter = `blur(${(1.6 * dpr).toFixed(1)}px)`;
+    ctx.filter = `blur(${(1.1 * dpr).toFixed(1)}px)`;
     ctx.drawImage(this._sceneCanvas, 0, 0);
     ctx.filter = prev || "none";
   }
