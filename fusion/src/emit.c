@@ -52,11 +52,14 @@ size_t fus_frame_json(char *buf, size_t cap, const FusHdr *h,
     off = adv(off, cap, snprintf(buf, cap,
         "{\"type\":\"fus\",\"rad_connected\":%s,\"trk_connected\":%s,"
         "\"frame_id\":%llu,\"rad_frame_id\":%llu,\"eo_frame_id\":%llu,"
-        "\"eo_engaged\":%d,\"t_out_ns\":%llu,\"targets\":[",
+        "\"eo_engaged\":%d,\"t_out_ns\":%llu,"
+        "\"trim\":[%.2f,%.2f],\"trim_est\":[%.2f,%.2f,%d],\"targets\":[",
         h->rad_connected ? "true" : "false", h->trk_connected ? "true" : "false",
         (unsigned long long)h->frame_id,
         (unsigned long long)h->rad_frame_id, (unsigned long long)h->eo_frame_id,
-        h->eo_engaged, (unsigned long long)h->t_out_ns));
+        h->eo_engaged, (unsigned long long)h->t_out_ns,
+        h->trim_az_deg, h->trim_el_deg,
+        h->est_az_deg, h->est_el_deg, h->est_n));
     for (int i = 0; i < n && off < cap; i++) {
         if (i && off < cap) buf[off++] = ',';
         off = append_row(buf, cap, off, &rows[i]);

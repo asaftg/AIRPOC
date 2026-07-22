@@ -19,6 +19,7 @@ the picture fills in).
 { "type":"fus", "rad_connected":true, "trk_connected":true,
   "frame_id":8231, "rad_frame_id":60412, "eo_frame_id":51230,
   "eo_engaged":-1, "t_out_ns":52277610647715,
+  "trim":[1.10,2.20], "trim_est":[1.15,2.31,214],
   "targets":[
     { "gid":17, "src":"fus", "eo_tid":3, "rad_tid":12,
       "ang":[-0.0431,0.0012,0.0115,0.0230], "ang_src":"eo",
@@ -52,7 +53,10 @@ the picture fills in).
 | `lock` | present only when the EO constituent is the engaged, locked track |
 
 Absent-side numerics are `-1`; there are no nulls. Header `eo_engaged`
-mirrors the EO tracker's `engaged`.
+mirrors the EO tracker's `engaged`. Header `trim` = the mount trim (az, el,
+degrees) that produced this frame's radar-sourced angles, and `trim_est` =
+the observe-only estimate (az, el, degrees, sample count) - on the wire so
+every recording self-documents its calibration state for offline analysis.
 
 **The one dedup rule (why consumers need no logic):** a per-sensor tid that
 appears as a constituent (`eo_tid`/`rad_tid`) of any row is never also

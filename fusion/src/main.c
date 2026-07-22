@@ -60,6 +60,8 @@ static uint64_t now_ns(void)
 /* Build + publish one wire frame. Caller holds S.lk. */
 static void publish_wire(const FusOut *rows, int n)
 {
+    FusKnobs k; fus_core_get_knobs(S.core, &k);
+    double ea, ee; int en = fus_core_trim_est(S.core, &ea, &ee);
     FusHdr h = {
         .rad_connected = S.rad ? sse_client_connected(S.rad, 1000000000ull) : 0,
         .trk_connected = S.trk ? sse_client_connected(S.trk, 2000000000ull) : 0,
@@ -67,6 +69,10 @@ static void publish_wire(const FusOut *rows, int n)
         .rad_frame_id = S.rad_frame_id, .eo_frame_id = S.eo_frame_id,
         .eo_engaged = S.eo_engaged,
         .t_out_ns = now_ns(),
+        .trim_az_deg = k.trim_az * 180.0 / M_PI,
+        .trim_el_deg = k.trim_el * 180.0 / M_PI,
+        .est_az_deg = ea * 180.0 / M_PI, .est_el_deg = ee * 180.0 / M_PI,
+        .est_n = en,
     };
     size_t len = fus_frame_json(S.json, sizeof S.json, &h, rows, n);
     http_publish(S.json, len);
