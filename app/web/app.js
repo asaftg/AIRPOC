@@ -570,6 +570,7 @@
    * Sizing is driven by the target's own box: a small far target gets magnified hard, a near one
    * barely at all, so the target fills a similar share of the PIP either way. */
   var PIP_FILL = 0.42;             /* target's long edge as a share of the PIP window */
+  var pipSm = { key: null, ww: 0, cx: 0, cy: 0 };   /* smoothed PIP window (source px) */
   function drawPip() {
     var cv = $("pip");
     if (!engagedKey) { cv.hidden = true; return; }
@@ -613,10 +614,25 @@
     /* window sized so the target occupies PIP_FILL of it, clamped so we neither pixel-peep a
      * single blob nor zoom so far out that the point of the PIP is lost */
     var want = Math.max(sw, sh) / PIP_FILL;
-    var ww = Math.min(iw, Math.max(want, iw * 0.06)), wh = ww * (H / W);
+    want = Math.min(iw, Math.max(want, iw * 0.06));
+    /* SMOOTHING. The detector's box breathes a few percent every frame, and feeding that
+     * straight into the window size made the magnification visibly pump. Size is heavily
+     * damped (it should look constant unless the target really is closing); position is only
+     * lightly damped, so the close-up still follows a moving target without lag. Snap on a new
+     * lock, or on a big jump, so it never slews slowly across the frame. */
+    if (pipSm.key !== engagedKey || !pipSm.ww ||
+        Math.abs(want - pipSm.ww) > pipSm.ww * 0.6 ||
+        Math.hypot(sx - pipSm.cx, sy - pipSm.cy) > Math.max(iw, ih) * 0.25) {
+      pipSm.key = engagedKey; pipSm.ww = want; pipSm.cx = sx; pipSm.cy = sy;
+    } else {
+      pipSm.ww += (want - pipSm.ww) * 0.06;
+      pipSm.cx += (sx - pipSm.cx) * 0.35;
+      pipSm.cy += (sy - pipSm.cy) * 0.35;
+    }
+    var ww = pipSm.ww, wh = ww * (H / W);
     if (wh > ih) { wh = ih; ww = wh * (W / H); }
-    var wx = Math.min(Math.max(sx - ww / 2, 0), Math.max(0, iw - ww));
-    var wy = Math.min(Math.max(sy - wh / 2, 0), Math.max(0, ih - wh));
+    var wx = Math.min(Math.max(pipSm.cx - ww / 2, 0), Math.max(0, iw - ww));
+    var wy = Math.min(Math.max(pipSm.cy - wh / 2, 0), Math.max(0, ih - wh));
 
     ctx.clearRect(0, 0, W, H);
     try { ctx.drawImage(src, wx, wy, ww, wh, 0, 0, W, H); }
