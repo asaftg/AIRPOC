@@ -151,6 +151,7 @@
 
       <div class="sec">SCENE LAYER</div>
       <div class="srow" title="A backdrop of the things that DON'T move — walls, parked cars, buildings — built up from stationary radar returns over tens of seconds. Display only: it never feeds tracking or fusion. Brightness = how sure, colour = how trustworthy its bearing is."><label>SCENE</label><div class="btns" id="scn-btns"><button data-scn="0" class="on">OFF</button><button data-scn="1">ON</button></div></div>
+      <div class="srow" title="How often the radar republishes the map, and therefore how often the console fetches it. The map ALWAYS accumulates at the full frame rate — this only changes how fresh the picture on your screen is. Higher costs link bandwidth: each update is a few tens of KB."><label>MAP RATE</label><input type="range" id="scn-rate" min="1" max="26" step="1" value="5"><span class="val" id="scn-ratev">5 Hz</span></div>
       <div class="srow" title="Wipe the map and start building it again. Do this after the rig is moved or turned: the map is drawn in the sensor's own frame, so a slew smears it."><label>MAP</label><div class="btns" id="scn-clear"><button id="scn-clearbtn">CLEAR</button></div><span class="val" id="scn-age">—</span></div>
 
       <div class="sec">SYSTEM</div>

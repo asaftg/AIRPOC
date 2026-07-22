@@ -1184,10 +1184,16 @@
    *                  operator which parts of the picture are geometrically trustworthy instead
    *                  of hiding it.
    *
-   * Rendered to an offscreen canvas and blitted: the layer changes once a second while the scope
-   * redraws at the radar's ~27 Hz, so drawing a few thousand sectors per scope frame would be
-   * pure waste. Re-rendered only when new data lands or the view geometry moves. ── */
-  var scene = { on: 0, data: null, frames: 0, poll: null };
+   * Rendered to an offscreen canvas and blitted: the layer updates a few times a second while the
+   * scope redraws at the radar's ~27 Hz, so drawing a few thousand sectors per scope frame would
+   * be pure waste. Re-rendered only when new data lands or the view geometry moves.
+   *
+   * RATE: the daemon publishes snapshots at its own configurable rate and reports it back as
+   * `rate_hz` in every payload. The console FOLLOWS that number rather than assuming one, so the
+   * fetch rate and the publish rate can never drift apart (and a rate set from anywhere else is
+   * picked up on the next poll). Accumulation is always at the full frame rate regardless — the
+   * knob only trades link bandwidth for how fresh the picture is. ── */
+  var scene = { on: 0, data: null, frames: 0, poll: null, hz: 5, hzTouch: 0 };
   var sceneCv = null, sceneKey = "";
   try { scene.on = localStorage.getItem("sceneOn") === "1" ? 1 : 0; } catch (x) {}
 
@@ -1232,30 +1238,61 @@
     return sceneCv;
   }
 
-  /* ~1 Hz, and only while the layer is shown. The daemon can publish faster than this (its rate
-   * is configurable, 5 Hz by default), but the console deliberately does not ask for it: this is
-   * a slowly accumulating backdrop of things that do not move, and each poll is tens of KB over
-   * the operator's link. Five times the bandwidth buys nothing an operator can see. */
+  /* Fetch one snapshot, and re-time the polling to whatever the daemon says it is publishing at.
+   * Only runs while the layer is shown — an invisible backdrop costs nothing. */
   function pollScene() {
     fetch("/scene").then(function (r) { return r.json(); }).then(function (d) {
       if (!d || !d.cells) return;
       scene.data = d; scene.frames = d.frames || 0;
       var a = $("scn-age");
       if (a) a.textContent = scene.frames < 250 ? (scene.frames + " f · forming") : (scene.frames + " f");
+      applySceneHz(d.rate_hz);
       draw(false, true);
     }).catch(function () {});
+  }
+  /* The daemon's applied rate is the authority — it clamps, so the value that comes back is not
+   * always the value that was asked for. Re-time the poll to it and reflect it on the slider
+   * (unless the operator is mid-drag). */
+  function applySceneHz(hz) {
+    if (typeof hz !== "number" || !isFinite(hz) || hz <= 0) return;
+    var shown = Math.max(1, Math.min(26, Math.round(hz)));
+    if ($("scn-rate") && Date.now() - scene.hzTouch > 1500 && document.activeElement !== $("scn-rate")) {
+      $("scn-rate").value = shown; $("scn-ratev").textContent = shown + " Hz";
+    }
+    if (Math.abs(hz - scene.hz) < 0.01) return;
+    scene.hz = hz;
+    if (scene.on && scene.poll) {                       /* re-time the running poll to match */
+      clearInterval(scene.poll);
+      scene.poll = setInterval(pollScene, Math.max(40, Math.round(1000 / hz)));
+    }
   }
   function setScene(on) {
     scene.on = on ? 1 : 0;
     try { localStorage.setItem("sceneOn", String(scene.on)); } catch (x) {}
     if (scene.poll) { clearInterval(scene.poll); scene.poll = null; }
-    if (scene.on) { pollScene(); scene.poll = setInterval(pollScene, 1000); }
+    if (scene.on) { pollScene(); scene.poll = setInterval(pollScene, Math.max(40, Math.round(1000 / scene.hz))); }
     else { scene.data = null; sceneKey = ""; if ($("scn-age")) $("scn-age").textContent = "—"; }
     draw(false, true);
   }
   document.querySelectorAll("#scn-btns [data-scn]").forEach(function (b) {
     b.onclick = function () { setSeg("scn-btns", b); setScene(parseInt(b.dataset.scn, 10)); };
   });
+  /* MAP RATE — how often the daemon republishes the snapshot, and so how often we fetch it. The
+   * daemon clamps it (0.2..26 Hz) and returns the layer with the applied value, so the slider is
+   * driven by what actually took effect, never by what was asked for. Accumulation is untouched:
+   * the map still absorbs every frame, this is purely freshness against link bandwidth. */
+  $("scn-rate").oninput = function () {
+    var hz = parseInt(this.value, 10);
+    scene.hzTouch = Date.now();
+    $("scn-ratev").textContent = hz + " Hz";
+    fetch("/scene?rate=" + hz).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d) return;
+      if (d.cells) { scene.data = d; scene.frames = d.frames || 0; sceneKey = ""; }
+      scene.hzTouch = 0;                      /* let the applied value win from here */
+      applySceneHz(d.rate_hz);
+      draw(false, true);
+    }).catch(function () {});
+  };
   /* CLEAR wipes the daemon's accumulation. The map is built in the SENSOR's frame, so slewing
    * the rig smears it — until the gimbal encoders let it accumulate in a world frame, this is
    * the operator's tool for "I moved, start over". */
