@@ -410,8 +410,11 @@
    * Fusion is optional: down (or stale, or during replay, where it isn't recorded) the list
    * falls back to the two per-sensor lists exactly as before. */
   var lastFus = null, lastFusAt = 0, fusES = null, FUS_STALE_MS = 3000;
+  /* Replay counts: the recorded fusion wire is the same wire, so it drives the list the same way.
+   * lastFus is cleared on both replay transitions, and the staleness window closes the gap if a
+   * session has no fusion in it. */
   function fusUp() {
-    return !replaying && !!lastFus && lastFus.connected !== false && !!lastFus.targets
+    return !!lastFus && lastFus.connected !== false && !!lastFus.targets
            && (Date.now() - lastFusAt) < FUS_STALE_MS;
   }
   function fusTargets() {
@@ -734,6 +737,10 @@
   function engage(key) {
     engagedKey = key;
     updateTrackBanner();
+    /* In REPLAY the selection is a local highlight only. The recorded wire owns what was locked
+     * back then, and the live tracker is out there holding a real target right now — a tap on a
+     * recording must never reach it. */
+    if (replaying) { renderLockStrip(); return; }
     var eoTid = (key && key.indexOf("eo:") === 0) ? parseInt(key.slice(3), 10) : -1;
     if (eoTid !== sentTrkEngage) { sentTrkEngage = eoTid; trkEngageSentAt = Date.now(); ctl("trk_engage=" + eoTid); }
     var tid = key ? parseInt(key.split(":")[1], 10) : -1;
@@ -959,10 +966,15 @@
      * Bracket size = the target's real angular extent at its range. The engaged target
      * is green and keeps an off-frame edge arrow; the rest clip at the video edge.
      * Works in replay too — both video and radar come from the recording there. */
-    /* The tracker is the ONLY source of EO boxes now, so if it's down say so rather than
-     * showing an empty frame that looks like "nothing out there". Live only — a replay has
-     * no tracker. */
-    if (!replaying && !trkConnected()) {
+    /* The tracker is the ONLY source of EO boxes, so if there are none say WHY rather than
+     * showing an empty frame that reads as "nothing out there". Two different reasons, and they
+     * must not be confused: live, the tracker is down; in replay, that channel was never
+     * recorded (sessions from before the tracker replay landed have no trk records at all). */
+    if (replaying && !replayHasTrk) {
+      ctx.save(); ctx.font = (12 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "center";
+      haloText(ctx, "NO EO TRACKS RECORDED", cx, 22 * dpr, css("--dim"), dpr);
+      ctx.restore();
+    } else if (!replaying && !trkConnected()) {
       ctx.save();
       ctx.font = (11 * dpr) + "px ui-monospace, monospace"; ctx.textAlign = "center";
       haloText(ctx, "EO TRACK · NOT CONNECTED", cx, 22 * dpr, css("--err"), dpr);
@@ -1746,6 +1758,31 @@
     detES = new EventSource("/rec/replay/det/stream");
     detES.onmessage = function (e) { if (!replaying) return; var m = parseJSONsafe(e.data); lastDet = (m && (m.dets || m.movers)) ? m : null; draw(true, false); };
   }
+  /* The TRACKER and FUSION wires replay exactly like the radar and detector ones: the recorder
+   * pushes the recorded messages clock-paced on /rec/replay/{trk,fus}/stream, byte-identical to
+   * live apart from an injected "replay":true. So the same handlers do the work — a replayed
+   * frame lands in lastTrk / lastFus and every consumer downstream (EO boxes, the lock symbol,
+   * the target list, fused symbology) behaves as it did live, with no replay-specific rendering
+   * path to drift out of sync with the live one. */
+  function openReplayTrkStream() {
+    if (trkES) { trkES.close(); trkES = null; } lastTrk = null;
+    trkES = new EventSource("/rec/replay/trk/stream");
+    trkES.onmessage = function (e) {
+      if (!replaying) return;
+      var m = parseJSONsafe(e.data); if (m) lastTrk = (m.connected === false) ? null : m;
+      onTrkFrame();
+    };
+  }
+  function openReplayFusStream() {
+    if (fusES) { fusES.close(); fusES = null; } lastFus = null;
+    fusES = new EventSource("/rec/replay/fus/stream");
+    fusES.onmessage = function (e) {
+      if (!replaying) return;
+      var m = parseJSONsafe(e.data);
+      if (m && m.connected !== false) { lastFus = m; lastFusAt = Date.now(); } else { lastFus = null; }
+      renderTargetList(); draw(true, false);
+    };
+  }
 
   /* EO detector — SSE push from /det/stream (~15/s). Messages carry dets[] (classified
    * model boxes) + movers[] (motion-only); drawn over the video in drawEO. Live-only for
@@ -1875,7 +1912,11 @@
     return down;
   }
   var replaySession = null, replayStatePoll = null, scrubbing = false, scrubThrottle = 0;
-  var replayHasEO = true, replayHasRadar = true;   /* per-session: was that channel recorded? */
+  /* Per-session: was that channel actually recorded? The recorder answers this directly in
+   * /rec/replay/state (has_radar / has_det / has_trk / has_fus), so the console reads it instead
+   * of probing endpoints or inferring from byte counts. A channel that is absent must read as
+   * "not recorded", never as "the feed is down" — those mean different things to an operator. */
+  var replayHasEO = true, replayHasRadar = true, replayHasTrk = true, replayHasFus = true;
   var replayPlaying = false, replayStillT = -1;    /* EO pane: MJPEG stream while playing, still frame while paused */
   var replayVideoSrc = "display";                  /* which recorded video channel replay shows (native = full frame) */
   var BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
@@ -2072,7 +2113,7 @@
     $("library").hidden = true; libSel = {};
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
     $("video").src = API.stream + "?t=" + Date.now();
-    openRadarStream(); openDetStream();
+    openRadarStream(); openDetStream(); openTrkStream(); openFusStream();
   };
   $("lib-q").oninput = debounce(loadLibrary, 250);
   /* The filter bar = the common vocab PLUS every custom tag actually used across the library, so
@@ -2332,11 +2373,15 @@
       replaySession = s; replaying = true;
       if (radarES) { radarES.close(); radarES = null; }   /* stop the live radar push while reviewing */
       if (detES) { detES.close(); detES = null; } lastDet = null;   /* live det push off; replay poller takes over */
+      if (trkES) { trkES.close(); trkES = null; } lastTrk = null;   /* same for the tracker and fusion: the */
+      if (fusES) { fusES.close(); fusES = null; } lastFus = null;   /* recorded wires replace the live ones */
+      engagedKey = null; sentEngage = null; sentTrkEngage = null; updateTrackBanner();  /* a live lock is not a replay lock */
       resetReplayZoom(); setZoomLabel(); radarROI = null; eoROI = false; roiArm = false; setRoiUI();
       /* "was this channel recorded?" from the actual captured bytes — NOT thumbs (a
        * session can have EO video with no thumbnails generated). */
       replayHasEO = !!(s.bytes && ((s.bytes.display > 0) || (s.bytes.native > 0)));
       replayHasRadar = !!(s.bytes && s.bytes.radar > 0);
+      replayHasTrk = replayHasFus = true;   /* assume until /state says otherwise (below) */
       document.body.classList.add("replay"); $("library").hidden = true;
       /* Default to the INSTANT display (MJPEG) view so PLAY works immediately; native 60fps is one
        * tap on the DISPLAY/NATIVE toggle. NOTE: this does NOT avoid the transcode — the recorder
@@ -2346,7 +2391,9 @@
       rctl("video=display");
       API.stream = "/rec/replay/stream"; API.radar = "/rec/replay/radar"; API.stats = "/rec/replay/stats"; API.rstats = "/rec/replay/rstats";
       openReplayRadarStream();                            /* replay radar — self-chaining poll (one socket max) */
-      openReplayDetStream();                              /* replay det boxes — self-chaining poll (one socket max) */
+      openReplayDetStream();                              /* replay det boxes (DEV overlay) */
+      openReplayTrkStream();                              /* replay EO tracks — the operator's boxes */
+      openReplayFusStream();                              /* replay fused targets — the list */
       /* Show the recorded still at the open position — NOT the live stream. The replay
        * MJPEG only pushes while playing, so before Play we'd otherwise keep showing the
        * last live frame. pollReplayState swaps to the stream once playback starts. */
@@ -2374,6 +2421,9 @@
      * them the whole library-browsing time to drain before the next open. */
     if (radarES) { radarES.close(); radarES = null; }
     if (detES)   { detES.close();   detES = null; } lastDet = null;
+    if (trkES)   { trkES.close();   trkES = null; } lastTrk = null;
+    if (fusES)   { fusES.close();   fusES = null; } lastFus = null;
+    engagedKey = null; sentEngage = null; sentTrkEngage = null; updateTrackBanner();
     stopReplayRadarPoll(); stopReplayDetPoll();          /* drop any replay fallback polls */
     resetMp4State();                                     /* stop + release the native mp4 <video> */
     API.stream = "/stream"; API.radar = "/radar"; API.stats = "/stats"; API.rstats = "/rstats";
@@ -2455,6 +2505,9 @@
       $("tp-rate").textContent = rs.rate + "×";
       /* NATIVE/DISPLAY toggle — only when a native channel was recorded */
       replayVideoSrc = (rs.video_src === "native") ? "native" : "display";
+      if (typeof rs.has_radar === "number" || typeof rs.has_radar === "boolean") replayHasRadar = !!rs.has_radar;
+      if (typeof rs.has_trk === "number" || typeof rs.has_trk === "boolean") replayHasTrk = !!rs.has_trk;
+      if (typeof rs.has_fus === "number" || typeof rs.has_fus === "boolean") replayHasFus = !!rs.has_fus;
       if (rs.has_native) { $("tp-video").hidden = false; $("tp-video").textContent = (rs.video_src === "native") ? "NATIVE" : "DISPLAY"; }
       else $("tp-video").hidden = true;
       if (rs.t_wall_ms) { var d = new Date(rs.t_wall_ms); $("v-zulu").textContent = "REC " + ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2); }
