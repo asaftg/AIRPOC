@@ -455,6 +455,13 @@
                cls: t.cls || "unknown", conf: t.conf || 0,
                az: a[0] * D, el: a[1] * D,
                rng: (typeof t.r_m === "number" && t.r_m >= 0) ? t.r_m : null,   /* -1 = no range */
+               /* Camera size-implied range: fusion's second witness. Gross (~±50%), -1 when the
+                * class isn't established or the box is degenerate, present on any row with a live
+                * camera side — including camera-only targets the radar can't see (crossers). It
+                * NEVER replaces radar range; it fills the empty range column when there is no
+                * measured one. The `~` at display time is what keeps the operator from reading an
+                * estimate as a measurement. */
+               rest: (typeof t.r_est === "number" && t.r_est > 0) ? t.r_est : null,
                rdot: (typeof t.rdot_mps === "number") ? t.rdot_mps : null,
                /* Fusion has no state field; it reports per-side staleness instead. A row whose
                 * live side has not been measured for half a second is coasting, whatever the
@@ -470,9 +477,14 @@
    * it gets the fused mark (and the range fusion brought it), and the radar's own circle for
    * the other half is suppressed — one object, one mark on the video. */
   function fusedMap() {
-    var m = { eo: {}, rad: {} };
+    var m = { eo: {}, rad: {}, eoAny: {} };
     if (!fusUp()) return m;
     (lastFus.targets || []).forEach(function (t) {
+      /* eoAny indexes EVERY fusion row with a camera side (fused OR eo-only), so a video box can
+       * read the range fusion knows for that EO track — a fused row's measured r_m, or a
+       * camera-only row's size-estimated r_est. fmap.eo/.rad stay FUSED-only: they drive the
+       * fused symbology and the radar-circle suppression, which must fire on marriages alone. */
+      if (typeof t.eo_tid === "number" && t.eo_tid >= 0) m.eoAny[t.eo_tid] = t;
       if (t.src !== "fus") return;
       if (typeof t.eo_tid === "number" && t.eo_tid >= 0) m.eo[t.eo_tid] = t;
       if (typeof t.rad_tid === "number" && t.rad_tid >= 0) m.rad[t.rad_tid] = t;
@@ -499,6 +511,19 @@
    * naturally. Convention (both wires): azimuth + is right, elevation + is up. */
   function fmtAz(a) { var v = Math.round(Math.abs(a || 0)); return v + (a < 0 ? "L" : "R"); }
   function fmtEl(e) { var v = Math.round(Math.abs(e || 0)); return (e < 0 ? "-" : "+") + v + "°"; }
+
+  /* THE ONE PLACE range is turned into text, so every surface (list rows, the held strip, the
+   * video labels) applies the same precedence and the operator never sees two conventions:
+   *   1. measured radar range (r_m > 0)         -> "<n> m"     — held range (r_stale) is dimmed
+   *   2. no measurement, camera estimate (r_est) -> "~<n> m"   — the tilde says "size, not measured"
+   *   3. neither                                 -> ""
+   * Returns { text, est, stale } so the caller can style estimate/held ranges more quietly than a
+   * hard measured one. `est` and a measured range are mutually exclusive by construction. */
+  function fmtRange(t) {
+    if (t.rng != null) return { text: t.rng.toFixed(0) + " m", est: false, stale: !!t.rstale };
+    if (t.rest != null) return { text: "~" + t.rest.toFixed(0) + " m", est: true, stale: false };
+    return { text: "", est: false, stale: false };
+  }
 
   /* ── RANKING ────────────────────────────────────────────────────────────────────────────────
    * One number per target, built from tiers that are far enough apart that a lower tier can
@@ -570,17 +595,21 @@
   /* What a row SAYS is what that row's sensors actually know: a fused row is the only one that
    * can put class and range on the same line — that is the whole point of fusion. */
   function rowText(t) {
+    var r = fmtRange(t);
+    var kind = r.est ? "est" : r.stale ? "held" : r.text ? "meas" : "none";
     if (t.src === "fus")
       return { mid: String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "% · "
                     + fmtAz(t.az) + "/" + fmtEl(t.el),
-               rgt: (t.rng != null ? t.rng.toFixed(0) + " m" : "—") };
+               rgt: r.text || "—", rngKind: kind };
     if (t.src === "eo")
+      /* a camera-only track can now carry a size-estimated range; when it does, show it, else
+       * fall back to the angles it has always shown */
       return { mid: String(t.cls || "unknown").toUpperCase() + " " + Math.round((t.conf || 0) * 100) + "%",
-               rgt: fmtAz(t.az) + " / " + fmtEl(t.el) };
+               rgt: r.text || (fmtAz(t.az) + " / " + fmtEl(t.el)), rngKind: kind };
     /* radar: the live wire carries a velocity vector, a fusion passthrough row carries range-rate */
     var spd = (typeof t.spd === "number") ? t.spd : Math.abs(t.rdot || 0);
     return { mid: spd.toFixed(1) + " m/s · " + fmtAz(t.az),
-             rgt: (t.rng != null ? t.rng.toFixed(0) + " m" : "—") };
+             rgt: r.text || "—", rngKind: kind };
   }
   /* ── THE LIST: STABLE ROWS, CALM ORDER ──────────────────────────────────────────────────────
    * Three separate things were making this unusable, and each needs its own fix.
@@ -684,7 +713,7 @@
       $("lk-id").textContent = "—";
       $("lk-src").className = "tsrc"; $("lk-src").textContent = "";
       $("lk-mid").textContent = "tap a target to hold it";
-      $("lk-rng").textContent = "";
+      $("lk-rng").textContent = ""; $("lk-rng").className = "rng";
       return;
     }
     var t = e.t, col = rowColor(t), tx = rowText(t);
@@ -698,6 +727,7 @@
     $("lk-src").textContent = t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR";
     $("lk-mid").textContent = tx.mid;
     $("lk-rng").textContent = tx.rgt;
+    $("lk-rng").className = "rng r-" + tx.rngKind;
   }
   /* Tap the strip to let the target go — the same act as tapping the held target again. */
   $("locktgt").addEventListener("pointerdown", function (e) {
@@ -741,13 +771,13 @@
           s.key = null; s.sig = "";
           s.li.className = "tgt-row empty"; s.li.removeAttribute("data-key");
           s.li.style.borderLeftColor = ""; s.tid.textContent = "—"; s.sw.style.visibility = "hidden";
-          s.badge.textContent = ""; s.badge.className = "tsrc"; s.txt.nodeValue = ""; s.rng.textContent = "";
+          s.badge.textContent = ""; s.badge.className = "tsrc"; s.txt.nodeValue = ""; s.rng.textContent = ""; s.rng.className = "rng";
         }
         continue;
       }
       var t = e.t, col = rowColor(t), id = rowId(t), tx = rowText(t);
       var cls = "tgt-row" + (t.key === engagedKey ? " eng" : "") + (e.live ? "" : " stale");
-      var sig = cls + "|" + col + "|" + id + "|" + t.src + "|" + tx.mid + "|" + tx.rgt;
+      var sig = cls + "|" + col + "|" + id + "|" + t.src + "|" + tx.mid + "|" + tx.rgt + "|" + tx.rngKind;
       if (s.key === k && s.sig === sig) continue;             /* nothing about this row changed */
       s.key = k; s.sig = sig;
       s.li.className = cls;
@@ -759,6 +789,7 @@
       s.badge.textContent = t.src === "eo" ? "EO" : t.src === "fus" ? "FUS" : "RDR";
       s.txt.nodeValue = " " + tx.mid;
       s.rng.textContent = tx.rgt;
+      s.rng.className = "rng r-" + tx.rngKind;
     }
   }
   /* No GUI-side persistence: the radar daemon is a temporal tracker now (stable tids,
@@ -1225,8 +1256,13 @@
          * What survives is what the picture cannot tell you by itself: how sure we are, and the
          * range fusion brought in (a camera has none — that number is the payoff of fusion). */
         var lab = seek ? "" : Math.round((t.conf || 0) * 100) + "%";
-        var fu = fmap.eo[t.tid];
-        if (fu && typeof fu.r_m === "number" && fu.r_m >= 0) lab = (lab ? lab + " " : "") + fu.r_m.toFixed(0) + "m";
+        var fu = fmap.eo[t.tid];                          /* fused? -> heavier box + fused range */
+        var fr = fmap.eoAny[t.tid];                       /* any fusion row for this EO track (range) */
+        /* RANGE ON THE BOX, same precedence as the list: a fused row's measured range wins, else
+         * the camera's size estimate with a `~` so it never reads as measured. A far crosser the
+         * radar can't see now carries `~<n>m` instead of nothing. */
+        if (fr && typeof fr.r_m === "number" && fr.r_m >= 0) lab = (lab ? lab + " " : "") + fr.r_m.toFixed(0) + "m";
+        else if (fr && typeof fr.r_est === "number" && fr.r_est > 0) lab = (lab ? lab + " " : "") + "~" + fr.r_est.toFixed(0) + "m";
         if (eng) lab = lab ? "LOCK " + lab : "LOCK";
         var drawn = drawDet(t, t.state === "coast", eng ? css("--on") : col, lab, false,
                 eng,                                     /* corner brackets = LOCKED, nothing else */

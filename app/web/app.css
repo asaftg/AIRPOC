@@ -158,6 +158,12 @@ body.roiarm #eo::after{content:"DRAW A BOX TO ZOOM";position:absolute;top:44px;l
 .swatch{display:inline-block;width:12px;height:12px;border-radius:2px;border:1px solid rgba(0,0,0,.5);vertical-align:-1px}
 .tgt-row .meta{font-size:11px;color:var(--muted);letter-spacing:.3px}
 .tgt-row .rng{font-size:13px;color:var(--fg);font-weight:600;text-align:right}
+/* Range styling by KIND, shared by the list rows and the held-target strip. A measured radar
+ * range reads full-strength; a camera size-ESTIMATE (`~n m`) is dimmed so it never reads as a
+ * measurement; a HELD range (radar dropped, fusion coasting its last good value) tints amber to
+ * say "trust this less". The `~` already carries the meaning — this just reinforces it. */
+.r-est{color:var(--muted);font-weight:500}
+.r-held{color:var(--amber)}
 
 /* radar expand: overlay the whole stage; controls (over EO) stay on top */
 .exp{width:26px;height:26px;padding:5px;background:rgba(0,0,0,.4);
